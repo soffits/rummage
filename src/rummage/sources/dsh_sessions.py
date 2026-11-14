@@ -56,6 +56,8 @@ class DshSessionSource(Source):
             yield from sorted((self.root / project).glob(f"*/{LOG_NAME}"))
 
     def _speaker(self, text: str, rpc_id: str, oidc: str | None) -> str:
+        if text.startswith("[Sent to the Telegram topic "):  # a bot send recorded in the topic's session
+            return f"{self.assistant} (sent)"
         users = self.people.get("telegram_users", {})
         m = _TG_TAG.match(text)
         if m:
