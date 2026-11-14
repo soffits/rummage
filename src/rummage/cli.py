@@ -232,7 +232,9 @@ def cmd_doctor(cfg: C.Config, args) -> int:
                 if not last:
                     problems.append(f"{name}: never indexed")
                     continue
-                if not last.get("ok"):
+                if last.get("finished") is None:
+                    notes.append(f"{name}: a run is in progress (or was killed) since {time.ctime(last['started'])}")
+                elif not last.get("ok"):
                     problems.append(f"{name}: last run failed: {last.get('error')}")
                 good = entry.get("last_ok")
                 if good is None or now - good > args.stale_hours * 3600:
@@ -256,10 +258,11 @@ def cmd_doctor(cfg: C.Config, args) -> int:
     else:
         for p in problems:
             print("problem:", p)
-        for n in notes:
-            print("ok:", n)
-        if not problems:
-            print("all good")
+        if not args.quiet:
+            for n in notes:
+                print("ok:", n)
+            if not problems:
+                print("all good")
     return 0 if not problems else 1
 
 
@@ -305,6 +308,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("doctor", help="check the runtime, the vectors and each source's freshness")
     p.add_argument("--stale-hours", type=float, default=26)
+    p.add_argument("-q", "--quiet", action="store_true", help="print only problems")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_doctor)
 
