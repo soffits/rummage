@@ -1,0 +1,24 @@
+[project]
+name = "rummage"
+version = "0.1.0"
+description = "Local hybrid search (meaning + exact words) over notes, stickers, chats and Seafile libraries, with EmbeddingGemma 2 on llama.cpp"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dsh = ["zstandard>=0.22"]
+server = ["pypdf>=5", "py7zr>=0.22", "rarfile>=4.2"]
+
+[project.scripts]
+rummage = "rummage.cli:main"
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rummage"]

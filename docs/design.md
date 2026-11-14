@@ -1,0 +1,74 @@
+# Design
+
+rummage keeps one local index over several read-only collections and answers queries by meaning and by exact
+words. It is a CLI with JSON output, meant to be called by people, scripts, scheduled jobs and agents.
+
+## What it's built from, and why
+
+- **Model: EmbeddingGemma 2** (Google DeepMind, Apache 2.0). Text, images, audio and video share one 768-wide
+  space, it reads 100+ languages, and its text part is 270M parameters. We keep the first 512 dimensions
+  (Matryoshka; the model card reports 61.17 vs 61.36 on multilingual MTEB) and store them as float16: 1 KB a vector.
+- **Runtime: llama.cpp's `llama-server`**, the official prebuilt CPU build, running ggml-org's Q8_0 GGUF
+  conversion. The same files and runtime as [DigUp](https://github.com/ARahim3/DigUp), which checked them against
+  the reference implementation. One runtime covers text and images (`--mmproj`), with no Python ML stack.
+  Measured on an i5-13400 with 2 threads: ~1.35 s per ~530-token passage, ~2 s per image, ~25 ms per query once
+  loaded, ~1 s to load the text model. ONNX Runtime with the int8 ONNX export was ~25% faster on text (cosine
+  0.9997 to the GGUF vectors) but would need our own image preprocessing; one runtime won.
+- **Ranking: adapted from DigUp's `Searcher`** (MIT). Each query's cosines are put on one scale (z-scores, with a
+  per-modality mean so pictures and passages compare), only segments 2 deviations above the rest count as meaning
+  matches, and a word-coverage bonus brings in names, IDs and numbers. Queries made of IDs or long numbers weigh
+  words double and meaning half.
+- **Keyword index: SQLite FTS5** with every CJK character stored as its own token, so two-character Chinese words
+  match (qmd's trick; trigram can't match them).
+- **Not adopted:** DigUp itself (a desktop app; its engine is Swift and crawls local folders only), qmd (its
+  vector path took minutes per query here), basic-memory (rewrites notes' frontmatter), sqlite-vec (alpha; a
+  numpy matrix product over a few hundred thousand vectors is fast enough).
+
+## Data
+
+One SQLite file (`<data_dir>/index.db`, WAL mode): `items` (one note, sticker, file, chat window), `segments`
+(passages, a picture, a name line; each with an optional vector), `fts` (contentless FTS5 over segment text, the
+item title weighted 3×), `source_state` (each source's cursor), `runs` (the last 50 runs per source), `meta`
+(vector version, reference vectors). The index is a cache: deleting it and running `rummage index` rebuilds it.
+
+## Sources
+
+Each source is read-only and answers `plan` (what changed: items to add or replace, keys gone, the cursor to
+save) and `load` (one item's segments).
+
+| Type | Item | Change detection |
+|---|---|---|
+| `markdown` | a note; title, aliases, tags from frontmatter; passages of ~1800 chars embedded with the heading path | mtime+size, then SHA-256 |
+| `telegram-stickers` | a sticker in dsh-telegram-bot's library: saved meaning as text, picture as an image vector | hash of meaning, emoji, file id |
+| `seafile` | a file in a Seafile library, read through the web API with a read-only account | library head commit, then each file's object id |
+| `hermes` | a window of messages in a Hermes Agent `state.db` | message id cursor |
+| `dsh-sessions` | a window of messages in a DeepSeek Harness session log | per-session event count |
+
+Archives (zip, 7z, tar, rar) are indexed by name and the list of file names inside; installers, disk images and
+other binaries by name only. Each type has a size limit.
+
+## Runs
+
+`rummage index` takes a lock (a second run exits 0 at once), starts `llama-server` on 127.0.0.1 on a free port
+only when something needs embedding (with the image encoders only for sources that have pictures), commits item
+by item, and stops the server at the end. A source's cursor is saved only when every planned item went in; a
+failed item is retried on the next run. Exit status is 1 when any source failed or any item failed, with one line
+per problem on stderr, so a scheduler that reports failures shows them.
+
+`rummage search` loads the text model for the query (~1 s), or nothing with `--words-only`.
+
+## Life cycle
+
+- **Install:** `uv tool install` from the repo, then `rummage setup` fetches the pinned llama.cpp build and the
+  model files, checking size and SHA-256.
+- **Updates:** code by reinstalling from a tag. The model revision and llama.cpp build are pinned in
+  `runtime.py`; bumping them is a code change. `VECTOR_VERSION` names the model, quantization and dimension; an
+  index made with another version refuses to be used until `rummage index --rebuild`. `rummage doctor` re-embeds
+  three reference texts stored at the first run and compares (cosine ≥ 0.999), so a llama.cpp bump that changes
+  vectors is caught before results quietly degrade.
+- **Watching:** schedule `rummage index -q` (hourly is plenty) and `rummage doctor` (daily); both exit 1 with a
+  reason when something's wrong. `rummage status --json` shows counts, the last run per source, and failures.
+- **Removal:** uninstall the tool, delete `data_dir` and the config file. Nothing is written anywhere else.
+- **Server deployment** (file libraries indexed next to the file server): a container with the same CLI, its
+  data dir on a volume, run on a schedule; it answers searches over HTTP for the machine that asks. See
+  `deploy/`.
