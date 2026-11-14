@@ -1,0 +1,306 @@
+"""EmbeddingGemma 2 on llama.cpp: the pinned files, and a llama-server process that lives as long as one run.
+
+The vectors depend on the model files, the llama.cpp build, the prompts and the dimension. All of that is pinned here,
+and `VECTOR_VERSION` names the combination: an index made with another version must be embedded again. A llama.cpp
+update that reproduces the stored reference vectors (`rummage doctor`) keeps the version.
+"""
+
+from __future__ import annotations
+
+import base64
+import contextlib
+import hashlib
+import json
+import os
+import platform
+import shutil
+import socket
+import subprocess
+import tarfile
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+MODEL_REPO = "ggml-org/embeddinggemma-2-GGUF"
+MODEL_REVISION = "bfcd298762cc34d0357ece5ebdd31791a3a374d8"
+
+
+@dataclass(frozen=True)
+class Pinned:
+    name: str
+    url: str
+    size: int
+    sha256: str
+
+
+TEXT_MODEL = Pinned(
+    "embeddinggemma-2-Q8_0.gguf",
+    f"https://huggingface.co/{MODEL_REPO}/resolve/{MODEL_REVISION}/embeddinggemma-2-Q8_0.gguf",
+    309_855_456,
+    "2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135",
+)
+MEDIA_MODEL = Pinned(
+    "mmproj-embeddinggemma-2-Q8_0.gguf",
+    f"https://huggingface.co/{MODEL_REPO}/resolve/{MODEL_REVISION}/mmproj-embeddinggemma-2-Q8_0.gguf",
+    554_821_024,
+    "c4a8a52691ecef40618438928bdf9e68379b854e24166f292592353db0aab64f",
+)
+LLAMA_TAG = "b12387"
+LLAMA_BUILDS = {
+    ("Linux", "x86_64"): Pinned(
+        f"llama-{LLAMA_TAG}-bin-ubuntu-x64.tar.gz",
+        f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_TAG}/llama-{LLAMA_TAG}-bin-ubuntu-x64.tar.gz",
+        23_337_268,
+        "9c58ebcd5a704e879cfadf2bbcb1fb1ec8ad4a5bec761fc58b3515864dd5e37a",
+    ),
+}
+
+# Matryoshka cut: 512 of 768 dimensions keeps nearly all quality (model card: MTEB multilingual 61.17 vs 61.36).
+DIM = 512
+VECTOR_VERSION = f"eg2-q8-{MODEL_REVISION[:8]}-d{DIM}-v1"
+
+QUERY_PREFIX = "task: search result | query: "
+
+
+def document_text(title: str | None, text: str) -> str:
+    return f"title: {title.strip() if title and title.strip() else 'none'} | text: {text}"
+
+
+class RuntimeMissing(RuntimeError):
+    pass
+
+
+class EmbedError(RuntimeError):
+    pass
+
+
+class Runtime:
+    """Where the pinned files live (`<data>/runtime`), and how to fetch them."""
+
+    def __init__(self, data_dir: Path, llama_server: str | None = None):
+        self.root = data_dir / "runtime"
+        self.models = self.root / "models"
+        self._llama_server = llama_server
+
+    @property
+    def llama_dir(self) -> Path:
+        return self.root / f"llama-{LLAMA_TAG}"
+
+    @property
+    def server_binary(self) -> Path:
+        if self._llama_server:
+            return Path(self._llama_server)
+        return self.llama_dir / "llama-server"
+
+    def model_path(self, pinned: Pinned) -> Path:
+        return self.models / pinned.name
+
+    def missing(self, media: bool) -> list[str]:
+        missing = []
+        if not self.server_binary.exists():
+            missing.append(str(self.server_binary))
+        for pinned in (TEXT_MODEL, MEDIA_MODEL) if media else (TEXT_MODEL,):
+            if not self.model_path(pinned).exists():
+                missing.append(str(self.model_path(pinned)))
+        return missing
+
+    def setup(self, media: bool, log=print) -> None:
+        """Fetches whatever is missing, checks each file's size and SHA-256, and drops older llama.cpp builds."""
+        self.models.mkdir(parents=True, exist_ok=True)
+        if not self._llama_server and not self.server_binary.exists():
+            build = LLAMA_BUILDS.get((platform.system(), platform.machine()))
+            if build is None:
+                raise RuntimeMissing(
+                    f"no pinned llama.cpp build for {platform.system()} {platform.machine()}: "
+                    "set runtime.llama_server in the config to a llama-server binary"
+                )
+            with tempfile.TemporaryDirectory(dir=self.root) as tmp:
+                archive = Path(tmp) / build.name
+                _download(build, archive, log)
+                with tarfile.open(archive) as tar:
+                    tar.extractall(tmp, filter="data")
+                unpacked = Path(tmp) / f"llama-{LLAMA_TAG}"
+                if not (unpacked / "llama-server").exists():
+                    raise RuntimeMissing(f"{build.name} has no llama-{LLAMA_TAG}/llama-server")
+                unpacked.rename(self.llama_dir)
+        for old in self.root.glob("llama-b*"):
+            if old != self.llama_dir and old.is_dir():
+                shutil.rmtree(old)
+        for pinned in (TEXT_MODEL, MEDIA_MODEL) if media else (TEXT_MODEL,):
+            target = self.model_path(pinned)
+            if not target.exists():
+                _download(pinned, target, log)
+
+
+def _download(pinned: Pinned, target: Path, log) -> None:
+    log(f"downloading {pinned.name} ({pinned.size / 1e6:.0f} MB)")
+    partial = target.with_name(target.name + ".part")
+    digest = hashlib.sha256()
+    request = urllib.request.Request(pinned.url, headers={"User-Agent": "rummage"})
+    with urllib.request.urlopen(request, timeout=60) as response, open(partial, "wb") as out:
+        while chunk := response.read(1 << 20):
+            digest.update(chunk)
+            out.write(chunk)
+    size = partial.stat().st_size
+    if size != pinned.size or digest.hexdigest() != pinned.sha256:
+        partial.unlink()
+        raise RuntimeMissing(f"{pinned.name}: got {size} bytes, sha256 {digest.hexdigest()}; expected the pinned file")
+    partial.rename(target)
+
+
+def _die_with_parent() -> None:
+    """Linux: the child gets SIGTERM when this process dies, even by SIGKILL."""
+    try:
+        import ctypes
+
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, 15)  # PR_SET_PDEATHSIG, SIGTERM
+    except (OSError, AttributeError):
+        pass
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class Embedder:
+    """A llama-server child bound to 127.0.0.1 on a free port, started for one run and stopped with it.
+
+    `media`: also load the image and audio encoders (1.2 GB resident instead of ~0.3 GB).
+    """
+
+    def __init__(self, runtime: Runtime, media: bool, threads: int = 2, nice: int = 10, log_path: Path | None = None,
+                 die_with_parent: bool = True):
+        missing = runtime.missing(media)
+        if missing:
+            raise RuntimeMissing("missing " + ", ".join(missing) + ": run `rummage setup`")
+        self.runtime = runtime
+        self.media = media
+        self.threads = threads
+        self.nice = nice
+        self.log_path = log_path
+        # PR_SET_PDEATHSIG follows the starting *thread*: a server that starts it from a request thread opts out.
+        self.die_with_parent = die_with_parent
+        self.port = 0
+        self.process: subprocess.Popen | None = None
+        self.marker: str | None = None
+        # A non-causal input must fit one micro-batch: 2048 tokens holds a 1800-character chunk of any script and an
+        # image at the default 280-token budget.
+        self.max_tokens = 2048
+
+    def __enter__(self) -> "Embedder":
+        self.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.stop()
+
+    def start(self) -> None:
+        self.port = _free_port()
+        binary = self.runtime.server_binary
+        args = [
+            str(binary),
+            "-m", str(self.runtime.model_path(TEXT_MODEL)),
+            "--embeddings", "--pooling", "mean",
+            "-t", str(self.threads), "-tb", str(self.threads),
+            "-c", str(self.max_tokens * 2), "-b", str(self.max_tokens), "-ub", str(self.max_tokens), "-np", "2",
+            "--host", "127.0.0.1", "--port", str(self.port), "--no-webui",
+        ]
+        if self.media:
+            args += ["--mmproj", str(self.runtime.model_path(MEDIA_MODEL))]
+        if self.nice and shutil.which("nice"):
+            args = ["nice", "-n", str(self.nice), *args]
+        env = dict(os.environ)
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(filter(None, [str(binary.parent), env.get("LD_LIBRARY_PATH")]))
+        log = open(self.log_path, "ab") if self.log_path else subprocess.DEVNULL
+        self.process = subprocess.Popen(args, stdout=log, stderr=log, stdin=subprocess.DEVNULL, env=env,
+                                        preexec_fn=_die_with_parent if self.die_with_parent else None)
+        if log is not subprocess.DEVNULL:
+            log.close()
+        deadline = time.monotonic() + 120
+        while True:
+            if self.process.poll() is not None:
+                raise EmbedError(f"llama-server exited with {self.process.returncode} while loading"
+                                 + (f" (log: {self.log_path})" if self.log_path else ""))
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/health", timeout=2) as r:
+                    if r.status == 200:
+                        break
+            except (urllib.error.URLError, ConnectionError, TimeoutError):
+                pass
+            if time.monotonic() > deadline:
+                self.stop()
+                raise EmbedError("llama-server did not become ready in 120 s")
+            time.sleep(0.05)
+        if self.media:
+            self.marker = self._get("/props").get("media_marker")
+
+    def stop(self) -> None:
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(10)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
+        self.process = None
+
+    def _get(self, path: str) -> dict:
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=30) as r:
+            return json.load(r)
+
+    def _post(self, path: str, body: dict, timeout: float = 600) -> object:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}{path}", data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as error:
+            raise EmbedError(f"{path}: HTTP {error.code} {error.read()[:300]!r}") from None
+
+    def token_count(self, text: str) -> int:
+        return len(self._post("/tokenize", {"content": text})["tokens"])
+
+    def texts(self, texts: list[str]) -> np.ndarray:
+        """One normalized DIM-wide float32 row per text. Texts past the context are cut by the server."""
+        if not texts:
+            return np.zeros((0, DIM), np.float32)
+        out = self._post("/v1/embeddings", {"input": texts})
+        rows = sorted(out["data"], key=lambda d: d["index"])
+        return _cut(np.array([r["embedding"] for r in rows], np.float32))
+
+    def query(self, text: str) -> np.ndarray:
+        return self.texts([QUERY_PREFIX + text])[0]
+
+    def image(self, data: bytes) -> np.ndarray:
+        """`data`: PNG or JPEG bytes (what stb_image reads; flatten transparency first)."""
+        if not self.media or not self.marker:
+            raise EmbedError("this embedder was started without the media encoders")
+        out = self._post("/embeddings", {"content": {
+            "prompt_string": self.marker, "multimodal_data": [base64.b64encode(data).decode()]}})
+        return _cut(np.array([out[0]["embedding"][0]], np.float32))[0]
+
+
+def _cut(rows: np.ndarray) -> np.ndarray:
+    rows = rows[:, :DIM]
+    norms = np.linalg.norm(rows, axis=1, keepdims=True)
+    norms[norms == 0] = 1
+    return rows / norms
+
+
+@contextlib.contextmanager
+def embedder(runtime: Runtime, media: bool, **kwargs):
+    e = Embedder(runtime, media, **kwargs)
+    e.start()
+    try:
+        yield e
+    finally:
+        e.stop()
