@@ -12,7 +12,7 @@ people.
 $ rummage search "the clause about pets in the lease"
  4.31  [docs] lease-2026.pdf  (seafile:Documents/housing/lease-2026.pdf@5400)  meaning z=4.3
        …Tenants may keep one cat or one small dog with the landlord's written consent…
-$ rummage search "开心地说好的" -s stickers --json
+$ rummage search "someone happily saying yes" -s stickers --json
 ```
 
 ## What it reads
@@ -103,7 +103,8 @@ Every stored vector is scored against the query. Scores are put on one scale per
 mean per modality so pictures and passages compare), and only segments well above the rest count as meaning
 matches, which also gives an honest "nothing found". Exact-word matches from SQLite FTS5 add a bonus that grows
 with how many of the query's words an item has, so names, IDs and numbers are found as written. Chinese and
-Japanese text is indexed one character per token, so two-character words match. The ranking is adapted from
+Japanese text is indexed one character per token, so two-character words match, and a query in one language
+finds text written in another. The ranking is adapted from
 [DigUp](https://github.com/ARahim3/DigUp) (MIT). More in [docs/design.md](docs/design.md).
 
 ## Docker
