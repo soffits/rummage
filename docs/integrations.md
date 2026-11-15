@@ -109,6 +109,15 @@ export function apply(ctx) {
 }
 ```
 
+## MCP
+
+For agents that only speak MCP, `rummage mcp` (install `rummage[mcp]`) is a stdio server with read-only `search`,
+`get` and `status` tools returning the same JSON as the CLI. For example, in an MCP client's config:
+
+```json
+{ "mcpServers": { "rummage": { "command": "rummage", "args": ["mcp"] } } }
+```
+
 ## Any other agent
 
 Call `rummage recall "<prompt>"` before the model sees a message and add its output, if any, as context; or give

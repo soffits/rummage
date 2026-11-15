@@ -8,6 +8,7 @@
     rummage doctor [--json]        check runtime, vectors and source freshness; exit 1 on a problem
     rummage sources                list the installed source types (core and plugins)
     rummage recall [PROMPT]        cited context for an agent's prompt hook, silent when nothing matches
+    rummage mcp                    a stdio MCP server (search, get, status) for MCP-only agents
     rummage daemon                 keep the query model loaded (searches use it when it runs)
     rummage serve                  answer searches over HTTP (for an index kept on another machine)
 """
@@ -277,6 +278,12 @@ def cmd_recall(cfg: C.Config, args) -> int:
     return run(cfg, args)
 
 
+def cmd_mcp(cfg: C.Config, args) -> int:
+    from .mcp_server import run
+
+    return run(cfg)
+
+
 def cmd_daemon(cfg: C.Config, args) -> int:
     return D.run(_runtime(cfg), cfg.data_dir, cfg.threads, args.idle_minutes)
 
@@ -425,6 +432,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="load the model when no daemon runs (~1.5 s); otherwise fall back to exact words")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_recall)
+
+    p = sub.add_parser("mcp", help="a stdio MCP server with read-only search, get and status tools (needs rummage[mcp])")
+    p.set_defaults(func=cmd_mcp)
 
     p = sub.add_parser("daemon", help="keep the query model loaded so searches take milliseconds")
     p.add_argument("--idle-minutes", type=float, help="exit after this long without a query")

@@ -15,6 +15,7 @@ dependencies = [
 archives = ["py7zr>=0.22", "rarfile>=4.2"]
 seafile = ["py7zr>=0.22", "rarfile>=4.2"]
 dsh-sessions = ["zstandard>=0.22"]
+mcp = ["mcp>=2.3,<3"]
 
 [project.entry-points."rummage.sources"]
 markdown = "rummage.sources.markdown:MarkdownSource"

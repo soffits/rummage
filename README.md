@@ -97,7 +97,8 @@ sources = ["library"]                 # source names the remote serves
 Agents use the same CLI: `search --json` and `get`. `rummage recall` gives prompt hooks a short block of cited
 passages, or nothing when nothing clearly matches. [docs/integrations.md](docs/integrations.md) has hook snippets
 for Claude Code, Codex, OpenCode, Hermes Agent and DeepSeek Harness, and [skills/rummage](skills/rummage/SKILL.md)
-is an Agent Skill to drop into an agent's skills folder.
+is an Agent Skill to drop into an agent's skills folder. For MCP-only agents, `rummage mcp` (with the `mcp` extra)
+serves the same `search`, `get` and `status`.
 
 ## Available plugins
 
