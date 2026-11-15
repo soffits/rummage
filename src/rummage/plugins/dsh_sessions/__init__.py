@@ -106,6 +106,7 @@ class DshSessionSource(Source):
         if not events or events[0].get("type") != "session" or events[0].get("delegationDepth", 0) != 0:
             return []
         sid = events[0].get("id") or path.parent.name
+        project = str(events[0].get("cwd") or "")
         title = ""
         oidc: str | None = None
         turns: list[Turn] = []
@@ -134,7 +135,7 @@ class DshSessionSource(Source):
                     channel = "telegram" if _TG_TAG.match(text) or rpc_id.startswith("telegram") else "web"
                 body = text.split("\n", 1)[1] if _TG_TAG.match(text) and "\n" in text else text
                 turns.append(Turn(sid, str(event.get("seq")), (event.get("time") or 0) / 1000, speaker, body.strip(),
-                                  "", channel))
+                                  "", channel, project=project))
             elif kind == "assistant/message" and turns:
                 reply = _text(data.get("message") or {})
                 if reply:

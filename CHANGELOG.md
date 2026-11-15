@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.0
+
+- Scopes: what `search`, `recall` and `recent` see depends on the folder they run in (`--cwd`, or a hook's `cwd`). Inside a git repository that is the project (its files and the chats held in it, worktrees shared); `[scopes.<name>]` tables give folders like an assistant's home a wider view; elsewhere `default_scope` (everything). Sources with `local = true` are seen only from inside their folder. `--all` sees everything, and every output says which scope applied.
+- `rummage project ensure` (and `recall --hook` with a `cwd`) adds a git repository no source covers as a `local` source of the files git keeps, minus key files, switches on the calling harness's own history (`--harness`, or the hook's `harness`), and starts `rummage watch --setup` in the background when none runs. A known project costs a few file checks.
+- `recall --hook` always replies with JSON, now with a `rummage` object (`scope`, `project`, `paused`) next to the block.
+- `rummage pause` / `resume` for recall, indexing or both, everywhere, under a folder or for one session, for a while or until resumed; `--private` keeps nothing from that time. `rummage exclude` keeps a time window, session, folder or source out of the index after the fact; `--list` and `--remove`. `--hook` on pause and resume answers slash-command hooks.
+- Folder sources read any file whose content is text (source code, configs), not only known extensions.
+- `rummage watch` runs once per data folder, follows config changes, and with `--setup` fetches missing model files first.
+- DeepSeek Harness turns record the session's working folder. Run `rummage index --reload -s <source>` once for a `dsh-sessions` source so older turns get it.
+
 ## 0.13.0
 
 - Recordings and videos are found by what they sound like and show, each hit at its moment: the model hears 30-second windows (every 25 s, silence skipped) and sees one frame per shot, plus a video's soundtrack. Needs ffmpeg and a model profile with the encoders (`encoders` in the profile; EmbeddingGemma 2 has image and audio, a text-only profile skips media). The whisper `media` source type is removed: rummage doesn't transcribe.

@@ -125,6 +125,10 @@ rummage get "#3f2a9c"     # a result's text by its id (or ref); --loc for one pa
 rummage get "#3f2a9c" --around 3   # with context: 3 chat turns before and after, or 3 lines around a passage
 rummage get ~/Documents/report.pdf --original   # a file's whole text, read now, past the indexing limits
 rummage recent --minutes 30          # the latest chat turns and changed files, newest first
+rummage search "retry policy" --cwd ~/code/app   # what a query from that folder sees (default: this folder); --all for everything
+rummage project ensure     # make the git repository you are in part of memory (agents' hooks do this by themselves)
+rummage pause recall --for 2h        # no recall for two hours; `pause index`, `--private`, `--here`, `rummage resume`
+rummage exclude --since 2h # keep the last two hours out of the index; `--session ID`, `--list`, `--remove ID`
 rummage status --json      # counts, last run per source, failures
 rummage status --watch     # follow indexing live: per source read and with vectors, pace, time left, pauses, errors
 rummage status --line      # one short line while indexing is unfinished or broken, nothing once complete
@@ -201,6 +205,20 @@ session when the prompt shares words with it, so a conversation can go on in a n
 [docs/integrations.md](docs/integrations.md) has hook snippets for Claude Code, Codex, OpenCode, Hermes Agent and
 DeepSeek Harness, and [skills/rummage](skills/rummage/SKILL.md) is an Agent Skill to drop into an agent's skills
 folder.
+
+What a query sees depends on where it runs. Inside a git repository it sees that project: its own files and the
+chats held in it, not your notes on another drive. A hook that passes its working folder adds a new repository to
+memory by itself (the files git keeps, minus anything that holds keys) and reads it in the background. A
+`[scopes.<name>]` table gives a folder, such as an assistant's home, a wider view:
+
+```toml
+[scopes.assistant]
+dirs = ["~/assistant"]
+sources = ["*"]                       # everything
+```
+
+Every output says which scope applied; `--all` sees the whole index. Details in
+[docs/integrations.md](docs/integrations.md#what-a-query-sees-scopes).
 
 ## Available plugins
 

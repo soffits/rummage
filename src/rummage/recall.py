@@ -17,17 +17,21 @@ are made. Credentials are masked in all output unless
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 
 from . import config as C
+from . import memory
 from . import progress as P
+from . import scopes as S
 from . import text as T
+from .projects import ensure
 from .query import meaning_vector
 from .search import Hit, Searcher, gate_for
 from .limits import describe
 from .secrets import masked_total, shown
-from .store import Store
+from .store import Scope, Store, Within
 
 HOOK_EVENT = "UserPromptSubmit"
 
@@ -77,7 +81,8 @@ def render_item(hit: Hit | dict) -> str:
     return f"- {head}\n  {h['snippet']}{tail}"
 
 
-def render(results: list[dict], recent: list[dict], degraded: str | None = None, index: dict | None = None) -> str:
+def render(results: list[dict], recent: list[dict], degraded: str | None = None, index: dict | None = None,
+           scope: str | None = None) -> str:
     if not results and not recent:
         return f"rummage: {index['note']}" if index else ""
     lines = ["Recalled from the user's own files by rummage; each line is #id · source · where (path:lines, or "
@@ -91,29 +96,20 @@ def render(results: list[dict], recent: list[dict], degraded: str | None = None,
         lines.append("(Matched by words only: " + degraded.split(";")[0].split(", so")[0] + ".)")
     if index:
         lines.append(f"({index['note']})")
+    if scope:
+        lines.append(f"({scope})")
     return "\n".join(lines)
 
 
-def hook_reply(block: str, index: dict) -> dict:
-    """A prompt hook's JSON: the block for the model, the index's status line for the person while it isn't
-    complete, and the whole index summary under `rummage` for adapters that show it."""
-    reply: dict = {}
-    if block:
-        reply["hookSpecificOutput"] = {"hookEventName": HOOK_EVENT, "additionalContext": block}
-    if index["line"]:
-        reply["systemMessage"] = index["line"]
-    reply["rummage"] = {"index": index}
-    return reply
-
-
 def recent_turns(cfg: C.Config, prompt: str, exclude: list[str], minutes: float, max_items: int,
-                 skip_ids: set[str]) -> list[dict]:
-    """Chat turns from the last `minutes` in other sessions that share words with the prompt."""
+                 skip_ids: set[str], within: Within | None = None) -> list[dict]:
+    """Chat turns from the last `minutes` in other sessions, within the scope, that share words with the prompt."""
     if not cfg.index_path.exists() or minutes <= 0 or max_items <= 0:
         return []
     store = Store(cfg.index_path)
     try:
-        items = [i for i in store.recent(time.time() - minutes * 60, exclude_sessions=exclude, limit=30)
+        items = [i for i in store.recent(time.time() - minutes * 60, Scope(within=within), exclude_sessions=exclude,
+                                         limit=30)
                  if i["kind"] == "chat" and i["id"] not in skip_ids]
     finally:
         store.close()
@@ -130,7 +126,7 @@ def recent_turns(cfg: C.Config, prompt: str, exclude: list[str], minutes: float,
 
 
 def recall(cfg: C.Config, query: str, sources: list[str] | None, paths: list[str] | None, limit: int,
-           allow_model_load: bool) -> tuple[list[Hit], str, int, str | None, float]:
+           allow_model_load: bool, within: Within | None = None) -> tuple[list[Hit], str, int, str | None, float]:
     """Hits for `query`, how it was matched (`meaning` or `words`), how many vectors were searched, why it went by
     words when it did, and the model's calibrated recall gate."""
     if not cfg.index_path.exists():
@@ -139,7 +135,7 @@ def recall(cfg: C.Config, query: str, sources: list[str] | None, paths: list[str
     try:
         version = store.model
         vector, degraded = meaning_vector(cfg, version, query, load=allow_model_load)
-        searcher = Searcher(store, sources, paths, model=version)
+        searcher = Searcher(store, sources, paths, model=version, within=within)
         hits = searcher.search(query, vector, limit=limit)
         count = searcher.vector_count()
     finally:
@@ -154,14 +150,28 @@ def _masked(cfg: C.Config, args, value: dict) -> dict:
     return shown(value, args.show_secrets, lambda source: C.masks_secrets(cfg, source))
 
 
+def hook_reply(block: str, rummage: dict, status: str | None = None) -> dict:
+    """A prompt hook's JSON: the block for the model, a status line for the person when there is one, and what
+    rummage did under `rummage` for adapters that show it (they ignore fields they don't know)."""
+    reply: dict = {}
+    if block:
+        reply["hookSpecificOutput"] = {"hookEventName": HOOK_EVENT, "additionalContext": block}
+    if status:
+        reply["systemMessage"] = status
+    reply["rummage"] = rummage
+    return reply
+
+
 def run(cfg: C.Config, args) -> int:
     raw = args.query if args.query else sys.stdin.read()
-    session = args.session
+    session, cwd, harness = args.session, args.cwd, args.harness
     if args.hook:
         try:
             event = json.loads(raw or "{}")
             prompt = str(event.get("prompt") or "")
             session = session or event.get("session_id")
+            cwd = cwd or event.get("cwd")
+            harness = harness or event.get("harness")
         except ValueError:
             prompt = raw
     else:
@@ -169,34 +179,48 @@ def run(cfg: C.Config, args) -> int:
     prompt = prompt.strip()[: args.max_query_chars]
     index = P.state(cfg.data_dir)
     agent = P.agent_view(index)
-    if not prompt or (args.hook and not worth_recalling(prompt)):
-        if args.hook:
-            print(json.dumps(hook_reply("", index), ensure_ascii=False))
-        return 0
-    try:
-        hits, mode, count, degraded, recall_gate = recall(cfg, prompt, args.source, args.path, 20,
-                                                          args.allow_model_load)
-        # Exact words alone are weaker evidence than a meaning match: ask for more of them.
-        min_words = args.min_words if mode == "meaning" else max(args.min_words, 0.75)
-        min_z = recall_gate if args.min_z is None else args.min_z
-        chosen = pick(hits, gate_for(min_z, count), min_words, args.max_items, args.max_chars, mode == "words")
-        results = [_masked(cfg, args, {**h.as_dict(), "why": why(h)}) for h in chosen]
-        recent = [_masked(cfg, args, r) for r in recent_turns(
-            cfg, prompt, [session] if session else [], args.recent_minutes, args.recent_items,
-            {r["id"] for r in results})]
-    except Exception as error:  # a hook must never break the agent
-        print(f"rummage recall: {type(error).__name__}: {error}", file=sys.stderr)
-        results, recent, mode, degraded = [], [], "none", None
-    if args.json:
-        if results or recent or agent:
+    about: dict = {"index": index}
+    if cwd and args.hook:
+        try:   # a hook must never break the agent
+            about["project"] = ensure(cfg, cwd, harness)
+        except Exception as error:
+            print(f"rummage recall: project: {type(error).__name__}: {error}", file=sys.stderr)
+    scope = S.resolve(cfg, cwd or os.getcwd(), args.all)
+    about["scope"] = scope.describe()
+    paused = memory.active(memory.load(cfg.data_dir), "recall", cwd or os.getcwd(), session)
+    if paused:
+        about["paused"] = memory.describe_pause(paused)
+    results: list[dict] = []
+    recent: list[dict] = []
+    mode, degraded = "none", None
+    searched = bool(prompt) and not paused and not (args.hook and not worth_recalling(prompt))
+    if searched:
+        try:
+            hits, mode, count, degraded, recall_gate = recall(cfg, prompt, args.source, args.path, 20,
+                                                              args.allow_model_load, scope.within)
+            # Exact words alone are weaker evidence than a meaning match: ask for more of them.
+            min_words = args.min_words if mode == "meaning" else max(args.min_words, 0.75)
+            min_z = recall_gate if args.min_z is None else args.min_z
+            chosen = pick(hits, gate_for(min_z, count), min_words, args.max_items, args.max_chars, mode == "words")
+            results = [_masked(cfg, args, {**h.as_dict(), "why": why(h)}) for h in chosen]
+            recent = [_masked(cfg, args, r) for r in recent_turns(
+                cfg, prompt, [session] if session else [], args.recent_minutes, args.recent_items,
+                {r["id"] for r in results}, scope.within)]
+        except Exception as error:  # a hook must never break the agent
+            print(f"rummage recall: {type(error).__name__}: {error}", file=sys.stderr)
+    block = "" if not searched else render(results, recent, degraded, agent,
+                                                   scope.line() if scope.limited() else None)
+    if args.hook:
+        status = memory.pause_line(paused) if paused else index["line"]
+        print(json.dumps(hook_reply(block, about, status), ensure_ascii=False))
+    elif args.json:
+        if results or recent or agent or paused:
             print(json.dumps({"schema": "rummage.recall.v1", "query": prompt, "mode": mode,
                               "degraded_reason": degraded, "results": results, "recent": recent,
-                              "masked_secrets": masked_total(results + recent), "index": agent},
+                              "masked_secrets": masked_total(results + recent), **about, "index": agent},
                              ensure_ascii=False))
-    elif args.hook:
-        print(json.dumps(hook_reply(render(results, recent, degraded, agent), index), ensure_ascii=False))
-    else:
-        block = render(results, recent, degraded, agent)
-        if block:
-            print(block)
+    elif block:
+        print(block)
+    elif paused:
+        print(memory.pause_line(paused))
     return 0

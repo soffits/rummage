@@ -8,6 +8,7 @@ without fetching the whole file.
 
 from __future__ import annotations
 
+import codecs
 import io
 import re
 import shutil
@@ -74,6 +75,27 @@ def kind_of(name: str) -> str:
     if s in MAIL:
         return "mail"
     return "name"
+
+
+SNIFF_BYTES = 8192
+
+
+def is_text(data: bytes) -> bool:
+    """Whether bytes are text by their content: no NUL in the first few KB, and they decode as UTF-8 (a character
+    cut at the end of the sample is fine). Source code, configs and notes of any extension pass; binaries don't."""
+    head = data[:SNIFF_BYTES]
+    if b"\0" in head:
+        return False
+    try:
+        codecs.getincrementaldecoder("utf-8")().decode(head, final=len(head) < SNIFF_BYTES)
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def sniffable(name: str) -> bool:
+    """A file with no reader of its own whose content may still be text (not a known binary format)."""
+    return kind_of(name) == "name" and suffix(name) not in NAME_ONLY
 
 
 def decode(data: bytes) -> str:
@@ -358,6 +380,8 @@ def bytes_text(name: str, data: bytes, limits: Limits) -> tuple[str | None, list
     """The text of a document given as bytes (text, HTML, Office/OpenDocument, PDF, RTF, EPUB, a saved mail) cut to
     the limits, and what was cut; None for other kinds."""
     kind = kind_of(name)
+    if sniffable(name) and is_text(data):
+        kind = "text"
     cuts: list[Cut] = []
     if kind == "text":
         text = decode(data)

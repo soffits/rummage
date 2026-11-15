@@ -20,6 +20,7 @@ from pathlib import Path
 from . import config as C
 from . import envelope as E
 from . import switch
+from .indexer import lock
 from .sources import build
 from .store import Store
 
@@ -102,7 +103,24 @@ def _snapshot(roots: dict[Path, str]) -> dict[Path, tuple]:
     return out
 
 
-def run(cfg: C.Config, names: list[str], poll_minutes: float, settle_seconds: float) -> int:
+def _config_stamp(cfg: C.Config) -> float | None:
+    try:
+        return cfg.path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def run(cfg: C.Config, names: list[str] | None, poll_minutes: float, settle_seconds: float, before=None) -> int:
+    """Watches `names`, or every enabled source when None; then a change to the config (a source added or switched)
+    restarts the watch with the new set. `before` runs first, once this is the only watch of the data folder."""
+    with lock(cfg.data_dir, "watch"):
+        if before is not None:
+            before()
+        return _watch(cfg, names or C.enabled(cfg), names is None, poll_minutes, settle_seconds)
+
+
+def _watch(cfg: C.Config, names: list[str], follow_config: bool, poll_minutes: float, settle_seconds: float) -> int:
+    stamp = _config_stamp(cfg)
     roots: dict[Path, str] = {}
     others = []
     for name in names:
@@ -119,6 +137,9 @@ def run(cfg: C.Config, names: list[str], poll_minutes: float, settle_seconds: fl
 
     def batch(touched: set[str]) -> None:
         nonlocal next_poll
+        if follow_config and _config_stamp(cfg) != stamp:
+            _say("the config changed: starting again with its sources")
+            os.execv(sys.executable, [sys.executable, "-m", "rummage", *sys.argv[1:]])
         due = time.monotonic() >= next_poll
         if due:  # every source, watched ones too, in case an event was missed
             next_poll = time.monotonic() + poll_minutes * 60

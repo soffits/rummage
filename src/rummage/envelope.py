@@ -44,6 +44,15 @@ def show_secrets_command(argv: list[str]) -> list[str]:
     return ["rummage", *argv] + ([] if "--show-secrets" in argv else ["--show-secrets"])
 
 
+def note_scope(doc: dict, scope: dict, line: str, limited: bool, argv: list[str]) -> dict:
+    """Says which scope the query saw and, when it saw only part of the index, the command that sees all of it."""
+    doc["scope"] = scope
+    if limited:
+        doc.setdefault("next_actions", []).append(
+            {"intent": "widen_scope", "reason": line[0].upper() + line[1:] + ".", "command": ["rummage", *argv, "--all"]})
+    return doc
+
+
 def original_command(ref: str) -> list[str]:
     return ["rummage", "get", ref, "--original"]
 

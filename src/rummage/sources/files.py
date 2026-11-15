@@ -1,5 +1,6 @@
 """A folder of files: Markdown and text, HTML, PDF, Office and OpenDocument files, RTF, EPUB, saved mail, pictures,
-recordings, videos, and the names inside archives. Anything else is found by its name. Files are only read.
+recordings, videos, and the names inside archives. Any other file is read as text when its content is text (source code,
+configs, notes of any extension), else found by its name. Files are only read.
 
 Markdown notes are read as the `markdown` source reads them (frontmatter title, aliases, tags, heading paths).
 Pictures get an image vector, so they're found by what they show; formats the model can't read directly go through
@@ -46,6 +47,10 @@ class FilesSource(FolderSource):
         if suffix in MARKDOWN and not self.limits.too_big("text", size):
             return note_segments(item, path.read_text(encoding="utf-8", errors="replace"), self.limits)
         segments = [Segment("name", item.key)]
+        if X.sniffable(item.key) and not self.limits.too_big("text", size):
+            with open(path, "rb") as fh:
+                if X.is_text(fh.read(X.SNIFF_BYTES)):
+                    kind = item.info["type"] = "text"
         if kind == "name" or (kind == "image" and not self.images) or \
                 (kind in ("audio", "video") and not self.recordings):
             return segments

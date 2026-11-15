@@ -1,3 +1,4 @@
+import pytest
 from rummage import models as M
 from rummage import switch
 from rummage.indexer import embed_pending, index_source
@@ -38,3 +39,9 @@ def index_all(store, source, embedders, log, warn, **kwargs):
     counts = index_source(store, source, [embedders], log, warn, **kwargs)
     counts["vectors"] = embed_pending(store, embedders, log)
     return counts
+
+
+@pytest.fixture(autouse=True)
+def _outside_any_project(tmp_path, monkeypatch):
+    """Queries pick their scope from the folder they run in; tests run from a folder in no git repository."""
+    monkeypatch.chdir(tmp_path)

@@ -78,6 +78,18 @@
 - Recall's recent part adds turns from other sessions only when they share words with the prompt.
 - Harness adapters only carry recall's block to the model; every rule about what to recall stays in `rummage recall`. One plugin folder at the repository root serves Claude Code and Codex, since Codex reads Claude Code's marketplace, plugin manifest and `hooks/hooks.json` as they are. OpenCode keeps the block in the prompt's metadata and adds it in the request hook, so the text the user typed is stored unchanged while each request still carries the same block for that message.
 
+## Scopes
+
+- One index, filtered per query by the folder it runs in, instead of an index per project: what a project sees is its own files and its chats, and an assistant's home sees everything, which is mem0's one store with `user_id`/`agent_id`/`run_id` filters rather than Letta's or DigUp's separate stores; a separate code index (DigUp) would need its own model run, ranking scale and status. Filtering is in SQL on the item's source, ref and recorded working folder, so it costs nothing at index time.
+- A project is the git repository holding the folder, worktrees included, as Claude Code keys its auto memory (`~/.claude/projects/<repo>/memory`); repository files are found by reading `.git` files, not by running git, so the per-prompt check stays a few file reads.
+- The deepest matching folder wins, and a configured scope beats a project at the same depth: the nearest context is the most specific one, as CLAUDE.md files closer to the working folder are read last. `local` sources are seen only from inside their root, as DigUp keeps code out of other searches.
+- New projects are added to the config file rather than a separate registry: the config is what every command reads anyway, so a project source is an ordinary source to list, switch off or drop.
+- Project files are what `git ls-files -co --exclude-standard` lists, so `.gitignore` decides; key and password file names are skipped on top of the default dot-file exclude.
+- A file is text by its content (no NUL in the first 8 KB, valid UTF-8), not by an extension list, for every folder source: an extension list kept missing source code and build files, which were then found by name only.
+- A paused index skips what is in reach and doesn't save the source's read position, so the next run after the pause reads it again; nothing new is stored about it. A private pause or `exclude` is a mark checked against each item before it is read and against the index when added; removing a mark resets the sources' read positions, and items already kept are skipped by their fingerprints.
+- Pauses and marks are one JSON file in the data folder, so the prompt hook checks them with one read and no database.
+- `project ensure` starts `rummage watch` rather than a one-off index run: one process keeps every source current, it restarts itself when the config changes, and a lock keeps it to one per data folder.
+
 ## Storage
 
 - SQLite stays the only backend: one file, no server, exact vector scans are fast at personal scale. The seam is `Store` (no SQL anywhere else), and `rummage.export.v2` is the way between engines, so a second backend can come without a migration tool of its own.

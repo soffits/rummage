@@ -123,3 +123,12 @@ data, tests.
 - Seafile reads no media: the bytes would have to be downloaded whole.
 - Long recordings are decoded once per pass to find their windows (a cheap streamed decode); a cached window list
   per fingerprint would save it on reloads.
+
+## Scopes
+
+- `exclude --remove` resets the read position of every enabled source (or the mark's own sources), so a mail
+  source lists its whole mailbox again once; recording which sources a mark actually kept items out of would narrow it.
+- Starting `rummage watch` in the background and the watch lock are covered by tests on Linux only; the detached
+  start on Windows (`DETACHED_PROCESS`) and `os.execv` after a config change there are untested.
+- A file's item time is its last change, so a private pause or a time-window mark keeps out a file edited during it
+  until it is edited again.
