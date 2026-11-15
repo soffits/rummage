@@ -76,7 +76,31 @@ rummage sources disable codex --drop     # switches it off and drops its items f
 
 The index keeps text as written, credentials included, in a file only its owner can read (mode 600). What rummage
 prints (`search`, `get`, `recent`, `recall`, `serve`, `mcp`) has anything that looks like a credential replaced
-with `[secret]`; `--show-secrets` shows it, and `mask_secrets = false` on a source turns masking off for it.
+with `[secret]`; `--show-secrets` shows it, and `mask_secrets = false` on a source turns masking off for it. The
+output says when it masked something: each result carries `masked` (how many values), the JSON summary
+`masked_secrets`, and `next_actions` (or a closing note in text output) gives the same command with
+`--show-secrets`.
+
+### Limits
+
+Some files are too big to index whole. These limits apply per item and can be raised on the source:
+
+| Setting | Default | What happens past it |
+|---|---|---|
+| `max_chars` | 400,000 | the item's text is indexed up to here (files, notes, mail and attachments) |
+| `limits.text`, `.html`, `.office`, `.pdf`, `.image` | 4, 8, 64, 128, 40 MB | the file is indexed by name only (`files`, `seafile`) |
+| `limits.tar` | 256 MB | a compressed tar is indexed by name only, without its listing |
+| `max_pdf_pages` | 500 | later pages are left out |
+| `max_archive_names` | 5,000 | the archive's later entries are left out of its listing |
+| `max_bytes` | 2 MB for `markdown`, none for `files` | the file is indexed by name only |
+| `max_attachment_bytes` | 32 MB | a mail attachment's text is left out |
+| `keep_chars` | 12,000 | chat sources keep this much of each message and of each reply |
+
+Nothing is cut silently. An item a limit cut keeps a `partial` list (what was cut, how much was kept of how much,
+and the setting to raise, e.g. `sources.documents.max_chars`); search results, `get`, `recent` and `recall` show
+it, and `rummage status` counts such items per source along with the files `exclude` left out. `rummage get <ref>
+--original` reads the whole file from disk now, without the limits; `<ref>` can also be the file's path. After
+raising a limit, `rummage index --reload -s <source>` reads the items again.
 
 ## Use
 
@@ -88,6 +112,7 @@ rummage search "what did we decide last Wednesday"      # time phrases rank that
 rummage search "receipt" --since 2026-10-01 --until 2026-10-31
 rummage get "#3f2a9c"     # a result's text by its id (or ref); --loc for one passage, --head N
 rummage get "#3f2a9c" --around 3   # with context: 3 chat turns before and after, or 3 lines around a passage
+rummage get ~/Documents/report.pdf --original   # a file's whole text, read now, past the indexing limits
 rummage recent --minutes 30          # the latest chat turns and changed files, newest first
 rummage about "Ana Souza"  # everything that mentions a person, newest first (aliases from notes and config)
 rummage dupes -s notes     # passages that say nearly the same thing in different notes

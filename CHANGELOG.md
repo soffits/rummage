@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Output says what it leaves out. Masked credentials are counted per result (`masked`) and in the JSON summary (`masked_secrets`), with the same command plus `--show-secrets` in `next_actions` and as a closing note in text output; `recall` names `rummage get <#id> --show-secrets` per item. Items a size limit cut keep a `partial` record at index time (what, kept of total, the setting to raise), shown by `search`, `get`, `recent`, `recall`, `serve` and `mcp`; `rummage status` counts them per source, with the files `exclude` left out. Re-read existing items with `rummage index --reload` to record their cuts.
+- Every size limit is a source setting: `max_chars`, `max_pdf_pages`, `max_archive_names`, `max_attachment_bytes`, `keep_chars` (chat sources) and `limits.<kind>`, besides `max_bytes`. Markdown notes now stop at `max_chars` like other text, instead of at 400 passages.
+- `rummage get <ref> --original` reads a file's whole text from disk, past the indexing limits; `<ref>` can be the file's path. A path under a source root that isn't indexed says why (excluded, wrong extension, not read yet).
+- Files over `max_bytes` are indexed by name with a note, instead of being left out without a trace. Mail attachments over the limit are recorded instead of dropped silently.
+- `seafile`: compressed tars under the size limit are listed again; every one was skipped because the limit was looked up under the wrong name.
+
 - A passage with more tokens than the server takes in one micro-batch (invisible padding in a newsletter, rare symbols; 1,800 characters can be 2,800 tokens) is embedded in pieces and its vector is their mean, instead of failing the whole index run with HTTP 500.
 - Benchmarks: `bench/run.py` adds `rummage-ablations` (ranking variants over one index), qmd's `vsearch` and `query` modes with an optional same-model run, fidx profiles, MIRACL with MTEB's hard negatives, recall@100 and a bootstrap interval for nDCG@10, and resumes finished runs; `bench/memory.py` measures recall on LoCoMo and LongMemEval-S. Search's signals can be switched off one by one for this (`search.Ranking`); the defaults are unchanged.
 
