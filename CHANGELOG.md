@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Agent session histories as sources: `claude-code`, `codex`, `gemini-cli` and `opencode`, plus `jsonl-chat` for any other JSONL chat log mapped by settings. One item per message a person wrote with the visible reply after it, the session, project folder, model and time; tool calls, tool output, thinking and subagents are left out. Logs are read as append-only, from where the last read stopped.
+- Histories of other programs are off until switched on: `rummage sources` lists what it finds on the machine, `rummage sources enable|disable <name>` switches a source (disabling offers to drop its items), and any source can be kept configured but off with `enabled = false`. `dsh-sessions` reads every project when `projects` is left out; `hermes` defaults to Hermes's own home.
+- Two-speed indexing: new and changed items go into keyword search at once and get their vectors after, oldest first; search reports `pending_vectors`. Reading and embedding take separate locks, so new items never wait behind a long embedding run; `index --no-embed`, `--embed-only` and `--wait`.
+- `rummage watch` watches each source's own folders (agent session folders and databases included), retries a batch that found the index busy, and keeps one background run making vectors.
+- `rummage recent`: the latest chat turns and changed files across sources. `rummage get <#id> --around N`: a chat hit with the turns around it, or a file passage with the lines around it.
+- `recall` adds turns said minutes ago in another chat session when the prompt shares words with them or refers back to them, leaving out the current session (the hook's `session_id`).
+- Credentials are masked in what rummage prints (search, get, recent, recall, serve, MCP) unless `--show-secrets` or `mask_secrets = false`; the index keeps text as written and is created readable only by its owner.
+
 - `rummage watch` keeps the index current: folder sources are watched for file events (with the `watch` extra, else checked every few seconds) and indexed a few seconds after changes settle; other sources are re-planned on an interval.
 - `bench/run.py --dataset miracl:<lang>`: MIRACL dev slices (each query among its judged hard negatives), for CJK and other languages next to the English BEIR sets.
 

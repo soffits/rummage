@@ -58,15 +58,30 @@ type = "markdown"                     # a Markdown vault: frontmatter title, ali
 root = "~/notes"
 ```
 
-`rummage sources` lists the source types installed.
+`rummage sources` lists the configured sources, the agent histories it finds on this machine, and the source types
+installed. A source can be switched off with `enabled = false` and keep its settings.
+
+Histories of other programs (the agent sessions below) are never read unless you switch them on:
+
+```sh
+rummage sources                          # e.g. "found on this machine: claude-code, codex"
+rummage sources enable codex             # adds [sources.codex] to the config
+rummage sources disable codex --drop     # switches it off and drops its items from the index
+```
+
+The index keeps text as written, credentials included, in a file only its owner can read (mode 600). What rummage
+prints (`search`, `get`, `recent`, `recall`, `serve`, `mcp`) has anything that looks like a credential replaced
+with `[secret]`; `--show-secrets` shows it, and `mask_secrets = false` on a source turns masking off for it.
 
 ## Use
 
 ```sh
-rummage index              # incremental; only new and changed items are embedded
+rummage index              # incremental: new and changed items go into keyword search at once, then get vectors
 rummage search "query"     # --json, -s SOURCE, -k KIND, -n LIMIT, --words-only (no model, instant)
 rummage search "lease" --path housing --glob '*.pdf'   # only part of a source
 rummage get "#3f2a9c"     # a result's text by its id (or ref); --loc for one passage, --head N
+rummage get "#3f2a9c" --around 3   # with context: 3 chat turns before and after, or 3 lines around a passage
+rummage recent --minutes 30          # the latest chat turns and changed files, newest first
 rummage status --json      # counts, last run per source, failures
 rummage doctor             # runtime files, vector version, freshness; exit 1 on a problem
 rummage watch              # index changes as they happen (install the `watch` extra for file events)
@@ -83,8 +98,12 @@ refs, and `--budget-tokens N` trims the JSON to about N tokens, keeping the top 
 missing; with `--json`, failures print a `rummage.error.v1` object with `next_actions` too.
 
 `index` and `doctor` exit with 1 and one line per problem on stderr, so a scheduler that reports failures shows
-them. A second `index` while one runs exits 0 at once; `--max-minutes` stops a long first run cleanly, and the next
-run continues where it stopped.
+them. An index run has two speeds: it reads what changed into keyword search right away, then makes vectors for it,
+oldest first; until then those items are found by their words (`pending_vectors` in the JSON says how many wait).
+Reading and making vectors take separate locks, so a long embedding run never holds up new items. A second run
+that finds another one reading exits 0 at once (`--wait N` waits instead, and exits 4 if it still can't get in);
+`--no-embed` only reads, `--embed-only` only makes vectors, and `--max-minutes` stops a long first run cleanly; the
+next run continues where it stopped.
 
 To search an index that `rummage serve` keeps on another machine, add a remote; its results merge with local ones:
 
@@ -97,21 +116,29 @@ sources = ["library"]                 # source names the remote serves
 
 ## Agents
 
-Agents use the same CLI: `search --json` and `get`. `rummage recall` gives prompt hooks a short block of cited
-passages, or nothing when nothing clearly matches. [docs/integrations.md](docs/integrations.md) has hook snippets
+Agents use the same CLI: `search --json`, `get` and `recent`. `rummage recall` gives prompt hooks a short block of
+cited passages, or nothing when nothing clearly matches; it also adds what was said minutes ago in another chat
+session when the prompt shares words with it or refers back to it, so a conversation can go on in a new window. [docs/integrations.md](docs/integrations.md) has hook snippets
 for Claude Code, Codex, OpenCode, Hermes Agent and DeepSeek Harness, and [skills/rummage](skills/rummage/SKILL.md)
 is an Agent Skill to drop into an agent's skills folder. For MCP-only agents, `rummage mcp` (with the `mcp` extra)
 serves the same `search`, `get` and `status`.
 
 ## Available plugins
 
-These ship with rummage and are enabled by naming their type in the config; extras pull in what they need.
+These ship with rummage and are enabled by naming their type in the config (or, for the agent histories, with
+`rummage sources enable`); extras pull in what they need. Every chat source has `user_name` and `assistant_name`
+settings for the speaker labels.
 
 | Type | Extra | Indexes |
 |---|---|---|
 | `seafile` | `seafile` | Files in [Seafile](https://www.seafile.com) libraries, through the web API with an account token (share the libraries with it read-only). Text and documents as in `files`, archives listed over HTTP range requests, file bytes kept in memory. Config: `url`, `token_env` or `token_file`, optional `libraries`, `exclude_paths`, `internal_url`. |
-| `dsh-sessions` | `dsh-sessions` | Chats in [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) session logs: one item per message a person wrote, with the reply after it. Config: `projects`, optional `people` (a JSON map of sender ids to names), `assistant_name`. |
-| `hermes` | | Chats in a [Hermes Agent](https://github.com/NousResearch/hermes-agent) `state.db`, the same way. Config: `db`, optional `people`, `exclude_sessions`, `frontends`. |
+| `claude-code` | | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions (`~/.claude/projects`). One item per message you wrote, with the visible reply after it, the project folder, the model and the time; tool calls and their output, thinking and subagents are left out. Read as append-only logs, so `watch` picks up new lines within seconds. Off until enabled. |
+| `codex` | `dsh-sessions` | [Codex CLI](https://github.com/openai/codex) sessions (`~/.codex/sessions`, archived and compressed ones too), the same way. Off until enabled. |
+| `gemini-cli` | | [Gemini CLI](https://github.com/google-gemini/gemini-cli) sessions (`~/.gemini/tmp/*/chats`), the same way. Off until enabled. |
+| `opencode` | | [OpenCode](https://github.com/anomalyco/opencode) 2 sessions in its `opencode.db`, the same way. Off until enabled. |
+| `dsh-sessions` | `dsh-sessions` | Chats in [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) session logs: one item per message a person wrote, with the reply after it. Config: optional `projects` (default: all), `people` (a JSON map of sender ids to names), `assistant_name`. Off until enabled. |
+| `hermes` | | Chats in a [Hermes Agent](https://github.com/NousResearch/hermes-agent) `state.db`, the same way. Config: `db` (default: Hermes's home), optional `people`, `exclude_sessions`, `frontends`. Off until enabled. |
+| `jsonl-chat` | | Any other chat log kept as JSONL, mapped by settings: `paths` (globs), and where the role, text, time and optional session, id and model are in each record (dotted paths). See the docstring of `rummage.plugins.jsonl_chat`. |
 | `telegram-stickers` | | The sticker library kept by [dsh-telegram-bot](https://github.com/soffits/dsh-telegram-bot): each sticker's saved meaning, and its picture, so a sticker is found by what it says or shows. Needs ffmpeg and the bot token. |
 
 A plugin of your own is a class registered in the `rummage.sources` entry-point group; the docstring of
