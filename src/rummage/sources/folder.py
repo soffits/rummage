@@ -213,7 +213,8 @@ class FolderSource(Source):
         return {"text": text, "original": str(path)}
 
     def plan(self, known: dict[str, str | None], state: dict) -> Plan:
-        stats = state.get("stats", {})
+        # A state saved before record files were read has no "records": plan every file again once.
+        stats = state.get("stats", {}) if "records" in state or not self.structured else {}
         record_keys: dict[str, list[str]] = state.get("records", {})
         records_now: dict[str, list[str]] = {}
         live: set[str] = set()

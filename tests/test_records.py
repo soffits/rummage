@@ -87,3 +87,14 @@ def test_titles_skip_dates_and_numbers():
     assert [r.title for r in found] == ["Tea tin", "Jam jar"]
     found = R.parse("y.csv", b"when,count,place\n2026-01-02,3,Lisbon\n2026-01-04,4,Porto\n")
     assert [r.title for r in found] == ["Lisbon", "Porto"]
+
+
+def test_an_index_made_before_records_converts_a_data_file(tmp_path):
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "orders.json").write_text(json.dumps(ORDERS))
+    source = FilesSource("docs", {"root": str(root)}, tmp_path)
+    key = "orders.json"
+    old_state = {"stats": {key: [(root / key).stat().st_mtime_ns, (root / key).stat().st_size]}}
+    plan = source.plan({key: "old-fingerprint"}, old_state)
+    assert key in plan.removed and len(list(plan.upserts)) == 2
