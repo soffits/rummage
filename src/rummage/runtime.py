@@ -18,6 +18,7 @@ import socket
 import subprocess
 import tarfile
 import tempfile
+import zipfile
 import time
 import urllib.error
 import urllib.request
@@ -51,14 +52,29 @@ MEDIA_MODEL = Pinned(
     "c4a8a52691ecef40618438928bdf9e68379b854e24166f292592353db0aab64f",
 )
 LLAMA_TAG = "b12387"
+_RELEASE = f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_TAG}/llama-{LLAMA_TAG}-bin-"
+
+
+def _build(asset: str, size: int, sha256: str) -> Pinned:
+    return Pinned(f"llama-{LLAMA_TAG}-bin-{asset}", _RELEASE + asset, size, sha256)
+
+
+# Official CPU builds per (platform.system(), platform.machine()).
 LLAMA_BUILDS = {
-    ("Linux", "x86_64"): Pinned(
-        f"llama-{LLAMA_TAG}-bin-ubuntu-x64.tar.gz",
-        f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_TAG}/llama-{LLAMA_TAG}-bin-ubuntu-x64.tar.gz",
-        23_337_268,
-        "9c58ebcd5a704e879cfadf2bbcb1fb1ec8ad4a5bec761fc58b3515864dd5e37a",
-    ),
+    ("Linux", "x86_64"): _build("ubuntu-x64.tar.gz", 23_337_268,
+                                "9c58ebcd5a704e879cfadf2bbcb1fb1ec8ad4a5bec761fc58b3515864dd5e37a"),
+    ("Linux", "aarch64"): _build("ubuntu-arm64.tar.gz", 18_974_458,
+                                 "cb6acd002e11ebdad9eca716c72a7a5275afbb0ae9be36d25a9199bf306a67bf"),
+    ("Darwin", "arm64"): _build("macos-arm64.tar.gz", 16_923_428,
+                                "a654e6020f85d71274f1cf29460caec6537db31decc95a1a9e2f91ce05e648d7"),
+    ("Darwin", "x86_64"): _build("macos-x64.tar.gz", 12_669_627,
+                                 "624b91b4af91212631a0a2518ba8405b9cd9f14cad50498d27c3d421453d1b3c"),
+    ("Windows", "AMD64"): _build("win-cpu-x64.zip", 25_124_944,
+                                 "ced8482efac76c5f24398b97a6fe1662109038ec3b880686fd7c7c8f22bc5d99"),
+    ("Windows", "ARM64"): _build("win-cpu-arm64.zip", 13_466_926,
+                                 "d77e3fae0f188e2232b481eda455fca3b43f869ef3a6589e3499964f8df62358"),
 }
+SERVER_NAME = "llama-server.exe" if platform.system() == "Windows" else "llama-server"
 
 # Matryoshka cut: 512 of 768 dimensions keeps nearly all quality (model card: MTEB multilingual 61.17 vs 61.36).
 DIM = 512
@@ -95,7 +111,7 @@ class Runtime:
     def server_binary(self) -> Path:
         if self._llama_server:
             return Path(self._llama_server)
-        return self.llama_dir / "llama-server"
+        return self.llama_dir / SERVER_NAME
 
     def model_path(self, pinned: Pinned) -> Path:
         return self.models / pinned.name
@@ -119,15 +135,21 @@ class Runtime:
                     f"no pinned llama.cpp build for {platform.system()} {platform.machine()}: "
                     "set runtime.llama_server in the config to a llama-server binary"
                 )
+            self.root.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(dir=self.root) as tmp:
                 archive = Path(tmp) / build.name
                 _download(build, archive, log)
-                with tarfile.open(archive) as tar:
-                    tar.extractall(tmp, filter="data")
-                unpacked = Path(tmp) / f"llama-{LLAMA_TAG}"
-                if not (unpacked / "llama-server").exists():
-                    raise RuntimeMissing(f"{build.name} has no llama-{LLAMA_TAG}/llama-server")
-                unpacked.rename(self.llama_dir)
+                unpacked = Path(tmp) / "unpacked"
+                if build.name.endswith(".zip"):
+                    with zipfile.ZipFile(archive) as z:
+                        z.extractall(unpacked)
+                else:
+                    with tarfile.open(archive) as tar:
+                        tar.extractall(unpacked, filter="data")
+                server = next(unpacked.rglob(SERVER_NAME), None)
+                if server is None:
+                    raise RuntimeMissing(f"{build.name} has no {SERVER_NAME}")
+                server.parent.rename(self.llama_dir)
         for old in self.root.glob("llama-b*"):
             if old != self.llama_dir and old.is_dir():
                 shutil.rmtree(old)
@@ -217,10 +239,11 @@ class Embedder:
         if self.nice and shutil.which("nice"):
             args = ["nice", "-n", str(self.nice), *args]
         env = dict(os.environ)
-        env["LD_LIBRARY_PATH"] = os.pathsep.join(filter(None, [str(binary.parent), env.get("LD_LIBRARY_PATH")]))
+        for var in ("LD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"):
+            env[var] = os.pathsep.join(filter(None, [str(binary.parent), env.get(var)]))
         log = open(self.log_path, "ab") if self.log_path else subprocess.DEVNULL
         self.process = subprocess.Popen(args, stdout=log, stderr=log, stdin=subprocess.DEVNULL, env=env,
-                                        preexec_fn=_die_with_parent if self.die_with_parent else None)
+                                        preexec_fn=_die_with_parent if self.die_with_parent and os.name == "posix" else None)
         if log is not subprocess.DEVNULL:
             log.close()
         deadline = time.monotonic() + 120

@@ -35,7 +35,7 @@ class FolderSource(Source):
     def files(self):
         for dirpath, dirnames, filenames in os.walk(self.root):
             rel_dir = os.path.relpath(dirpath, self.root)
-            rel_dir = "" if rel_dir == "." else rel_dir
+            rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
             dirnames[:] = sorted(d for d in dirnames if not self._skip(f"{rel_dir}/{d}".lstrip("/")))
             for f in sorted(filenames):
                 rel = f"{rel_dir}/{f}".lstrip("/")
