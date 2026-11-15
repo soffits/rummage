@@ -30,6 +30,7 @@ codex = "rummage.plugins.codex:CodexSource"
 gemini-cli = "rummage.plugins.gemini_cli:GeminiCliSource"
 opencode = "rummage.plugins.opencode:OpenCodeSource"
 jsonl-chat = "rummage.plugins.jsonl_chat:JsonlChatSource"
+mail = "rummage.plugins.mail:MailSource"
 
 [project.scripts]
 rummage = "rummage.cli:main"

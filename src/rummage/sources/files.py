@@ -58,14 +58,7 @@ class FilesSource(FolderSource):
         if kind == "image":
             png = data if suffix in X.NATIVE_IMAGES else X.to_png(data, self.ffmpeg, flatten=False)
             return segments + [Segment("image", "", loc="picture", image=png)]
-        if kind == "text":
-            body = X.decode(data)
-        elif kind == "html":
-            body = X.html_text(data)
-        elif kind == "office":
-            body = X.office_text(io.BytesIO(data))
-        else:
-            body = X.pdf_text(io.BytesIO(data))
+        body = X.bytes_text(item.key, data) or ""
         title = PurePosixPath(item.key).stem
         for start, piece in T.chunks(body[:X.MAX_CHARS]):
             seg = Segment("text", piece, loc=str(start),

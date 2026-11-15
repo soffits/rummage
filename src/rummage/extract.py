@@ -143,6 +143,20 @@ def pdf_text(fh, max_pages: int = 500) -> str:
     return "\n\n".join(pages).strip()
 
 
+def bytes_text(name: str, data: bytes) -> str | None:
+    """The text of a document given as bytes (text, HTML, Office/OpenDocument, PDF), or None for other kinds."""
+    kind = kind_of(name)
+    if kind == "text":
+        return decode(data)
+    if kind == "html":
+        return html_text(data)
+    if kind == "office":
+        return office_text(io.BytesIO(data))
+    if kind == "pdf":
+        return pdf_text(io.BytesIO(data))
+    return None
+
+
 def archive_names(fh, name: str) -> list[str]:
     s = suffix(name)
     if s in (".zip", ".jar", ".apk"):
