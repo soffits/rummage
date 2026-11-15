@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import codecs
 import io
+import logging
 import re
 import shutil
 import subprocess
@@ -21,6 +22,10 @@ from pathlib import PurePosixPath
 from xml.etree import ElementTree
 
 from .limits import Cut, Limits
+
+# pypdf logs each repair it makes to a malformed PDF as a warning, on stderr when nothing else handles it; the text it
+# recovers is the result, and a page it can't read is left empty.
+logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 TEXT = {".md", ".markdown", ".txt", ".text", ".rst", ".org", ".tex", ".csv", ".tsv", ".log", ".json", ".yaml",
         ".yml", ".toml", ".ini", ".xml", ".srt", ".vtt", ".typ"}

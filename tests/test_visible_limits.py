@@ -3,10 +3,12 @@ walk. Each shows in the output with the setting or command that shows the rest."
 
 import io
 import json
+import logging
 import zipfile
 from email.message import EmailMessage
 
 from rummage import envelope as E
+from rummage import extract as X
 from rummage.chats import Turn, turn_item, turn_segments
 from rummage.cli import main
 from rummage.limits import Limits
@@ -158,3 +160,16 @@ def test_pdf_pages_past_the_limit_are_recorded():
     writer.write(buf)
     text, cuts = X.bytes_text("a.pdf", buf.getvalue(), Limits.of({"max_pdf_pages": 1}))
     assert [(c.what, c.kept, c.total, c.setting) for c in cuts] == [("PDF pages", 1, 3, "max_pdf_pages")]
+
+
+def test_repaired_pdfs_print_nothing(caplog):
+    from pypdf import PdfWriter
+    writer = PdfWriter()
+    writer.add_blank_page(100, 100)
+    buf = io.BytesIO()
+    writer.write(buf)
+    head, _, tail = buf.getvalue().rpartition(b"startxref")
+    broken = head + b"startxref\n" + str(int(tail.split()[0]) + 7).encode() + b"\n%%EOF\n"
+    with caplog.at_level(logging.WARNING):
+        assert X.pdf_pages(io.BytesIO(broken), Limits.of({}))[1] == 1
+    assert [r.getMessage() for r in caplog.records if r.name.startswith("pypdf")] == []
