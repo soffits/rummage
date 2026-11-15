@@ -21,6 +21,7 @@ import time
 import numpy as np
 
 from . import config as C
+from . import envelope as E
 from . import runtime as R
 from .indexer import Busy, Embedders, index_source, lock
 from .search import Searcher
@@ -136,50 +137,77 @@ def _remote_search(name: str, spec: dict, args) -> dict:
     return _remote(spec, "/search", params)
 
 
+def _fail(args, status: str, code: int, message: str, actions: list[dict] | None = None) -> int:
+    if getattr(args, "json", False):
+        print(json.dumps(E.error(status, message, actions), ensure_ascii=False))
+    else:
+        _eprint(message)
+    return code
+
+
 def cmd_search(cfg: C.Config, args) -> int:
     started = time.monotonic()
     hits: list[dict] = []
     errors: list[str] = []
     local_sources = [s for s in (args.source or []) if s in cfg.sources] if args.source else None
+    index_empty = True
+    if not cfg.index_path.exists() and not cfg.remotes:
+        return _fail(args, "index_missing", E.INDEX_MISSING, "no index yet: run `rummage index`",
+                     [{"intent": "build_index", "reason": "Nothing is indexed yet.", "command": ["rummage", "index"]}])
     if cfg.index_path.exists() and (local_sources is None or local_sources):
         store = Store(cfg.index_path)
         try:
             store.check_version()
+            index_empty = store.db.execute("SELECT count(*) FROM items").fetchone()[0] == 0
             vector = None
-            if not args.words_only:
+            if not args.words_only and not index_empty:
                 with R.embedder(_runtime(cfg), media=False, threads=cfg.threads, nice=0) as e:
                     vector = e.query(args.query)
             searcher = Searcher(store.db, local_sources)
             hits += [h.as_dict() for h in searcher.search(
                 args.query, vector, limit=args.limit, kinds=set(args.kind) if args.kind else None)]
-        except (VersionMismatch, R.RuntimeMissing, R.EmbedError) as error:
+        except VersionMismatch as error:
+            return _fail(args, "index_invalid", E.INDEX_MISSING, str(error),
+                         [{"intent": "rebuild_index", "reason": "The index was made with other vectors.",
+                           "command": ["rummage", "index", "--rebuild"]}])
+        except R.RuntimeMissing as error:
+            return _fail(args, "model_missing", E.MODEL_MISSING, str(error),
+                         [{"intent": "fetch_model", "reason": "The model files aren't here yet.",
+                           "command": ["rummage", "setup"]},
+                          {"intent": "search_words_only", "reason": "Keyword search needs no model.",
+                           "command": ["rummage", "search", args.query, "--json", "--words-only"]}])
+        except R.EmbedError as error:
             errors.append(str(error))
         finally:
             store.close()
-    elif not cfg.remotes:
-        _eprint("no index yet: run `rummage index`")
-        return 1
     for name, spec in cfg.remotes.items():
         if args.no_remote or (args.source and not set(args.source) & set(spec.get("sources", [name]))):
             continue
         try:
-            hits += _remote_search(name, spec, args)["hits"]
+            remote = _remote_search(name, spec, args)
+            hits += remote["results"]
+            index_empty = index_empty and remote.get("status") == "empty_index"
         except Exception as error:
             errors.append(f"remote {name}: {type(error).__name__}: {error}")
     hits.sort(key=lambda h: -h["score"])
-    hits = hits[: args.limit]
-    top = hits[0]["score"] if hits else 0
-    cut = sum(1 for h in hits if top <= 0 or h["score"] >= top * 0.5)
-    seconds = time.monotonic() - started
+    hits = E.truncate(hits[: args.limit], args.truncate)
+    doc = E.build(args, hits, errors, time.monotonic() - started, index_empty)
     for error in errors:
         _eprint("warning:", error)
+    if args.files:
+        refs = list(dict.fromkeys(h["ref"] for h in hits))
+        print(json.dumps({"schema": E.SCHEMA, "query": args.query, "status": doc["status"], "files": refs})
+              if args.json else "\n".join(refs))
+        return E.OK if doc["status"] != "error" else E.FAILED
     if args.json:
-        print(json.dumps({"query": args.query, "strong": cut, "seconds": round(seconds, 2), "hits": hits,
-                          "errors": errors}, ensure_ascii=False))
-        return 0 if hits or not errors else 1
+        if args.budget_tokens:
+            doc = E.fit(doc, args.budget_tokens)
+        print(json.dumps(doc, ensure_ascii=False))
+        return E.OK if doc["status"] != "error" else E.FAILED
     if not hits:
-        print("nothing found")
-        return 0 if not errors else 1
+        print("nothing found" if doc["status"] != "empty_index" else "nothing indexed yet: run `rummage index`")
+        return E.OK if doc["status"] != "error" else E.FAILED
+    cut = doc["summary"]["strong"]
     for n, h in enumerate(hits):
         if n == cut:
             print("-- weaker matches --")
@@ -193,7 +221,7 @@ def cmd_search(cfg: C.Config, args) -> int:
               f"  {', '.join(how)}")
         if h["snippet"]:
             print(f"       {h['snippet'][:200]}")
-    return 0
+    return E.OK
 
 
 def cmd_sources(cfg: C.Config, args) -> int:
@@ -342,7 +370,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-n", "--limit", type=int, default=10)
     p.add_argument("--words-only", action="store_true", help="keyword search only (no model start, ~instant)")
     p.add_argument("--no-remote", action="store_true", help="only the local index")
-    p.add_argument("--json", action="store_true")
+    p.add_argument("--truncate", choices=["off", "knee", "strong"], default="off",
+                   help="drop the weak tail: at the score curve's elbow (knee) or below half the top score (strong)")
+    p.add_argument("--files", action="store_true", help="only the refs of matching items, one per line")
+    p.add_argument("--budget-tokens", type=int, help="with --json: trim the output to about this many tokens")
+    p.add_argument("--json", action="store_true", help=f"one {E.SCHEMA} object")
     p.set_defaults(func=cmd_search)
 
     p = sub.add_parser("get", help="print an item's text by #id, ref or source:key")

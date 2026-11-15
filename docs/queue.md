@@ -20,18 +20,6 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 [ruggiio](https://github.com/ruggiio/semfind)), [obsidian-rag-mcp](https://github.com/AdrianBodrug/obsidian-rag-mcp),
 [qkb](https://github.com/miguelarios/qkb). Ideas only; no code is taken from them.
 
-1. **Reuse vectors of unchanged passages.** Editing one line of a long note re-embeds every passage today; keep
-   vectors by a hash of the embedded text and only embed what changed (obsidian-rag-mcp re-embeds edited sections
-   only). Largest CPU saving for the least work.
-2. **`get` by id.** A short stable id per item in every result, and `rummage get <id|ref>` that prints the item's
-   text (whole, a passage, or `--head` lines), so an agent can expand a hit without knowing the source (fidx `get`,
-   qmd `get`/`multi-get`).
-3. **Agent JSON envelope.** A versioned schema, `status` (`ok`, `no_results`, `empty_index`, `index_missing`,
-   `model_missing`), runnable `next_actions`, `--files` for paths only, `--budget-tokens` to cap output size, and
-   distinct exit codes per failure (fidx `search --json`, error envelope and exit table).
-4. **Honest abstention and a clean tail.** `--truncate knee` cuts the weak tail at the score curve's elbow, and
-   `status: no_results` when nothing passes the meaning gate or the word threshold (fidx knee and calibrated floors;
-   DigUp's gate already gives "nothing found" internally).
 5. **Per-script scale.** Our own vault test: Chinese-heavy passages drift into most Chinese queries at z 3–4.
    Compute the z-score mean per modality *and* script, as DigUp does per modality.
 6. **Line locations.** Results carry `line_start`/`line_end` of the passage, so editors and agents open at the

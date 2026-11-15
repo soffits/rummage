@@ -159,10 +159,3 @@ class Searcher:
         for item, seg in rows:
             seen.setdefault(item, seg)
         return list(seen.items())
-
-
-def strong(hits: list[Hit], ratio: float = 0.5) -> int:
-    """How many hits score at least `ratio` × the top one (the rest trail far behind)."""
-    if not hits or hits[0].score <= 0:
-        return len(hits)
-    return sum(1 for h in hits if h.score >= hits[0].score * ratio)
