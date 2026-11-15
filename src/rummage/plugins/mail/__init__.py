@@ -1,5 +1,5 @@
-"""Mail, read-only: a local Maildir or mbox, or an IMAP account. One item per message: subject, sender,
-recipients, date, the body (plain text, else the HTML's text) and the text of attached documents.
+"""Mail, read-only: a local Maildir or mbox, an IMAP account, or a JMAP account. One item per message: subject,
+sender, recipients, date, the body (plain text, else the HTML's text) and the text of attached documents.
 
     [sources.mail]
     type = "mail"
@@ -7,13 +7,19 @@ recipients, date, the body (plain text, else the HTML's text) and the text of at
     # IMAP instead:
     # imap_host = "imap.example.com"
     # imap_user = "me@example.com"
-    # password_env = "MAIL_PASSWORD"     # or password_file = "~/.config/rummage/mail.pass"
-    # folders = ["INBOX", "Archive"]     # default: INBOX
-    # since = "2024-01-01"               # only mail from this day on
+    # JMAP instead:
+    # jmap_session = "https://mail.example.com/jmap/session"
+    # jmap_user = "me@example.com"
+    # password_env = "MAIL_PASSWORD"     # or password_file = "...", or password_command = ["pass", "mail"]
+    # folders = "all"                    # IMAP: every folder but spam, trash and drafts (default); or a list
+    # since = "2y"                       # only mail from then on: a date (2024-01-01) or a span (90d, 2y)
 
-IMAP folders are opened with EXAMINE and messages fetched with BODY.PEEK, so nothing is marked read. A folder's
-cursor is its UIDVALIDITY and highest UID; a changed UIDVALIDITY reads the folder again. Messages that vanished from
-a Maildir or mbox are dropped; IMAP deletions are noticed when a folder is read again.
+Nothing is changed on the server: IMAP folders are opened with EXAMINE and messages fetched with BODY.PEEK, so
+nothing is marked read; JMAP is only queried and downloaded from. With `folders = "all"`, an IMAP account with an
+"All Mail" folder (special-use \\All) is read from that folder alone, since it holds everything else; otherwise
+every folder is read except those marked \\Junk, \\Trash or \\Drafts (or named like them). JMAP reads every
+mailbox except those with the junk, trash and drafts roles. An IMAP folder's cursor is its UIDVALIDITY and
+highest UID; a changed UIDVALIDITY reads it again. Messages that vanished are dropped.
 """
 
 from __future__ import annotations
@@ -21,10 +27,14 @@ from __future__ import annotations
 import datetime as dt
 import email
 import email.policy
+import fnmatch
 import hashlib
 import imaplib
 import mailbox
 import os
+import re
+import shlex
+import subprocess
 from email.message import EmailMessage
 from email.utils import getaddresses, parsedate_to_datetime
 from pathlib import Path
@@ -36,6 +46,9 @@ from rummage.sources import Plan, Source
 from rummage.store import Item, Segment
 
 ATTACHMENT_LIMIT = 32 << 20
+# Folder names to leave out on servers that don't mark special-use folders.
+SKIP_FOLDER_NAMES = ("*spam*", "*junk*", "*trash*", "*deleted*", "*drafts*", "*bin")
+_LIST_LINE = re.compile(r'^\((?P<flags>[^)]*)\)\s+(?:"[^"]*"|NIL)\s+(?P<name>.+)$')
 
 
 def _date(message: EmailMessage) -> float:
@@ -118,14 +131,28 @@ class MailSource(Source):
                 return [path if path.is_dir() else path.parent]
         return []
 
+    def since_date(self) -> dt.date | None:
+        """`since` as a day: a date, or a span back from today (`90d`, `2y`)."""
+        value = str(self.since or "").strip()
+        if not value:
+            return None
+        if value[-1] in "dy" and value[:-1].isdigit():
+            days = int(value[:-1]) * (365 if value[-1] == "y" else 1)
+            return dt.date.today() - dt.timedelta(days=days)
+        return dt.date.fromisoformat(value)
+
     def _recent_enough(self, item: Item) -> bool:
-        if not self.since or not item.mtime:
+        day = self.since_date()
+        if not day or not item.mtime:
             return True
-        return item.mtime >= dt.datetime.fromisoformat(self.since).replace(tzinfo=dt.timezone.utc).timestamp()
+        return item.mtime >= dt.datetime(day.year, day.month, day.day, tzinfo=dt.timezone.utc).timestamp()
 
     def plan(self, known: dict[str, str | None], state: dict) -> Plan:
         if self.spec.get("imap_host"):
             return self._plan_imap(known, state)
+        if self.spec.get("jmap_session"):
+            from .jmap import plan_jmap
+            return plan_jmap(self, known)
         local = self._local()
         upserts, current = [], set()
         for key, raw in local:
@@ -147,17 +174,37 @@ class MailSource(Source):
             # Maildir keys survive flag changes; mbox keys are positions, so name a message by its bytes there.
             yield (str(key) if self.spec.get("maildir") else hashlib.sha1(raw).hexdigest()[:20]), raw
 
-    def _password(self) -> str:
+    def password(self) -> str:
         if self.spec.get("password_env"):
             return os.environ[self.spec["password_env"]]
+        if self.spec.get("password_command"):
+            command = self.spec["password_command"]
+            command = [os.path.expanduser(c) for c in command] if isinstance(command, list) else shlex.split(command)
+            return subprocess.run(command, check=True, capture_output=True, text=True).stdout.strip()
         return Path(os.path.expanduser(self.spec["password_file"])).read_text(encoding="utf-8").strip()
+
+    def _folders(self, imap) -> list[str]:
+        wanted = self.spec.get("folders", "all")
+        if wanted != "all":
+            return list(wanted)
+        listed = []
+        for line in imap.list()[1] or []:
+            m = _LIST_LINE.match(line.decode("utf-8", "replace") if isinstance(line, bytes) else str(line))
+            if m:
+                listed.append((m["flags"].lower(), m["name"].strip('"')))
+        everything = [name for flags, name in listed if "\\all" in flags]
+        if everything:
+            return everything[:1]
+        skip_flags = ("\\junk", "\\trash", "\\drafts", "\\noselect", "\\nonexistent")
+        return [name for flags, name in listed if not any(f in flags for f in skip_flags)
+                and not any(fnmatch.fnmatch(name.lower(), pat) for pat in SKIP_FOLDER_NAMES)]
 
     def _plan_imap(self, known: dict[str, str | None], state: dict) -> Plan:
         imap = imaplib.IMAP4_SSL(self.spec["imap_host"], int(self.spec.get("imap_port", 993)))
-        imap.login(self.spec["imap_user"], self._password())
+        imap.login(self.spec["imap_user"], self.password())
         upserts, removed, new_state = [], [], {}
         try:
-            for folder in self.spec.get("folders", ["INBOX"]):
+            for folder in self._folders(imap):
                 typ, _ = imap.select(f'"{folder}"', readonly=True)
                 if typ != "OK":
                     continue
@@ -165,8 +212,8 @@ class MailSource(Source):
                 old = state.get(folder, {})
                 start = old.get("uid", 0) + 1 if old.get("validity") == validity else 1
                 criteria = ["UID", f"{start}:*"]
-                if self.since:
-                    criteria += ["SINCE", dt.date.fromisoformat(self.since).strftime("%d-%b-%Y")]
+                if self.since_date():
+                    criteria += ["SINCE", self.since_date().strftime("%d-%b-%Y")]
                 typ, data = imap.uid("SEARCH", *criteria)
                 uids = [int(u) for u in (data[0] or b"").split() if int(u) >= start]
                 prefix = f"{folder}/{validity}/"
