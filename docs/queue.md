@@ -70,17 +70,18 @@ data, tests.
 6. **Golden questions:** a private regression set of real past questions with known answers, run weekly to catch
    quality drops.
 7. **Optional local cross-encoder rerank** for hard queries, off by default, measured in the evaluation.
-8. **Pluggable model profiles** (after the evaluation, once the cross-model runs show the ranking carries over): what
-   is tied to EmbeddingGemma 2 today and would move into a profile per model:
-   - prompts: `QUERY_PREFIX` and `document_text` (instruction models want `Instruct: ...\nQuery: ...` and plain
-     documents; BGE-style models no prefix at all);
-   - pooling: the local server always runs `--pooling mean`; last-token models (Qwen3-Embedding, harrier) need
-     `last`, and the causal ones have no micro-batch limit, so the halving in `Embedder.texts` is only for
-     non-causal models;
-   - width: `DIM = 512` is a Matryoshka cut that only suits models trained for it; others keep their full width;
-   - identity: model URL, revision and hash, `VECTOR_VERSION` and the reference texts and vectors, so a changed
-     model means a re-embed, never mixed vectors;
-   - calibration: the meaning gate (z 2 in search, 3 in recall) and the word bonus's weight were chosen with this
-     model; the gate's z-scores are model-agnostic in form, but where relevant passages sit in each model's
-     distribution has to be checked per model (`bench/memory.py` sweep, `rummage-ablations --model`);
-   - the special-token count and context size per server.
+
+## Model switching leftovers
+
+- Rare: two configured profiles whose GGUF files share a file name (different revisions) share one file in
+  `runtime/models`; the second is never downloaded. Name downloaded files by checksum when it matters.
+- Rare: a switch never completes when an item that needs reading again (a picture, a passage stored without input)
+  fails to read every time; `rummage status` shows it waiting. A way to skip such items would end it.
+- The public comparison has SciFact only; MIRACL (zh/ja/ko) would show multilingual differences, at more download.
+- The built-in catalogue has EmbeddingGemma 2 only; candidates people try (Qwen3-Embedding, harrier-oss-v1, BGE-M3)
+  could ship as profiles once each has measured prompts, a pinned file and reference vectors.
+- The word-coverage weight (2, doubled for ID queries) was chosen next to EmbeddingGemma 2's z-scores; it isn't
+  calibrated per model. z-scores are standardized, so it should carry over; the cross-model ablations will show.
+- Every local server is told two special tokens per input and a context of twice the micro-batch; models with other
+  special tokens or long causal contexts would take more per piece than rummage gives them (`max_tokens` in the
+  profile raises the limit).

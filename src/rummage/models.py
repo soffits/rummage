@@ -16,7 +16,7 @@ Profiles come from the files in `rummage/profiles/` (built in; `embeddinggemma-2
     document = "search_document: {text}"   # {title} and {text}; an empty title becomes `empty_title`
     # document_untitled = "{text}"         # used instead when there is no title
     dim = 512                              # keep the first N dimensions (Matryoshka models); default: all
-    pooling = "mean"                       # llama.cpp pooling for a GGUF: mean, cls, last
+    # pooling = "mean"                     # llama.cpp pooling for a GGUF (mean, cls, last); default: the file's own
     # version = "..."                      # names the vectors; default: derived from everything above
 
 A profile's `version` is stored with each of its vectors. Two profiles with the same version must make the same
@@ -82,7 +82,7 @@ class Profile:
     empty_title: str = ""
     document_untitled: str | None = None
     dim: int | None = None
-    pooling: str = "mean"
+    pooling: str | None = None
     max_tokens: int = 2048
     gguf: Pinned | None = None
     mmproj: Pinned | None = None
@@ -150,7 +150,7 @@ def from_dict(name: str, data: dict) -> Profile:
                     {"query": data.get("query", "{text}"), "document": data.get("document", "{text}"),
                      "empty_title": data.get("empty_title", ""), "document_untitled": data.get("document_untitled"),
                      "dim": data.get("dim"),
-                     "pooling": data.get("pooling", "mean"), "gguf": gguf, "mmproj": mmproj,
+                     "pooling": data.get("pooling"), "gguf": gguf, "mmproj": mmproj,
                      "path": data.get("path"), "url": data.get("url"), "api_model": data.get("api_model")}.items()}
         digest = hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()[:10]
         version = f"{name}-{digest}"
@@ -159,7 +159,7 @@ def from_dict(name: str, data: dict) -> Profile:
         name=name, version=version, query=data.get("query", "{text}"), document=data.get("document", "{text}"),
         empty_title=data.get("empty_title", ""), document_untitled=data.get("document_untitled"),
         dim=int(data["dim"]) if data.get("dim") else None,
-        pooling=data.get("pooling", "mean"), max_tokens=int(data.get("max_tokens", 2048)), gguf=gguf, mmproj=mmproj,
+        pooling=data.get("pooling"), max_tokens=int(data.get("max_tokens", 2048)), gguf=gguf, mmproj=mmproj,
         path=data.get("path"), url=data.get("url"), api_model=data.get("api_model"),
         api_key_env=data.get("api_key_env"), api_key_file=data.get("api_key_file"),
         description=data.get("description", ""),

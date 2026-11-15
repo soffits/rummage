@@ -889,7 +889,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("action", choices=["show", "install", "uninstall"])
     p.set_defaults(func=cmd_service)
 
-    p = sub.add_parser("export", help="write the index as plain files (rummage.export.v1), vectors included")
+    p = sub.add_parser("export", help="write the index as plain files (rummage.export.v2), vectors included")
     p.add_argument("folder", help="a new folder to write")
     p.set_defaults(func=cmd_export)
 

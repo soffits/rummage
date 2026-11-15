@@ -320,7 +320,7 @@ class LocalEmbedder(Embedder):
         n = self.max_tokens
         args = [
             str(binary), "-m", str(files[0]),
-            "--embeddings", "--pooling", self.profile.pooling,
+            "--embeddings", *(["--pooling", self.profile.pooling] if self.profile.pooling else []),
             "-t", str(self.threads), "-tb", str(self.threads),
             "-c", str(n * 2), "-b", str(n), "-ub", str(n), "-np", "2",
             "--host", "127.0.0.1", "--port", str(self.port), "--no-webui",

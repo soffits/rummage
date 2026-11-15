@@ -48,9 +48,10 @@ threads = 2                           # CPU threads for llama.cpp
 # max_threads = "auto"                # while indexing, use up to cores - 1 when the machine is otherwise idle
 nice = 10
 
-# [embedder]
-# url = "http://gpu-box:8080"         # index with a llama-server elsewhere running the same pinned model (faster
-#                                     # backfills); used only while it answers and its vectors agree with the index's
+[embedder]
+model = "embeddinggemma-2"            # the embedding model (`rummage models`); change it to switch, see below
+# url = "http://gpu-box:8080"         # index with a llama-server elsewhere running the same model (faster
+#                                     # backfills); used only while it answers and its vectors agree
 
 [sources.documents]
 type = "files"                        # text, Markdown, HTML, PDF, Office/OpenDocument, pictures, archive listings
@@ -93,7 +94,8 @@ rummage about "Ana Souza"  # everything that mentions a person, newest first (al
 rummage dupes -s notes     # passages that say nearly the same thing in different notes
 rummage conflicts -s notes # passages about the same thing whose dates or numbers differ
 rummage status --json      # counts, last run per source, failures
-rummage doctor             # runtime files, vector version, freshness; exit 1 on a problem
+rummage doctor             # runtime files, model vectors, freshness; exit 1 on a problem
+rummage models             # embedding models; `models use NAME` switches, `models compare NAME` compares first
 rummage watch              # index changes as they happen (install the `watch` extra for file events)
 rummage service install    # run watch at login: systemd user unit, launchd agent or Windows scheduled task
 rummage export DIR         # the index as plain files; `rummage import DIR` fills an empty index from them
@@ -108,6 +110,41 @@ scope, search exact words). `--truncate knee` drops the weak tail at the score c
 refs, and `--budget-tokens N` trims the JSON to about N tokens, keeping the top result. Exit codes: 0 success
 (including no results), 1 failure, 2 usage, 3 index missing or made with other vectors, 4 index busy, 5 model files
 missing; with `--json`, failures print a `rummage.error.v1` object with `next_actions` too.
+
+### Switching models
+
+Most of what search finds depends on the embedding model, so the model is a setting. A model profile says where it
+runs and how it wants its inputs written; EmbeddingGemma 2 is built in, and more go in the config:
+
+```toml
+[models.qwen3-0.6b]
+gguf = "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/<revision>/Qwen3-Embedding-0.6B-Q8_0.gguf"
+sha256 = "..."                        # a downloaded file is checked against it
+query = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: {text}"
+document = "{title}\n{text}"
+document_untitled = "{text}"
+# dim = 512                           # keep only the first N dimensions (for Matryoshka models)
+
+[models.openai-small]
+url = "https://api.openai.com/v1"     # any OpenAI-compatible embeddings endpoint: llama-server, vLLM, TEI, hosted
+api_model = "text-embedding-3-small"
+api_key_env = "OPENAI_API_KEY"
+```
+
+```sh
+rummage models compare qwen3-0.6b --public   # both models on your own passages, and on BEIR SciFact
+rummage models use qwen3-0.6b                # fetch it and start switching
+rummage status                               # progress: passages per source, rate, time left
+rummage models rollback                      # after the swap, go back while the old vectors are kept
+rummage models prune                         # free them
+```
+
+A switch builds the new model's vectors beside the old ones while searches keep using the old model, then swaps in
+one step once every passage has one. On the way it calibrates the new model's thresholds against the old model on your
+own index (how far a match must stand out depends on the model) and checks that the new model finds sampled passages
+at least as well; if it does worse, it waits for `rummage models swap`. `rummage watch`, a scheduled `rummage index`
+or a manual one all move it along, and it goes on where it stopped after a restart. `rummage models cancel` drops a
+switch that hasn't finished.
 
 `index` and `doctor` exit with 1 and one line per problem on stderr, so a scheduler that reports failures shows
 them. An index run has two speeds: it reads what changed into keyword search right away, then makes vectors for it,
