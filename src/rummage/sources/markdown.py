@@ -66,6 +66,7 @@ def note_segments(item: Item, raw: str) -> list[Segment]:
     """A Markdown note's segments: a name line (path, title, aliases, tags) and its passages, each embedded with the
     title and the heading it sits under. Sets the item's title and info from the frontmatter."""
     meta, body = _frontmatter(raw)
+    base = len(raw) - len(body)
     title = str(meta.get("title") or Path(item.key).stem)
     aliases = _as_list(meta.get("aliases") or meta.get("alias"))
     tags = _as_list(meta.get("tags") or meta.get("tag"))
@@ -82,7 +83,7 @@ def note_segments(item: Item, raw: str) -> list[Segment]:
     for start, piece in T.chunks(body):
         path = _heading_path(headings, start)
         embed_title = label + (" > " + " > ".join(path) if path else "")
-        seg = Segment("text", piece, loc=str(start))
+        seg = Segment("text", piece, loc=str(start), lines=T.line_span(body, start, piece, base, raw))
         if T.has_prose(piece):
             seg.embed_text = document_text(embed_title, piece)
         segments.append(seg)

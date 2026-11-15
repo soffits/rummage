@@ -74,7 +74,8 @@ def cmd_index(cfg: C.Config, args) -> int:
                     source = build(name, cfg.sources[name], cfg.data_dir)
                     run = store.start_run(name)
                     try:
-                        counts = index_source(store, source, embedders, log, _eprint, limit=args.limit, deadline=deadline)
+                        counts = index_source(store, source, embedders, log, _eprint, limit=args.limit, deadline=deadline,
+                                              reload=args.reload)
                     except Exception as error:
                         store.db.rollback()
                         store.finish_run(run, False, {}, f"{type(error).__name__}: {error}")
@@ -216,8 +217,8 @@ def cmd_search(cfg: C.Config, args) -> int:
             how.append(f"meaning z={h['z']:.1f}")
         if h["words"]:
             how.append(f"words {h['words']:.0%}")
-        loc = h["loc"] if h["loc"] and h["loc"] not in ("0", "meaning", "picture") else ""
-        print(f"{h['score']:5.2f}  {h.get('id', '')} [{h['source']}] {h['title']}  ({h['ref']}{'@' + loc if loc else ''})"
+        where = f":{h['lines']}" if h.get("lines") else ""
+        print(f"{h['score']:5.2f}  {h.get('id', '')} [{h['source']}] {h['title']}  ({h['ref']}{where})"
               f"  {', '.join(how)}")
         if h["snippet"]:
             print(f"       {h['snippet'][:200]}")
@@ -356,6 +357,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("index", help="bring the index up to date")
     p.add_argument("-s", "--source", action="append", help="only this source (repeatable)")
     p.add_argument("--rebuild", action="store_true", help="drop the index and embed everything again")
+    p.add_argument("--reload", action="store_true",
+                   help="read every item again, keeping its vectors (after an upgrade that stores more about items)")
     p.add_argument("--limit", type=int, help="at most this many new or changed items per source")
     p.add_argument("--max-minutes", type=float,
                    help="stop starting new items after this long; the next run goes on where this one stopped")

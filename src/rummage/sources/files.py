@@ -68,7 +68,8 @@ class FilesSource(FolderSource):
             body = X.pdf_text(io.BytesIO(data))
         title = PurePosixPath(item.key).stem
         for start, piece in T.chunks(body[:X.MAX_CHARS]):
-            seg = Segment("text", piece, loc=str(start))
+            seg = Segment("text", piece, loc=str(start),
+                          lines=T.line_span(body, start, piece) if kind == "text" else None)
             if T.has_prose(piece):
                 seg.embed_text = document_text(title, piece)
             segments.append(seg)

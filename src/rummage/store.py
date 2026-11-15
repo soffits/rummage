@@ -66,6 +66,7 @@ class Segment:
     kind: str                 # "name" (keyword only), "text", "image"
     text: str = ""            # what keyword search reads and results quote
     loc: str | None = None    # where in the item: a character offset, a message id...
+    lines: str | None = None  # "first-last" lines of a passage in a text file
     vector: np.ndarray | None = None
     embed_text: str | None = None   # what the model reads, when it differs from `text`
     image: bytes | None = None      # PNG/JPEG bytes for an image segment (not stored)
@@ -123,6 +124,8 @@ class Store:
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(segments)")}
         if "embed_hash" not in columns:
             self.db.execute("ALTER TABLE segments ADD COLUMN embed_hash TEXT")
+        if "lines" not in columns:
+            self.db.execute("ALTER TABLE segments ADD COLUMN lines TEXT")
         self.db.execute("CREATE INDEX IF NOT EXISTS segments_embed_hash ON segments(embed_hash)")
         version = self.meta("vector_version")
         if version is None:
@@ -195,8 +198,8 @@ class Store:
             if seg.vector is not None:
                 blob = np.asarray(seg.vector[:DIM], np.float16).tobytes()
             seg_id = self.db.execute(
-                "INSERT INTO segments(item, kind, loc, text, vector, embed_hash) VALUES(?, ?, ?, ?, ?, ?)",
-                (item_id, seg.kind, seg.loc, seg.text, blob, seg.embed_hash if blob else None)).lastrowid
+                "INSERT INTO segments(item, kind, loc, text, vector, embed_hash, lines) VALUES(?, ?, ?, ?, ?, ?, ?)",
+                (item_id, seg.kind, seg.loc, seg.text, blob, seg.embed_hash if blob else None, seg.lines)).lastrowid
             if seg.text or seg.kind == "name":
                 self.db.execute("INSERT INTO fts(rowid, title, body) VALUES(?, ?, ?)",
                                 (seg_id, title, T.for_index(seg.text or "")))
@@ -212,6 +215,15 @@ class Store:
                     f"({','.join('?' * len(part))})", part):
                 found.setdefault(h, np.frombuffer(blob, np.float16).astype(np.float32))
         return found
+
+    def unhashed_vectors(self, source: str, key: str) -> dict[tuple, np.ndarray]:
+        """Vectors stored before passages were hashed, by (kind, loc, text), so re-reading an item from an older
+        index keeps them."""
+        return {(kind, loc, text): np.frombuffer(blob, np.float16).astype(np.float32)
+                for kind, loc, text, blob in self.db.execute(
+                    "SELECT s.kind, s.loc, s.text, s.vector FROM segments s JOIN items i ON i.id = s.item "
+                    "WHERE i.source = ? AND i.key = ? AND s.vector IS NOT NULL AND s.embed_hash IS NULL",
+                    (source, key))}
 
     def commit(self) -> None:
         self.db.commit()
@@ -254,16 +266,18 @@ class Store:
         source, key, kind, title, ref, mtime, info = self.db.execute(
             "SELECT source, key, kind, title, ref, mtime, info FROM items WHERE id = ?", (row,)).fetchone()
         segments = self.db.execute(
-            "SELECT kind, loc, text FROM segments WHERE item = ? AND kind = 'text' ORDER BY id", (row,)).fetchall()
+            "SELECT kind, loc, text, lines FROM segments WHERE item = ? AND kind = 'text' ORDER BY id",
+            (row,)).fetchall()
         if loc is not None:
             segments = [s for s in segments if s[1] == loc]
             if not segments:
                 raise NotFound(f"no passage at {loc!r} in {ref}")
         text = ""
-        for _, _, piece in segments:
+        for _, _, piece, _ in segments:
             text = _stitch(text, piece or "")
         return {"id": "#" + item_id(source, key), "source": source, "key": key, "kind": kind, "title": title,
-                "ref": ref, "mtime": mtime, "info": json.loads(info or "{}"), "loc": loc, "text": text}
+                "ref": ref, "mtime": mtime, "info": json.loads(info or "{}"), "loc": loc,
+                "lines": segments[0][3] if loc is not None and segments else None, "text": text}
 
     def summary(self) -> dict:
         out: dict = {"path": str(self.path), "vector_version": self.vector_version,

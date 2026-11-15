@@ -13,6 +13,8 @@
 - CJK characters are single FTS tokens, so short Chinese words match; trigram tokenizers can't match two-character words.
 - Brute-force numpy scoring instead of an ANN index or sqlite-vec: fast enough for a few hundred thousand vectors, no alpha dependency.
 
+- One z-score scale per modality, not per script: scaling Chinese passages separately cut their drift into unrelated Chinese queries only slightly and pushed a Chinese answer down for a Chinese question on a mostly English corpus.
+
 ## Sources
 
 - Source types are entry points in the `rummage.sources` group, so services are plugins and third parties can add their own; the core keeps only generic folder sources.

@@ -51,3 +51,27 @@ def test_edit_reembeds_only_changed_passages(tmp_path):
     assert second["reused"] >= passages - 1
     assert len(embedders.current.texts_seen) <= 1
     store.close()
+
+
+def test_line_spans_and_reload_keeps_old_vectors(tmp_path):
+    root = tmp_path / "notes"
+    root.mkdir()
+    body = "\n\n".join(_note(n) for n in range(3))
+    (root / "a.md").write_text("---\ntitle: A\n---\n" + body)
+    store = Store(tmp_path / "index.db")
+    src = MarkdownSource("notes", {"root": str(root)}, tmp_path)
+    embedders = FakeEmbedders()
+    index_source(store, src, embedders, lambda *a: None, print)
+    first = store.db.execute("SELECT lines FROM segments WHERE kind = 'text' ORDER BY id").fetchone()[0]
+    assert first.startswith("4-")
+
+    # An index from before passages were hashed: vectors are kept by (kind, loc, text) on reload.
+    store.db.execute("UPDATE segments SET embed_hash = NULL, lines = NULL")
+    store.commit()
+    embedders.current.texts_seen.clear()
+    counts = index_source(store, src, embedders, lambda *a: None, print, reload=True)
+    assert counts["updated"] == 1 and embedders.current.texts_seen == []
+    assert store.db.execute("SELECT count(*) FROM segments WHERE vector IS NOT NULL AND embed_hash IS NULL"
+                            ).fetchone()[0] == 0
+    assert store.db.execute("SELECT count(*) FROM segments WHERE kind = 'text' AND lines IS NULL").fetchone()[0] == 0
+    store.close()

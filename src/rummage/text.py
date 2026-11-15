@@ -123,3 +123,13 @@ def snippet(text: str, words: list[str], width: int = 240) -> str:
     start = max(0, hit - width // 3)
     end = min(len(flat), start + width)
     return ("…" if start else "") + flat[start:end] + ("…" if end < len(flat) else "")
+
+
+def line_span(text: str, start: int, piece: str, base: int = 0, whole: str | None = None) -> str:
+    """`"first-last"` lines (1-based) of `piece`, found at or after `start` in `text`. `text` sits at character `base`
+    of `whole` (the file as read), when it is a part of it (a body after frontmatter)."""
+    at = text.find(piece[:80], start)
+    at = start if at < 0 else at
+    whole = text if whole is None else whole
+    first = whole.count("\n", 0, base + at) + 1
+    return f"{first}-{first + piece.count(chr(10))}"
