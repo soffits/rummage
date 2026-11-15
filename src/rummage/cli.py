@@ -38,7 +38,6 @@ from . import runtime as R
 from . import text as T
 from .indexer import Busy, Embedders, embed_pending, index_source, lock
 from .search import Searcher
-from .chats import SAME_MESSAGE_SECONDS
 from .query import meaning_vector
 from .when import understand
 from .limits import describe
@@ -455,7 +454,7 @@ def cmd_get(cfg: C.Config, args) -> int:
         row = _find(cfg, store, args.ref)
         doc = store.item(row, args.loc)
         _note_open(cfg, store, row, doc["id"])
-        also = store.same_message(row, SAME_MESSAGE_SECONDS)
+        also = store.same_message(row)
         if also:
             doc["also"] = also
         if args.around is not None:

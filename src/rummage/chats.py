@@ -57,7 +57,26 @@ def people_map(path: str | None) -> dict:
 
 
 _NOTICE = re.compile(r"^(?:\[[^\]\n]{0,300}\]\s*)+")
-SAME_MESSAGE_SECONDS = 600
+# Leading notices a chat client adds before a person's words (a sender line, "[Replying to ...]"), with the quoted
+# message after them (`> ` lines), up to the person's own words.
+_SCAFFOLD = re.compile(r"\A\[[^\]\n]{0,300}\][ \t]*(?:\n|\Z)(?:\[[^\]\n]{0,300}\][ \t]*(?:\n|\Z)|>[^\n]*(?:\n|\Z)|[ \t]*\n)*")
+# A bracket left open where a title was cut off: the start of a notice, not the title's words.
+_CUT_NOTICE = re.compile(r"\s*\[[^\]]*\Z")
+CONTEXT_CHARS = 400
+
+
+def split_scaffold(text: str) -> tuple[str, str]:
+    """`(context, words)`: the notices and quoted message a chat client put before a person's words, and the words.
+    Text without leading notices is all words."""
+    m = _SCAFFOLD.match(text)
+    if not m or not text[m.end():].strip():
+        return "", text
+    return m.group(0).strip(), text[m.end():].strip()
+
+
+def clean_title(title: str) -> str:
+    """A session title without a notice it was cut from (`Telegram-Lia-[Telegram message from ...`)."""
+    return _CUT_NOTICE.sub("", title).rstrip(" -·:,")
 
 
 def said_key(text: str) -> str:
@@ -69,6 +88,10 @@ def said_key(text: str) -> str:
 
 
 def turn_item(source: str, prefix: str, turn: Turn, assistant: str) -> Item:
+    """The item for a turn. Notices and a quoted message before the person's words are kept as `context` in the
+    info, not as their words; a session title cut inside a notice loses the notice."""
+    context, turn.text = split_scaffold(turn.text)
+    turn.session_title = clean_title(turn.session_title)
     when = dt.datetime.fromtimestamp(turn.time, dt.timezone.utc).astimezone()
     body = f"{turn.speaker}: {turn.text}"
     if turn.reply:
@@ -81,6 +104,8 @@ def turn_item(source: str, prefix: str, turn: Turn, assistant: str) -> Item:
         info["channel"] = turn.channel
     if turn.session_title:
         info["session_title"] = turn.session_title
+    if context:
+        info["context"] = context if len(context) <= CONTEXT_CHARS else context[:CONTEXT_CHARS] + "…"
     if turn.project:
         info["project"] = turn.project
     if turn.model:

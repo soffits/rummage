@@ -12,8 +12,7 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 from . import text as T
-from .chats import SAME_MESSAGE_SECONDS
-from .store import Scope, Store
+from .store import Scope, Store, same_message_key
 from .when import TimeRange, without
 
 WORD_WEIGHT = 2.0
@@ -162,17 +161,17 @@ class Searcher:
         scored.sort(key=lambda s: (-s[0], s[1]))
 
         hits: list[Hit] = []
-        said: dict[str, tuple[Hit, float]] = {}
+        said: dict[tuple, tuple[Hit, float]] = {}
         for score, item in scored:
             if len(hits) >= limit:
                 break
             row = self.store.item_row(item)
             if row is None or (kinds and row["kind"] not in kinds):
                 continue
-            key = row["info"].get("said")
-            if key in said and abs((row["mtime"] or 0) - said[key][1]) <= SAME_MESSAGE_SECONDS:
+            key, window = same_message_key(row["info"])
+            if key in said and abs((row["mtime"] or 0) - said[key][1]) <= window:
                 kept = said[key][0]
-                kept.also = (kept.also or []) + [row["ref"]]   # one message seen by two sources: one hit
+                kept.also = (kept.also or []) + [row["ref"]]   # one message recorded twice: one hit
                 continue
             semantic = best.get(item)
             use_meaning = semantic is not None and (semantic[0] >= z_gate or item not in word_seg)
