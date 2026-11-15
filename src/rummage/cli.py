@@ -728,6 +728,13 @@ def cmd_status(cfg: C.Config, args) -> int:
             lines.append(f"  the config asks for {cfg.model}: the next index run starts the switch")
         lines += switch.describe(out["switch"])
     out["configured_sources"] = list(cfg.sources)
+    held = memory.load(cfg.data_dir)
+    pauses = [memory.describe_pause(p) for p in held["pauses"] if memory.live(p)]
+    out["memory"] = {"paused": pauses, "exclusion_marks": len(held["marks"]),
+                     "excluded_items": sum(sum((m.get("dropped") or {}).values()) for m in held["marks"])}
+    lines += [memory.pause_line(p) for p in held["pauses"] if memory.live(p)]
+    if held["marks"]:
+        lines.append(f"{len(held['marks'])} exclusion marks (`rummage exclude --list`)")
     out["backend"] = _runtime(cfg).backend_record if not cfg.llama_server else {"backend": "custom"}
     out["daemon"] = {"running": D.running(cfg.data_dir), "socket": str(D.socket_path(cfg.data_dir)),
                      "idle_minutes": cfg.daemon_idle_minutes}
