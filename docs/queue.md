@@ -50,13 +50,6 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
   times are minutes apart into one hit with the other refs as aliases; `get` shows both.
 - **OpenCode 1.x databases** (`session`, `message`, `part` tables) and its older JSON `storage/` folder.
 
-## Speed (high)
-
-- **Remote embedder:** `[embedder] url = "http://<gpu-box>:<port>"`, a `llama-server` with the same pinned GGUF on
-  a GPU machine, used for big backfills when it answers, with the local CPU runtime as the fallback. `doctor`
-  compares reference vectors from both and refuses the remote one when they differ beyond tolerance (same
-  `vector_version`).
-
 ## Next ideas, in this order unless benchmarks say otherwise
 
 Same rules as everything else: general, any language family, sources opt-in where they read someone's private

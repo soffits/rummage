@@ -41,11 +41,6 @@ from .secrets import mask_value
 from .sources import available, build, load_type
 from .store import Ambiguous, NotFound, Store, VersionMismatch
 
-REFERENCE_TEXTS = [
-    "task: search result | query: a cat drinking tea",
-    "title: none | text: 今天下雨了，我们在家看电影。",
-    "title: invoice | text: Order 4815162342 shipped on 2026-11-02.",
-]
 
 
 def _eprint(*args) -> None:
@@ -74,7 +69,8 @@ def cmd_index(cfg: C.Config, args) -> int:
     report: dict = {}
     deadline = time.monotonic() + args.max_minutes * 60 if args.max_minutes else None
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
-    embedders = Embedders(_runtime(cfg), cfg.threads, cfg.nice, cfg.log_dir / "llama-server.log", cfg.max_threads)
+    embedders = Embedders(_runtime(cfg), cfg.threads, cfg.nice, cfg.log_dir / "llama-server.log", cfg.max_threads,
+                          remote=cfg.embedder_url, warn=log)
     try:
         if not args.embed_only:
             try:
@@ -85,6 +81,7 @@ def cmd_index(cfg: C.Config, args) -> int:
                     store = Store(cfg.index_path)
                     try:
                         store.check_version()
+                        embedders.reference = _reference(store)
                         _read_sources(cfg, store, names, embedders, args, deadline, log, report, failures)
                     finally:
                         store.close()
@@ -98,11 +95,12 @@ def cmd_index(cfg: C.Config, args) -> int:
                     store = Store(cfg.index_path)
                     try:
                         store.check_version()
+                        embedders.reference = _reference(store)
                         made = embed_pending(store, embedders, log, names if args.source else None, deadline)
                         report["vectors"] = made
                         if embedders.current and store.meta("reference") is None:
                             store.set_meta("reference", json.dumps(
-                                embedders.current.texts(REFERENCE_TEXTS).round(5).tolist()))
+                                embedders.current.texts(R.REFERENCE_TEXTS).round(5).tolist()))
                             store.commit()
                     finally:
                         store.close()
@@ -122,6 +120,11 @@ def cmd_index(cfg: C.Config, args) -> int:
         _eprint("problems:\n  " + "\n  ".join(failures))
         return 1
     return 0
+
+
+def _reference(store: Store) -> list | None:
+    stored = store.meta("reference")
+    return json.loads(stored) if stored else None
 
 
 def _read_sources(cfg, store, names, embedders, args, deadline, log, report, failures) -> None:
@@ -551,14 +554,24 @@ def cmd_doctor(cfg: C.Config, args) -> int:
             reference = store.meta("reference")
             if reference and not missing:
                 with R.embedder(rt, media=False, threads=cfg.threads, nice=cfg.nice) as e:
-                    fresh = e.texts(REFERENCE_TEXTS)
-                stored = np.array(json.loads(reference), np.float32)
-                cosines = (fresh * stored).sum(axis=1) / np.linalg.norm(stored, axis=1)
-                if cosines.min() < 0.999:
-                    problems.append(f"this runtime's vectors differ from the index's (cosine {cosines.min():.4f}): "
+                    agreement = R.reference_agreement(e, json.loads(reference))
+                if agreement < R.REFERENCE_COSINE:
+                    problems.append(f"this runtime's vectors differ from the index's (cosine {agreement:.4f}): "
                                     "rebuild with `rummage index --rebuild` or go back to the old llama.cpp build")
                 else:
-                    notes.append(f"reference vectors match (min cosine {cosines.min():.5f})")
+                    notes.append(f"reference vectors match (min cosine {agreement:.5f})")
+            if reference and cfg.embedder_url:
+                try:
+                    remote = R.RemoteEmbedder(cfg.embedder_url)
+                    remote.start()
+                    agreement = R.reference_agreement(remote, json.loads(reference))
+                    if agreement < R.REFERENCE_COSINE:
+                        problems.append(f"remote embedder {cfg.embedder_url} makes other vectors (cosine "
+                                        f"{agreement:.4f}): indexing won't use it; run the same pinned model there")
+                    else:
+                        notes.append(f"remote embedder {cfg.embedder_url} agrees (min cosine {agreement:.5f})")
+                except R.EmbedError as error:
+                    notes.append(f"remote embedder not reachable, indexing uses this machine: {error}")
         finally:
             store.close()
     out = {"ok": not problems, "problems": problems, "notes": notes}

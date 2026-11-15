@@ -253,7 +253,7 @@ class Embedder:
                 raise EmbedError(f"llama-server exited with {self.process.returncode} while loading"
                                  + (f" (log: {self.log_path})" if self.log_path else ""))
             try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/health", timeout=2) as r:
+                with urllib.request.urlopen(f"{self.base}/health", timeout=2) as r:
                     if r.status == 200:
                         break
             except (urllib.error.URLError, ConnectionError, TimeoutError):
@@ -264,6 +264,10 @@ class Embedder:
             time.sleep(0.05)
         if self.media:
             self.marker = self._get("/props").get("media_marker")
+
+    @property
+    def base(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
 
     def stop(self) -> None:
         if self.process and self.process.poll() is None:
@@ -276,12 +280,12 @@ class Embedder:
         self.process = None
 
     def _get(self, path: str) -> dict:
-        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=30) as r:
+        with urllib.request.urlopen(f"{self.base}{path}", timeout=30) as r:
             return json.load(r)
 
     def _post(self, path: str, body: dict, timeout: float = 600) -> object:
         request = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}{path}", data=json.dumps(body).encode(),
+            f"{self.base}{path}", data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"},
         )
         try:
@@ -311,6 +315,53 @@ class Embedder:
         out = self._post("/embeddings", {"content": {
             "prompt_string": self.marker, "multimodal_data": [base64.b64encode(data).decode()]}})
         return _cut(np.array([out[0]["embedding"][0]], np.float32))[0]
+
+
+class RemoteEmbedder(Embedder):
+    """A `llama-server` someone else runs (a GPU machine, say) with the same pinned model, used like the local one.
+    Whether its vectors agree with the index's is checked by the caller against the reference vectors."""
+
+    def __init__(self, url: str, threads: int = 0, timeout: float = 5):
+        self.url = url.rstrip("/")
+        self.threads = threads
+        self.timeout = timeout
+        self.process = None
+        self.marker: str | None = None
+        self.max_tokens = 2048
+        self.media = False
+
+    @property
+    def base(self) -> str:
+        return self.url
+
+    def start(self) -> None:
+        try:
+            with urllib.request.urlopen(f"{self.url}/health", timeout=self.timeout) as r:
+                if r.status != 200:
+                    raise EmbedError(f"{self.url}: not ready (HTTP {r.status})")
+            self.marker = self._get("/props").get("media_marker")
+        except (urllib.error.URLError, OSError, ValueError) as error:
+            raise EmbedError(f"{self.url}: {error}") from None
+        self.media = bool(self.marker)
+
+    def stop(self) -> None:
+        pass
+
+
+REFERENCE_TEXTS = [
+    "task: search result | query: a cat drinking tea",
+    "title: none | text: 今天下雨了，我们在家看电影。",
+    "title: invoice | text: Order 4815162342 shipped on 2026-11-02.",
+]
+# Vectors from another llama.cpp build or machine count as the same when every reference text agrees this well.
+REFERENCE_COSINE = 0.999
+
+
+def reference_agreement(embedder: Embedder, stored: list) -> float:
+    """The lowest cosine between this embedder's reference vectors and the stored ones."""
+    fresh = embedder.texts(REFERENCE_TEXTS)
+    stored = np.array(stored, np.float32)
+    return float(((fresh * stored).sum(axis=1) / np.linalg.norm(stored, axis=1)).min())
 
 
 def _cut(rows: np.ndarray) -> np.ndarray:
