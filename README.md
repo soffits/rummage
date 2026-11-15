@@ -117,6 +117,14 @@ that finds another one reading exits 0 at once (`--wait N` waits instead, and ex
 `--no-embed` only reads, `--embed-only` only makes vectors, and `--max-minutes` stops a long first run cleanly; the
 next run continues where it stopped.
 
+A server can give each home its own token that sees only its sources:
+
+```toml
+[serve.tokens.home-b]
+token_env = "RUMMAGE_TOKEN_HOME_B"    # or token_file
+sources = ["home-b-library"]
+```
+
 To search an index that `rummage serve` keeps on another machine, add a remote; its results merge with local ones:
 
 ```toml
