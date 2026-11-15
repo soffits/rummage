@@ -3,17 +3,19 @@ costs milliseconds instead of a model load. `rummage search` uses it when it ans
 otherwise.
 
 Protocol: one JSON line per request, `{"embed": "<query>"}`, answered by `{"vector": [...]}` or `{"error": "..."}`.
-The socket is created with owner-only permissions.
+The socket is created with owner-only permissions, in the data directory (or /tmp when that path is too long).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
 import socket
 import socketserver
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -26,7 +28,14 @@ SOCKET_NAME = "query.sock"
 
 
 def socket_path(data_dir: Path) -> Path:
-    return data_dir / SOCKET_NAME
+    """`<data_dir>/query.sock`, or a short per-user name in /tmp when that path is too long for a Unix socket
+    (about 100 bytes on macOS and Linux)."""
+    path = data_dir / SOCKET_NAME
+    if len(str(path).encode()) <= 100:
+        return path
+    key = hashlib.sha1(str(data_dir.resolve()).encode()).hexdigest()[:12]
+    base = Path("/tmp") if Path("/tmp").is_dir() else Path(tempfile.gettempdir())
+    return base / f"rummage-{os.getuid() if hasattr(os, 'getuid') else 0}-{key}.sock"
 
 
 def query_vector(data_dir: Path, text: str, timeout: float = 10.0) -> np.ndarray | None:

@@ -22,10 +22,10 @@ class _NoModel:
 def _setup(tmp_path):
     notes = tmp_path / "notes"
     notes.mkdir()
-    (notes / "lease.md").write_text("The lease for unit 306 allows one cat with the landlord's written consent.")
-    (notes / "trip.md").write_text("The train to Montreal leaves Union Station at nine on Friday morning.")
+    (notes / "lease.md").write_text("The lease for unit 306 allows one cat with the landlord's written consent.", encoding="utf-8")
+    (notes / "trip.md").write_text("The train to Montreal leaves Union Station at nine on Friday morning.", encoding="utf-8")
     cfg = tmp_path / "config.toml"
-    cfg.write_text(f'data_dir = "{tmp_path / "data"}"\n[sources.notes]\ntype = "markdown"\nroot = "{notes}"\n')
+    cfg.write_text(f"""data_dir = '{tmp_path / "data"}'\n[sources.notes]\ntype = "markdown"\nroot = '{notes}'\n""", encoding="utf-8")
     store = Store(tmp_path / "data" / "index.db")
     index_source(store, build("notes", {"type": "markdown", "root": str(notes)}, tmp_path), _NoModel(),
                  lambda *a: None, print)

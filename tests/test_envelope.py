@@ -58,10 +58,10 @@ class _NoModel:
 def test_words_only_search_cli(tmp_path, capsys):
     notes = tmp_path / "notes"
     notes.mkdir()
-    (notes / "invoice.md").write_text("Order INV-20931 shipped on Monday with the blue chair.")
-    (notes / "other.md").write_text("Nothing to see here about furniture or orders at all, really.")
+    (notes / "invoice.md").write_text("Order INV-20931 shipped on Monday with the blue chair.", encoding="utf-8")
+    (notes / "other.md").write_text("Nothing to see here about furniture or orders at all, really.", encoding="utf-8")
     cfg = tmp_path / "config.toml"
-    cfg.write_text(f'data_dir = "{tmp_path / "data"}"\n[sources.notes]\ntype = "markdown"\nroot = "{notes}"\n')
+    cfg.write_text(f"""data_dir = '{tmp_path / "data"}'\n[sources.notes]\ntype = "markdown"\nroot = '{notes}'\n""", encoding="utf-8")
     from rummage.indexer import index_source
     from rummage.sources import build
     from rummage.store import Store
@@ -76,6 +76,6 @@ def test_words_only_search_cli(tmp_path, capsys):
     assert main(["--config", str(cfg), "search", "INV-20931", "--words-only", "--files"]) == 0
     assert capsys.readouterr().out.strip() == "invoice.md"
     missing = tmp_path / "missing.toml"
-    missing.write_text(f'data_dir = "{tmp_path / "nowhere"}"\n')
+    missing.write_text(f"""data_dir = '{tmp_path / "nowhere"}'\n""", encoding="utf-8")
     assert main(["--config", str(missing), "search", "x", "--json"]) == E.INDEX_MISSING
     assert json.loads(capsys.readouterr().out)["status"] == "index_missing"

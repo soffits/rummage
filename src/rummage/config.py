@@ -1,4 +1,5 @@
-"""Settings: one TOML file (`$RUMMAGE_CONFIG`, else `~/.config/rummage/config.toml`).
+"""Settings: one TOML file (`$RUMMAGE_CONFIG`, else `~/.config/rummage/config.toml`; on Windows
+`%APPDATA%\\rummage\\config.toml`). Data defaults to `~/.local/share/rummage` (`%LOCALAPPDATA%\\rummage`).
 
     data_dir = "~/.local/share/rummage"      # index, runtime (llama.cpp + model), sticker pictures, logs
 
@@ -39,11 +40,18 @@ class Config:
         return self.data_dir / "logs"
 
 
+def _base(xdg: str, windows: str, fallback: str) -> Path:
+    if os.environ.get(xdg):
+        return Path(os.environ[xdg])
+    if os.name == "nt" and os.environ.get(windows):
+        return Path(os.environ[windows])
+    return Path.home() / fallback
+
+
 def default_path() -> Path:
     if os.environ.get("RUMMAGE_CONFIG"):
         return Path(os.environ["RUMMAGE_CONFIG"]).expanduser()
-    base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-    return base / "rummage" / "config.toml"
+    return _base("XDG_CONFIG_HOME", "APPDATA", ".config") / "rummage" / "config.toml"
 
 
 def load(path: Path | None = None) -> Config:
@@ -52,7 +60,7 @@ def load(path: Path | None = None) -> Config:
     if path.exists():
         with open(path, "rb") as f:
             data = tomllib.load(f)
-    default_data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "rummage"
+    default_data = _base("XDG_DATA_HOME", "LOCALAPPDATA", ".local/share") / "rummage"
     data_dir = Path(os.path.expanduser(os.environ.get("RUMMAGE_DATA_DIR") or data.get("data_dir") or default_data))
     runtime = data.get("runtime", {})
     return Config(

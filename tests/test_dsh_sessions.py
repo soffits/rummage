@@ -23,7 +23,7 @@ def source_for(tmp_path, events):
     (folder / LOG_NAME).write_bytes(zstandard.ZstdCompressor().compress(raw))
     people = tmp_path / "people.json"
     people.write_text(json.dumps({"telegram_users": {"100": "Ana", "200": "Mara"}, "oidc_users": {"sub-m": "Mara"},
-                                  "web": "Ana"}))
+                                  "web": "Ana"}), encoding="utf-8")
     return DshSessionSource("chats", {"sessions": str(tmp_path / "sessions"), "projects": ["proj"],
                                       "people": str(people), "assistant_name": "Bot"})
 

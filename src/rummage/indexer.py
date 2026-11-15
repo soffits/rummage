@@ -7,7 +7,7 @@ same items again and the fingerprints skip the ones already done.
 
 from __future__ import annotations
 
-import fcntl
+import os
 import time
 import traceback
 from contextlib import contextmanager
@@ -24,17 +24,23 @@ class Busy(RuntimeError):
 
 @contextmanager
 def lock(data_dir: Path):
+    """One index run at a time per data directory (an OS file lock, released if the process dies)."""
     data_dir.mkdir(parents=True, exist_ok=True)
-    handle = open(data_dir / "index.lock", "w")
+    handle = open(data_dir / "index.lock", "a+")
     try:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+        if os.name == "nt":
+            import msvcrt
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
         handle.close()
         raise Busy("another index run holds the lock") from None
     try:
         yield
     finally:
-        fcntl.flock(handle, fcntl.LOCK_UN)
         handle.close()
 
 

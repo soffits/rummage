@@ -57,7 +57,7 @@ def test_line_spans_and_reload_keeps_old_vectors(tmp_path):
     root = tmp_path / "notes"
     root.mkdir()
     body = "\n\n".join(_note(n) for n in range(3))
-    (root / "a.md").write_text("---\ntitle: A\n---\n" + body)
+    (root / "a.md").write_text("---\ntitle: A\n---\n" + body, encoding="utf-8")
     store = Store(tmp_path / "index.db")
     src = MarkdownSource("notes", {"root": str(root)}, tmp_path)
     embedders = FakeEmbedders()

@@ -34,9 +34,9 @@ def test_mcp_tools(tmp_path):
 
     notes = tmp_path / "notes"
     notes.mkdir()
-    (notes / "invoice.md").write_text("Order INV-20931 shipped on Monday with the blue chair.")
+    (notes / "invoice.md").write_text("Order INV-20931 shipped on Monday with the blue chair.", encoding="utf-8")
     cfg_path = tmp_path / "config.toml"
-    cfg_path.write_text(f'data_dir = "{tmp_path / "data"}"\n[sources.notes]\ntype = "markdown"\nroot = "{notes}"\n')
+    cfg_path.write_text(f"""data_dir = '{tmp_path / "data"}'\n[sources.notes]\ntype = "markdown"\nroot = '{notes}'\n""", encoding="utf-8")
     store = Store(tmp_path / "data" / "index.db")
     index_source(store, build("notes", {"type": "markdown", "root": str(notes)}, tmp_path), _NoModel(),
                  lambda *a: None, print)
