@@ -21,6 +21,7 @@ import sys
 import time
 
 from . import config as C
+from . import progress as P
 from . import text as T
 from .query import meaning_vector
 from .search import Hit, Searcher, gate_for
@@ -76,7 +77,9 @@ def render_item(hit: Hit | dict) -> str:
     return f"- {head}\n  {h['snippet']}{tail}"
 
 
-def render(results: list[dict], recent: list[dict], degraded: str | None = None) -> str:
+def render(results: list[dict], recent: list[dict], degraded: str | None = None, index: dict | None = None) -> str:
+    if not results and not recent:
+        return f"rummage: {index['note']}" if index else ""
     lines = ["Recalled from the user's own files by rummage; each line is #id · source · where (path:lines, or "
              "chat session#message) · date · title · why it matched. Open one with `rummage get <#id>` "
              "(`--around 3` for the turns around a chat message)."]
@@ -86,7 +89,21 @@ def render(results: list[dict], recent: list[dict], degraded: str | None = None)
         lines += [render_item(h) for h in recent]
     if degraded and results:
         lines.append("(Matched by words only: " + degraded.split(";")[0].split(", so")[0] + ".)")
+    if index:
+        lines.append(f"({index['note']})")
     return "\n".join(lines)
+
+
+def hook_reply(block: str, index: dict) -> dict:
+    """A prompt hook's JSON: the block for the model, the index's status line for the person while it isn't
+    complete, and the whole index summary under `rummage` for adapters that show it."""
+    reply: dict = {}
+    if block:
+        reply["hookSpecificOutput"] = {"hookEventName": HOOK_EVENT, "additionalContext": block}
+    if index["line"]:
+        reply["systemMessage"] = index["line"]
+    reply["rummage"] = {"index": index}
+    return reply
 
 
 def recent_turns(cfg: C.Config, prompt: str, exclude: list[str], minutes: float, max_items: int,
@@ -150,7 +167,11 @@ def run(cfg: C.Config, args) -> int:
     else:
         prompt = raw
     prompt = prompt.strip()[: args.max_query_chars]
+    index = P.state(cfg.data_dir)
+    agent = P.agent_view(index)
     if not prompt or (args.hook and not worth_recalling(prompt)):
+        if args.hook:
+            print(json.dumps(hook_reply("", index), ensure_ascii=False))
         return 0
     try:
         hits, mode, count, degraded, recall_gate = recall(cfg, prompt, args.source, args.path, 20,
@@ -165,17 +186,17 @@ def run(cfg: C.Config, args) -> int:
             {r["id"] for r in results})]
     except Exception as error:  # a hook must never break the agent
         print(f"rummage recall: {type(error).__name__}: {error}", file=sys.stderr)
-        return 0
-    if not results and not recent:
-        return 0
+        results, recent, mode, degraded = [], [], "none", None
     if args.json:
-        print(json.dumps({"schema": "rummage.recall.v1", "query": prompt, "mode": mode, "degraded_reason": degraded,
-                          "results": results, "recent": recent, "masked_secrets": masked_total(results + recent)},
-                         ensure_ascii=False))
+        if results or recent or agent:
+            print(json.dumps({"schema": "rummage.recall.v1", "query": prompt, "mode": mode,
+                              "degraded_reason": degraded, "results": results, "recent": recent,
+                              "masked_secrets": masked_total(results + recent), "index": agent},
+                             ensure_ascii=False))
     elif args.hook:
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": HOOK_EVENT,
-                                                 "additionalContext": render(results, recent, degraded)}},
-                         ensure_ascii=False))
+        print(json.dumps(hook_reply(render(results, recent, degraded, agent), index), ensure_ascii=False))
     else:
-        print(render(results, recent, degraded))
+        block = render(results, recent, degraded, agent)
+        if block:
+            print(block)
     return 0

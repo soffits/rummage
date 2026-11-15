@@ -34,6 +34,7 @@ from . import daemon as D
 from . import envelope as E
 from . import models as M
 from . import models_cli
+from . import progress as P
 from . import runtime as R
 from . import switch
 from . import text as T
@@ -108,7 +109,12 @@ def cmd_index(cfg: C.Config, args) -> int:
                                 if e is not None]
                         opened += live
                         again = store.unreadable(building.version, store.model, building.media) if building else {}
-                        _read_sources(cfg, store, names, live, again, args, deadline, log, report, failures)
+                        reading = P.Run(cfg.data_dir, "read")
+                        try:
+                            _read_sources(cfg, store, names, live, again, args, deadline, log, report, failures,
+                                          reading)
+                        finally:
+                            _finish_reading(store, reading)
                     finally:
                         store.close()
             except Busy as busy:
@@ -123,14 +129,22 @@ def cmd_index(cfg: C.Config, args) -> int:
                         active, building = switch.reconcile(store, cfg.models, cfg.model)
                         pair = (_embedders(cfg, store, active, log), _embedders(cfg, store, building, log))
                         opened += [e for e in pair if e is not None]
+                        making = P.Run(cfg.data_dir, "embed", model=active.name if active else None)
+                        problem = None
                         try:
                             report["vectors"] = embed_models(store, *pair, cfg.models, log,
                                                              names if args.source else None, deadline,
-                                                             readable=C.enabled(cfg))
-                        except (R.EmbedError, OSError) as error:
-                            if building is None:
+                                                             readable=C.enabled(cfg), progress=making)
+                        except Exception as error:
+                            problem = f"{type(error).__name__}: {error}"
+                            rec = switch.record(store)
+                            if building is None or not isinstance(error, (R.EmbedError, OSError)) or \
+                                    not rec or rec.get("error") != problem:
                                 raise
+                            problem = None   # the switch's embedder failed: the switch waits, searches don't
                             failures.append(f"model switch to {building.name} paused: {error}")
+                        finally:
+                            _finish_embedding(store, making, problem, deadline)
                     finally:
                         store.close()
             except Busy:
@@ -149,15 +163,16 @@ def cmd_index(cfg: C.Config, args) -> int:
     return 0
 
 
-def _read_sources(cfg, store, names, embedders, again, args, deadline, log, report, failures) -> None:
+def _read_sources(cfg, store, names, embedders, again, args, deadline, log, report, failures, progress) -> None:
     for name in names:
         source = build(name, cfg.sources[name], cfg.data_dir)
         run = store.start_run(name)
         try:
             counts = index_source(store, source, embedders, log, _eprint, limit=args.limit, deadline=deadline,
-                                  reload=args.reload, again=set(again.get(name, ())))
+                                  reload=args.reload, again=set(again.get(name, ())), progress=progress)
         except Exception as error:
             store.rollback()
+            progress.source(name, phase="failed", last_error=f"{type(error).__name__}: {error}")
             store.finish_run(run, False, {}, f"{type(error).__name__}: {error}")
             failures.append(f"{name}: {type(error).__name__}: {error}")
             _eprint(f"{name}: failed: {type(error).__name__}: {error}")
@@ -170,6 +185,29 @@ def _read_sources(cfg, store, names, embedders, again, args, deadline, log, repo
         if counts["added"] or counts["updated"] or counts["removed"] or counts["failed"]:
             log(f"{name}: +{counts['added']} ~{counts['updated']} -{counts['removed']} failed {counts['failed']}"
                 + ("" if counts["complete"] else " (stopped early; the next run continues)"))
+
+
+UNFINISHED = {"stopped": "a time or item limit stopped it; the next run goes on",
+              "reading": "the run ended before it finished; the next run goes on"}
+
+
+def _finish_reading(store: Store, progress: P.Run) -> None:
+    """Closes the read part: the passages still waiting for vectors, a source that failed, or one left unfinished."""
+    sources = progress.value["sources"]
+    failed = [f"{name}: {s.get('last_error')}" for name, s in sources.items() if s.get("phase") == "failed"]
+    unfinished = [s["phase"] for s in sources.values() if s.get("phase") in ("stopped", "reading", "planning")]
+    if store.model:
+        progress.vectors(store.pending_by_source(store.model))
+    progress.finish(error="; ".join(failed) or None,
+                    paused=UNFINISHED["stopped" if "stopped" in unfinished else "reading"] if unfinished else None)
+
+
+def _finish_embedding(store: Store, progress: P.Run, problem: str | None, deadline: float | None) -> None:
+    left = store.pending_by_source(store.model) if store.model else {}
+    progress.vectors(left)
+    late = deadline is not None and time.monotonic() > deadline and any(n for n, _ in left.values())
+    progress.finish(error=problem, paused="a time limit stopped it; the next run goes on" if late else None,
+                    switch=None)
 
 
 LAST_SEARCH = "last-search.json"
@@ -256,6 +294,9 @@ def cmd_search(cfg: C.Config, args) -> int:
     hits = [_show(cfg, args, h) for h in hits]
     doc = E.build(args, hits, time.monotonic() - started, index_empty)
     doc["summary"]["pending_vectors"] = pending
+    index = P.for_agents(cfg.data_dir, None if args.source else pending)
+    if index:
+        doc["index"] = index
     E.note_hidden(doc, hits, E.show_secrets_command(args.argv))
     E.mark_degraded(doc, degraded)
     _remember_search(cfg, args.query, hits)
@@ -273,6 +314,8 @@ def cmd_search(cfg: C.Config, args) -> int:
         _eprint(f"note: {degraded}")
     if not hits:
         print("nothing found" if doc["status"] != "empty_index" else "nothing indexed yet: run `rummage index`")
+        if index:
+            print(f"note: {index['note']}")
         return E.OK if doc["status"] != "error" else E.FAILED
     cut = doc["summary"]["strong"] if args.sort == "score" else len(hits)
     for n, h in enumerate(hits):
@@ -290,6 +333,8 @@ def cmd_search(cfg: C.Config, args) -> int:
             print(f"       {h['snippet'][:200]}")
         for entry in h.get("partial") or []:
             print(f"       partial: {describe(entry)}")
+    if index:
+        print(f"note: {index['note']}")
     for line in _hidden_lines(args, hits):
         print(line)
     return E.OK
@@ -469,14 +514,19 @@ def cmd_get(cfg: C.Config, args) -> int:
     if args.head:
         doc["text"] = "\n".join(doc["text"].splitlines()[: args.head])
     notes = _get_notes(args, doc)
+    index = P.for_agents(cfg.data_dir)
     if args.json:
         doc["next_actions"] = notes
+        if index:
+            doc["index"] = index
         print(json.dumps(doc, ensure_ascii=False))
         return 0
     print(f"{doc['id']}  [{doc['source']}] {doc['title']}  ({doc['ref']})"
           + (f"\n  also recorded as: {', '.join(doc['also'])}" if doc.get("also") else ""))
     for note in notes:
         print(f"note: {note['reason']} {shlex.join(note['command'])}")
+    if index:
+        print(f"note: {index['note']}")
     print()
     around = doc.get("around")
     if around and around.get("turns"):
@@ -617,6 +667,17 @@ def cmd_daemon(cfg: C.Config, args) -> int:
 
 
 def cmd_status(cfg: C.Config, args) -> int:
+    if args.watch:
+        return P.watch(cfg.data_dir, args.interval)
+    if args.line:
+        # For status bars and prompt hooks, run often: reads only the progress file, never the index.
+        info = P.state(cfg.data_dir)
+        if args.json:
+            print(json.dumps(info, ensure_ascii=False))
+        elif info["line"]:
+            sys.stdout.reconfigure(errors="replace")
+            print(info["line"])
+        return 0
     lines: list[str] = []
     if not cfg.index_path.exists():
         out = {"index": None, "config": str(cfg.path)}
@@ -643,12 +704,15 @@ def cmd_status(cfg: C.Config, args) -> int:
     out["daemon"] = {"running": D.running(cfg.data_dir), "socket": str(D.socket_path(cfg.data_dir)),
                      "idle_minutes": cfg.daemon_idle_minutes}
     out["notes"] = limit_notes(out.get("sources") or {})
+    out["progress"] = P.state(cfg.data_dir)
+    if out["progress"]["line"]:
+        lines.insert(0, out["progress"]["line"])
     if args.json:
         print(json.dumps(out, ensure_ascii=False))
         return 0
     print("\n".join(lines))
-    print(json.dumps({k: v for k, v in out.items() if k not in ("switch", "model", "model_name")}, ensure_ascii=False,
-                     indent=2))
+    print(json.dumps({k: v for k, v in out.items() if k not in ("switch", "model", "model_name", "progress")},
+                     ensure_ascii=False, indent=2))
     return 0
 
 
@@ -899,6 +963,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("status", help="what's indexed and how the last runs went")
     p.add_argument("--json", action="store_true")
+    view = p.add_mutually_exclusive_group()
+    view.add_argument("--line", action="store_true",
+                      help="one short line while indexing is under way, paused or broken, nothing when complete "
+                           "(for status bars; with --json the full summary)")
+    view.add_argument("--watch", action="store_true", help="follow indexing live, per source, until Ctrl+C")
+    p.add_argument("--interval", type=float, default=1.0, help="seconds between --watch refreshes")
     p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("doctor", help="check the runtime, the vectors and each source's freshness")

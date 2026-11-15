@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.12.0
+
+- Indexing progress is visible while it runs: `rummage status --watch` follows it live per source (read, with
+  vectors, pace, time left, pauses and errors, also in Windows Terminal and PowerShell), and `rummage status --line`
+  prints one short line for status bars while the index is unfinished or broken, nothing once it's complete. Both
+  read a small `progress.json` that index runs keep current, never the index itself; `status --json` has it as
+  `progress`.
+- Until the index is complete, `search`, `get` and `recall` say so: an `index` object in their JSON and one sentence
+  in their text ("Index still building: 340 of 1,200 passages have vectors; the others match only by their words;
+  about 6 min left."). Recall's hook reply also carries the status line as `systemMessage` for the person, and the
+  whole summary as `rummage.index` for harness adapters.
+- The OpenCode plugin shows indexing progress in the footer and toasts when indexing starts, finishes or fails; the
+  Claude Code hook shows the status line under the prompt, and `rummage status --line` works as a Claude Code
+  statusLine (`docs/integrations.md`). The OpenCode and Hermes adapters send the session's `cwd` and `harness` to
+  recall.
+
 ## 0.11.3
 
 - Setup times each GPU on its own and pins the fastest one that gives the model's vectors (`--device`), so a machine with an integrated and a discrete GPU no longer splits the model across both. Run `rummage setup --backend auto` to check again.

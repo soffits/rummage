@@ -27,6 +27,20 @@
 
 - One z-score scale per modality, not per script: scaling CJK passages separately cut their drift into unrelated CJK queries only slightly and pushed a CJK answer down for a CJK question on a mostly English corpus.
 
+## Progress
+
+- Indexing progress lives in `progress.json` in the data folder, one part per kind of run (`read`, `embed`), each
+  rewritten atomically at most once a second. Status bars, prompt hooks and search output read that file and never
+  query the index for it, so they can ask every few seconds; a run recounts the passages still waiting every 10 s
+  and readers subtract what it made since.
+- A part counts as running while its process lives and has written within 10 minutes. On Windows the process is
+  looked up with `OpenProcess`, since `os.kill(pid, 0)` there sends Ctrl+C.
+- Agents hear about the index only while the model searches use is missing vectors or items are still being read; a
+  model switch is shown to people only, because searches keep using the old model's complete vectors meanwhile.
+- Status text is ASCII, so a status line printed through a Windows code page can't fail. `status --watch` redraws in
+  place only on a terminal that takes VT sequences (switched on with `SetConsoleMode` on Windows) and otherwise prints
+  the table again when it changes. No library for it (rich and the like): the core stays numpy and pypdf.
+
 ## Sources
 
 - Source types are entry points in the `rummage.sources` group, so services are plugins and third parties can add their own; the core keeps only generic folder sources.
