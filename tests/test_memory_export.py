@@ -61,7 +61,7 @@ PASTED = """Here is everything I have stored:
 
 ```
 [2026-03-14] - Prefers replies in short paragraphs, no bullet lists
-[2026-01-02] - Lives in Toronto with a cat
+[2026-01-02] - Lives in Lyon with a dog
 - Uses Python and Rust at work
 [unknown] - Is learning Japanese
 ```
@@ -146,12 +146,12 @@ def test_zep_facts_say_when_they_stopped_being_true(tmp_path):
 def test_pasted_memory_list(tmp_path):
     src, _, items = _read(tmp_path, "lines", PASTED, name="chatgpt.md", origin="ChatGPT")
     texts = {src.load(i)[1].text: i for i in items.values()}
-    assert set(texts) == {"Prefers replies in short paragraphs, no bullet lists", "Lives in Toronto with a cat",
+    assert set(texts) == {"Prefers replies in short paragraphs, no bullet lists", "Lives in Lyon with a dog",
                           "Uses Python and Rust at work", "[unknown] - Is learning Japanese"}
-    assert texts["Lives in Toronto with a cat"].info["time"].startswith("2026-01-0")
-    assert texts["Lives in Toronto with a cat"].info["origin"] == "ChatGPT"
+    assert texts["Lives in Lyon with a dog"].info["time"].startswith("2026-01-0")
+    assert texts["Lives in Lyon with a dog"].info["origin"] == "ChatGPT"
     assert "time" not in texts["Uses Python and Rust at work"].info
-    _, _, plain = _read(tmp_path, "lines", "Lives in Toronto\n\n# Work\n* Uses Rust\n", name="claude.txt")
+    _, _, plain = _read(tmp_path, "lines", "Lives in Lyon\n\n# Work\n* Uses Rust\n", name="claude.txt")
     assert len(plain) == 2
 
 

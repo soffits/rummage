@@ -22,7 +22,7 @@ class _NoModel:
 def _setup(tmp_path):
     notes = tmp_path / "notes"
     notes.mkdir()
-    (notes / "lease.md").write_text("The lease for unit 306 allows one cat with the landlord's written consent.", encoding="utf-8")
+    (notes / "lease.md").write_text("The lease for flat 12 allows one cat with the landlord's written consent.", encoding="utf-8")
     (notes / "trip.md").write_text("The train to Montreal leaves Union Station at nine on Friday morning.", encoding="utf-8")
     cfg = tmp_path / "config.toml"
     cfg.write_text(f"""data_dir = '{tmp_path / "data"}'\n[sources.notes]\ntype = "markdown"\nroot = '{notes}'\n""", encoding="utf-8")
@@ -42,7 +42,7 @@ def test_worth_recalling():
 
 def test_recall_hook_reply_and_silence(tmp_path, capsys, monkeypatch):
     cfg = _setup(tmp_path)
-    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps({"prompt": "does the lease allow a cat in unit 306"})))
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps({"prompt": "does the lease allow a cat in flat 12"})))
     assert main(["--config", str(cfg), "recall", "--hook"]) == 0
     reply = json.loads(capsys.readouterr().out)
     context = reply["hookSpecificOutput"]["additionalContext"]
@@ -50,7 +50,7 @@ def test_recall_hook_reply_and_silence(tmp_path, capsys, monkeypatch):
     assert "lease.md" in context and "trip.md" not in context
 
     assert main(["--config", str(cfg), "recall", "--max-items", "0", "--recent-items", "0",
-                 "does the lease allow a cat in unit 306"]) == 0
+                 "does the lease allow a cat in flat 12"]) == 0
     assert capsys.readouterr().out == ""
 
     assert main(["--config", str(cfg), "recall", "hello"]) == 0

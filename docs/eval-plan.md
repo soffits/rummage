@@ -7,7 +7,7 @@ under review.
 ## Focus
 
 rummage is an agent's extended memory: it finds what the user and the agent said and wrote, which no model knows.
-The memory sets (LongMemEval, LoCoMo) and a private vault set carry the main evidence; BEIR and MIRACL check that
+The memory sets (LongMemEval, LoCoMo) carry the main evidence; BEIR and MIRACL check that
 the retriever underneath is sound, since a language model already knows most of what they ask.
 
 ## Questions

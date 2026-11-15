@@ -119,7 +119,7 @@ raising a limit, `rummage index --reload -s <source>` reads the items again.
 rummage index              # incremental: new and changed items go into keyword search at once, then get vectors
 rummage search "query"     # --json, -s SOURCE, -k KIND, -n LIMIT, --words-only (no model, instant)
 rummage search "lease" --path housing --glob '*.pdf'   # only part of a source
-rummage search "receipt" --since 2026-10-01 --until 2026-10-31   # a dated note (todo/2026-W44.md) counts as its period
+rummage search "receipt" --since 2026-10-01 --until 2026-10-31   # a dated note (weekly/2026-W44.md) counts as its period
 rummage search "Ana Souza" --sort newest -n 50   # the newest of the matches first
 rummage get "#3f2a9c"     # a result's text by its id (or ref); --loc for one passage, --head N
 rummage get "#3f2a9c" --around 3   # with context: 3 chat turns before and after, or 3 lines around a passage
