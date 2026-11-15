@@ -104,3 +104,11 @@ data, tests.
 - Every local server is told two special tokens per input and a context of twice the micro-batch; models with other
   special tokens or long causal contexts would take more per piece than rummage gives them (`max_tokens` in the
   profile raises the limit).
+9. **Cross-language queries:** the word bonus can only match words in the query's own language, so a Chinese
+   question about an English note ranks same-language chat lines that share a word above the note (private vault
+   set: hit@1 0.57 hybrid against 0.79 by meaning alone). Weigh the bonus by whether query and passage share a
+   language, or match words across languages, and measure it on that set and a public cross-lingual one.
+10. **Recall as leads:** at its thresholds recall shows nothing for 23% of LoCoMo questions whose evidence plain
+   search has in its top 10-20, and injects about as often on unanswerable questions as on answerable ones. If its
+   output is pointers for an agent to open, lower thresholds and a few newest-related items fit better; measure
+   with `bench/memory.py`'s lead metrics before changing the defaults.
