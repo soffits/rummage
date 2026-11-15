@@ -53,22 +53,57 @@ def lock(data_dir: Path, name: str = "index", wait: float = 0):
         handle.close()
 
 
-class Embedders:
-    """Starts llama-server on first need, with the image encoders only when a source needs them."""
+def spare_threads(base: int, most: int, mine: int, load: float | None, cores: int) -> int:
+    """How many threads to embed with: `base` always, more up to `most` while the machine's other work (the
+    1-minute load minus this run's own threads) leaves cores idle."""
+    if most <= base or load is None:
+        return base
+    others = max(0.0, load - mine)
+    return max(base, min(most, int(cores - others - 0.5)))
 
-    def __init__(self, runtime: Runtime, threads: int, nice: int, log_path: Path):
+
+def _load() -> float | None:
+    try:
+        return os.getloadavg()[0]
+    except (AttributeError, OSError):
+        return None
+
+
+class Embedders:
+    """Starts llama-server on first need, with the image encoders only when a source needs them. With
+    `max_threads` above `threads`, it checks the machine's load every minute and restarts the server with more
+    threads while cores sit idle, or back to `threads` when other work shows up."""
+
+    RECHECK_SECONDS = 60
+
+    def __init__(self, runtime: Runtime, threads: int, nice: int, log_path: Path, max_threads: int = 0):
         self.runtime = runtime
         self.threads = threads
+        self.max_threads = max_threads
         self.nice = nice
         self.log_path = log_path
         self.current: Embedder | None = None
+        self.checked = 0.0
+
+    def _wanted(self) -> int:
+        mine = self.current.threads if self.current else 0
+        return spare_threads(self.threads, self.max_threads, mine, _load(), os.cpu_count() or 1)
 
     def get(self, media: bool) -> Embedder:
+        threads = None
         if self.current and (self.current.media or not media):
-            return self.current
+            if self.max_threads <= self.threads or time.monotonic() - self.checked < self.RECHECK_SECONDS:
+                return self.current
+            self.checked = time.monotonic()
+            threads = self._wanted()
+            if threads == self.current.threads:
+                return self.current
+            media = media or self.current.media
+        threads = threads or self._wanted()
         self.close()
-        self.current = Embedder(self.runtime, media, self.threads, self.nice, self.log_path)
+        self.current = Embedder(self.runtime, media, threads, self.nice, self.log_path)
         self.current.start()
+        self.checked = time.monotonic()
         return self.current
 
     def close(self) -> None:

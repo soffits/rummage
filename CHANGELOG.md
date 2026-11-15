@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `[runtime] max_threads` (a number, or `"auto"` for cores − 1): while indexing, use more llama.cpp threads while the machine's other work leaves cores idle, and drop back to `threads` when it doesn't; checked every minute (POSIX load average; elsewhere `threads` is kept).
+
 ## 0.8.1
 
 - Searches never fail for lack of the model: when the model files are missing, `llama-server` won't start within 20 s or stops answering, `search`, `recall`, `serve` and `mcp` go on by words and say why (`request.mode: "words"` and `summary.degraded_reason` in JSON, one line on stderr or in the recall block).

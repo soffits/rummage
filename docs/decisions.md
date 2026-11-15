@@ -40,3 +40,7 @@
 - SQLite stays the only backend: one file, no server, exact vector scans are fast at personal scale. The seam is `Store` (no SQL anywhere else), and `rummage.export.v1` is the way between engines, so a second backend can come without a migration tool of its own.
 - The export keeps vectors as raw little-endian float16 rows next to JSONL text, rather than one JSON or a database dump: any language reads it, vectors stay exact, and the vector version in the manifest stops mixing models.
 - `rummage service` writes the OS's own supervisor config (systemd user unit, launchd agent, logon task) instead of shipping a supervisor: restarts and login start come from the system people already use.
+
+## Runtime
+
+- Threads follow the load by restarting `llama-server` (about a second) when the wanted count changes, checked at most once a minute: llama.cpp fixes the thread count at start, and a minute-scale check matches the 1-minute load average it reads.

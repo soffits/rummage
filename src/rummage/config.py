@@ -5,6 +5,7 @@
 
     [runtime]
     threads = 2                               # CPU threads for llama.cpp
+    # max_threads = "auto"                    # use up to this many (auto: cores - 1) while the machine is idle
     nice = 10
     # llama_server = "/usr/bin/llama-server"  # instead of the pinned build
 
@@ -30,6 +31,7 @@ class Config:
     path: Path
     data_dir: Path
     threads: int = 2
+    max_threads: int = 0
     nice: int = 10
     llama_server: str | None = None
     sources: dict[str, dict] = field(default_factory=dict)
@@ -52,6 +54,12 @@ def _base(xdg: str, windows: str, fallback: str) -> Path:
     return Path.home() / fallback
 
 
+def _max_threads(value) -> int:
+    if value == "auto":
+        return max(1, (os.cpu_count() or 2) - 1)
+    return int(value or 0)
+
+
 def default_path() -> Path:
     if os.environ.get("RUMMAGE_CONFIG"):
         return Path(os.environ["RUMMAGE_CONFIG"]).expanduser()
@@ -71,6 +79,7 @@ def load(path: Path | None = None) -> Config:
         path=path,
         data_dir=data_dir,
         threads=int(runtime.get("threads", 2)),
+        max_threads=_max_threads(runtime.get("max_threads", 0)),
         nice=int(runtime.get("nice", 10)),
         llama_server=os.environ.get("RUMMAGE_LLAMA_SERVER") or runtime.get("llama_server"),
         sources=dict(data.get("sources", {})),

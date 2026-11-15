@@ -75,3 +75,35 @@ def test_line_spans_and_reload_keeps_old_vectors(tmp_path):
                             ).fetchone()[0] == 0
     assert store.db.execute("SELECT count(*) FROM segments WHERE kind = 'text' AND lines IS NULL").fetchone()[0] == 0
     store.close()
+
+
+def test_threads_follow_the_machines_load(monkeypatch):
+    from rummage import indexer as I
+
+    assert I.spare_threads(2, 0, 0, 0.1, 4) == 2            # off unless max_threads is above threads
+    assert I.spare_threads(2, 3, 2, 2.1, 4) == 3            # only our own 2 threads busy: use 3
+    assert I.spare_threads(2, 3, 3, 4.5, 4) == 2            # others need ~1.5 cores: back to 2
+    assert I.spare_threads(2, 3, 0, None, 4) == 2           # no load figure (Windows): stay at the floor
+
+    started = []
+
+    class Fake:
+        def __init__(self, runtime, media, threads, nice, log):
+            self.media, self.threads = media, threads
+
+        def start(self):
+            started.append(self.threads)
+
+        def stop(self):
+            pass
+
+    loads = iter([0.0, 3.0, 6.0])
+    monkeypatch.setattr(I, "Embedder", Fake)
+    monkeypatch.setattr(I, "_load", lambda: next(loads))
+    monkeypatch.setattr(I.os, "cpu_count", lambda: 4)
+    monkeypatch.setattr(I.Embedders, "RECHECK_SECONDS", 0)
+    embedders = I.Embedders(None, 2, 10, None, max_threads=3)
+    embedders.get(False)       # idle machine: 3 threads
+    embedders.get(False)       # load 3.0 is mostly our own 3 threads: keep 3
+    embedders.get(False)       # load 6.0: others are busy, back to 2
+    assert started == [3, 2]
