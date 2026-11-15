@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.17.0
+
+- The `files` source reads JSON, JSON Lines, CSV and TSV files of records as one item per record: a JSON array of objects (or one under a top-level key), or a table with a header row. Each record's values are searchable as `key: value` lines, the title comes from a title/name/subject-like field, and the item time from a date-like field. Other JSON and single-record files stay one item.
+
 ## 0.16.2
 
 - Fixed: the index summary could read a finished index as paused when a read and an embed stamped their vector counts at the same clock tick (a coarse clock, as on Windows). The embed's count now wins a tie.
