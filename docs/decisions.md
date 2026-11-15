@@ -53,6 +53,7 @@
 - A client's notices before a person's words count as scaffolding only when the message starts with a bracketed notice line; the `> ` lines and blank lines after it go with it. A message the person starts with their own quote stays as written.
 - The same chat message in two sources is recognised by its text with leading bracketed notices removed (sender tags, channel headers that one recorder adds and the other doesn't) and times within 10 minutes, and collapsed at search time rather than dropped at index time: both records stay, so either source can be switched off without losing the message.
 - Recall's recent part adds turns from other sessions only when they share words with the prompt.
+- Harness adapters only carry recall's block to the model; every rule about what to recall stays in `rummage recall`. One plugin folder at the repository root serves Claude Code and Codex, since Codex reads Claude Code's marketplace, plugin manifest and `hooks/hooks.json` as they are. OpenCode keeps the block in the prompt's metadata and adds it in the request hook, so the text the user typed is stored unchanged while each request still carries the same block for that message.
 
 ## Storage
 

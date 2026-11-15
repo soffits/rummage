@@ -1,0 +1,5 @@
+name: rummage
+version: "0.1.0"
+description: Recall from your own files with rummage before each turn
+provides_hooks:
+  - pre_llm_call
