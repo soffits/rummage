@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs"
 
 const KEY = "rummage.recall"
 
-function recall(command, args, prompt, sessionID, timeout) {
+function recall(command, args, prompt, sessionID, cwd, timeout) {
   return new Promise((resolve) => {
     const child = execFile(
       command,
@@ -26,7 +26,7 @@ function recall(command, args, prompt, sessionID, timeout) {
       },
     )
     child.stdin.on("error", () => {})
-    child.stdin.end(JSON.stringify({ prompt, session_id: sessionID }))
+    child.stdin.end(JSON.stringify({ prompt, session_id: sessionID, cwd, harness: "opencode" }))
   })
 }
 
@@ -53,7 +53,8 @@ export default {
     await ctx.session.hook("prompt", async (event) => {
       const text = event.prompt.text ?? ""
       if (!text.trim()) return
-      const block = await recall(command, args, text, String(event.sessionID), timeout)
+      const cwd = ctx.location?.directory ?? process.cwd()
+      const block = await recall(command, args, text, String(event.sessionID), cwd, timeout)
       if (block) event.metadata = { ...event.metadata, [KEY]: block }
     })
 

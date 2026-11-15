@@ -112,7 +112,9 @@ def test_recall_sees_another_session_from_minutes_ago(tmp_path, monkeypatch, cap
     assert "unrelated earlier chat" not in context
     # Nothing in common, nothing recalled: how a prompt is phrased decides nothing.
     code, out = _run(capsys, "--config", str(cfg), "recall", "--session", "sess-b", "order the one from just now")
-    assert out == ""
+    # Only the index's own state: its vectors were never made (`--no-embed`).
+    assert out == ("rummage: Index incomplete, paused (nothing is making the missing vectors now): 0 of 2 passages "
+                   "have vectors; the others match only by their words.\n")
     # As a match or in the recent part, never twice:
     code, out = _run(capsys, "--config", str(cfg), "recall", "--session", "sess-b", "--json", "what about the sofa")
     doc = json.loads(out)

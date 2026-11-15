@@ -119,6 +119,8 @@ rummage get "#3f2a9c" --around 3   # with context: 3 chat turns before and after
 rummage get ~/Documents/report.pdf --original   # a file's whole text, read now, past the indexing limits
 rummage recent --minutes 30          # the latest chat turns and changed files, newest first
 rummage status --json      # counts, last run per source, failures
+rummage status --watch     # follow indexing live: per source read and with vectors, pace, time left, pauses, errors
+rummage status --line      # one short line while indexing is unfinished or broken, nothing once complete
 rummage doctor             # runtime files, model vectors, freshness; exit 1 on a problem
 rummage models             # embedding models; `models use NAME` switches, `models compare NAME` compares first
 rummage watch              # index changes as they happen (install the `watch` extra for file events)
@@ -177,6 +179,12 @@ Reading and making vectors take separate locks, so a long embedding run never ho
 that finds another one reading exits 0 at once (`--wait N` waits instead, and exits 4 if it still can't get in);
 `--no-embed` only reads, `--embed-only` only makes vectors, and `--max-minutes` stops a long first run cleanly; the
 next run continues where it stopped.
+
+A run keeps a small `progress.json` in the data folder current (about once a second), and everything that reports
+progress reads that file, never the index, so a status bar can ask every few seconds. Until the index is complete,
+`search`, `get` and `recall` say so: their JSON carries an `index` object (`state`, a one-sentence `note`, items read,
+passages with vectors, time left, why it paused or what failed) and their text output adds the note. Once it's
+complete they add nothing.
 
 ## Agents
 
