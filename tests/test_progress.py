@@ -287,3 +287,14 @@ def test_the_notice_names_what_ensure_just_started():
     assert "this project (/w/a" in told and "claude-code's own chat history" in told and "rummage pause" in told
     assert "this project" not in notice({"added": ["claude-code"], "project": {"folder": "/w/a", "added": False},
                                          "history": {"harness": "claude-code", "source": "claude-code"}})
+
+
+def test_equal_timestamps_take_the_embed_count(tmp_path, monkeypatch):
+    monkeypatch.setattr(P.time, "time", lambda: 1_000_000.0)
+    read = P.Run(tmp_path, "read")
+    read.vectors({"notes": (1200, 1200)})
+    read.finish()
+    embed = P.Run(tmp_path, "embed")
+    embed.vectors({"notes": (0, 1200)})
+    embed.finish()
+    assert P.state(tmp_path)["state"] == "complete"
