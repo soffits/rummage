@@ -31,7 +31,7 @@ class _Timed:
 
             def texts(self, texts):
                 if texts is B.SAMPLE:
-                    B.time.sleep(outer.delay[backend])
+                    _clock[0] += outer.delay[backend]
                 rows = np.array(profile.reference, np.float32)[: len(texts)] if texts == profile.reference_texts() \
                     else np.ones((len(texts), len(profile.reference[0])), np.float32)
                 rows = rows + outer.skew[backend]
@@ -40,8 +40,12 @@ class _Timed:
         return E()
 
 
+_clock = [0.0]
+
+
 def _runtime(tmp_path, monkeypatch, found=("Vulkan0: Test GPU (16000 MiB)",)):
     rt = R.Runtime(tmp_path)
+    monkeypatch.setattr(B.time, "monotonic", lambda: _clock[0])
     monkeypatch.setattr(B, "candidate", lambda: "vulkan")
     monkeypatch.setattr(R.Runtime, "install", lambda self, backend, log=print: None)
     monkeypatch.setattr(B, "devices", lambda runtime, backend: list(found))
