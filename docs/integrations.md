@@ -17,30 +17,32 @@ Any agent that can run a command can use rummage: `rummage search "<query>" --js
 - **`rummage recent`** lists the latest chat turns and changed files across sources (`--minutes`, `-s`,
   `--exclude-session`, `--json`), and **`rummage get <#id> --around N`** shows a chat hit with the turns around it.
 
-The snippets below call `rummage recall` from each tool's prompt hook. Adjust the command path if rummage is not on
-the hook's `PATH`. `recall --hook` follows the documented `UserPromptSubmit` input and output of Claude Code and
-Codex; the OpenCode, Hermes Agent and DeepSeek Harness plugins are short starting points written against those
-tools' plugin docs and have not been run end to end yet.
+The adapters below call `rummage recall` before each prompt and add its block next to the user's message, never to
+the system prompt, so the prompt cache keeps working. A recall that fails or takes longer than its timeout (5 s)
+adds nothing and the turn goes on. Each one assumes `rummage` is on the agent's `PATH`.
 
-## Claude Code
+## Claude Code and Codex
 
-`~/.claude/settings.json` (or the project's `.claude/settings.json`):
+This repository is a plugin marketplace for both. The plugin holds the recall hook (`hooks/hooks.json`, a
+`UserPromptSubmit` hook running `rummage recall --hook`) and the skill.
 
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "rummage recall --hook", "timeout": 5 } ] }
-    ]
-  }
-}
+Claude Code:
+
+```
+/plugin marketplace add soffits/rummage
+/plugin install rummage@rummage
 ```
 
-`--hook` reads the hook's JSON from stdin and replies with `hookSpecificOutput.additionalContext`.
+Codex:
 
-## Codex
+```bash
+codex plugin marketplace add soffits/rummage
+codex plugin add rummage@rummage
+```
 
-`~/.codex/hooks.json` (or `[hooks]` in `config.toml`):
+Codex runs a new hook only after you trust it: open `/hooks` once and trust the rummage hook.
+
+Without the plugin, the same hook goes in `~/.claude/settings.json` or `~/.codex/hooks.json`:
 
 ```json
 {
@@ -54,35 +56,30 @@ tools' plugin docs and have not been run end to end yet.
 
 ## OpenCode
 
-A plugin file, `.opencode/plugin/rummage.ts` (or `~/.config/opencode/plugin/rummage.ts`):
+The plugin in [integrations/opencode](../integrations/opencode) targets the OpenCode 2 plugin API. It runs recall once
+when a prompt is admitted and keeps the block in that message's metadata, then adds it to the message in each model
+request, so the text you typed stays as you typed it. It also registers the rummage skill. Add the package to
+`opencode.jsonc`:
 
-```ts
-import type { Plugin } from "@opencode-ai/plugin"
-
-export const Rummage: Plugin = async ({ $ }) => ({
-  "chat.message": async (_input, output) => {
-    const prompt = output.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")
-    const context = (await $`rummage recall ${prompt}`.nothrow().quiet()).stdout.toString().trim()
-    if (context) output.parts.push({ type: "text", text: context, synthetic: true } as any)
-  },
-})
+```jsonc
+{
+  "plugins": [
+    "@soffits/opencode-rummage",
+    // or with options: { "package": "@soffits/opencode-rummage", "options": { "command": "rummage", "timeout": 5000, "args": [] } }
+  ]
+}
 ```
+
+`args` are passed on to `rummage recall` (for example `["-s", "notes"]`); `"skill": false` leaves the skill out.
 
 ## Hermes Agent
 
-A plugin whose `register` adds a `pre_llm_call` hook; Hermes joins the returned context into the user message:
+The plugin in [integrations/hermes](../integrations/hermes) adds a `pre_llm_call` hook; Hermes appends what it returns
+to the turn's user message. `RUMMAGE_COMMAND` and `RUMMAGE_RECALL_TIMEOUT` (seconds) change the command and timeout.
 
-```python
-import subprocess
-
-
-def recall(user_message: str = "", **_):
-    run = subprocess.run(["rummage", "recall", user_message], capture_output=True, text=True, timeout=5)
-    return {"context": run.stdout.strip()} if run.stdout.strip() else None
-
-
-def register(ctx):
-    ctx.register_hook("pre_llm_call", recall)
+```bash
+hermes plugins install soffits/rummage/integrations/hermes --enable
+hermes skills install soffits/rummage/skills/rummage
 ```
 
 ## DeepSeek Harness
