@@ -8,6 +8,7 @@ import json
 import urllib.parse
 import urllib.request
 
+from rummage import net
 from rummage.sources import Plan
 
 MAIL = "urn:ietf:params:jmap:mail"
@@ -25,7 +26,7 @@ class Client:
 
     def _json(self, request: urllib.request.Request):
         request.add_header("Authorization", self.auth)
-        with urllib.request.urlopen(request, timeout=120) as r:
+        with net.urlopen(request, timeout=120) as r:
             return json.load(r)
 
     def call(self, method: str, args: dict) -> dict:
@@ -43,7 +44,7 @@ class Client:
             url = url.replace("{" + key + "}", urllib.parse.quote(value, safe=""))
         request = urllib.request.Request(url)
         request.add_header("Authorization", self.auth)
-        with urllib.request.urlopen(request, timeout=120) as r:
+        with net.urlopen(request, timeout=120) as r:
             return r.read()
 
 
