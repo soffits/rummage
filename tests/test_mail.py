@@ -64,6 +64,9 @@ class FakeIMAP:
     def login(self, user, password):
         assert password == "pw"
 
+    def list(self):
+        return "OK", [b'(\\HasNoChildren) "/" "INBOX"', b'(\\Junk) "/" "Junk"']
+
     def select(self, folder, readonly=False):
         self.readonly = readonly
         return "OK", [b"3"]
@@ -96,3 +99,88 @@ def test_imap_reads_read_only_and_resumes_by_uid(monkeypatch):
     fake.clear()
     again = src.plan({i.key: i.fingerprint for i in plan.upserts}, plan.state)
     assert list(again.upserts) == [] and again.removed == []
+
+
+def test_imap_reads_all_mail_alone_or_every_folder_but_junk_and_trash(monkeypatch, tmp_path):
+    lists = {
+        "gmail": [b'(\\HasNoChildren) "/" "INBOX"', b'(\\All \\HasNoChildren) "/" "[Gmail]/All Mail"',
+                  b'(\\Junk) "/" "[Gmail]/Spam"', b'(\\Trash) "/" "[Gmail]/Trash"'],
+        "plain": [b'(\\HasNoChildren) "/" "INBOX"', b'(\\HasNoChildren) "/" "Archive"', b'() "/" "Spam"',
+                  b'(\\Trash) "/" "Deleted Messages"', b'(\\Drafts) "/" "Drafts"', b'(\\Noselect) "/" "[Gmail]"'],
+    }
+    src = M.MailSource("mail", {"imap_host": "x", "imap_user": "me"})
+
+    class Lister:
+        def __init__(self, lines):
+            self.lines = lines
+
+        def list(self):
+            return "OK", self.lines
+
+    assert src._folders(Lister(lists["gmail"])) == ["[Gmail]/All Mail"]
+    assert src._folders(Lister(lists["plain"])) == ["INBOX", "Archive"]
+
+    script = tmp_path / "pw.py"
+    script.write_text("print('from-command')", encoding="utf-8")
+    import sys
+    with_command = M.MailSource("mail", {"imap_host": "x", "imap_user": "me",
+                                         "password_command": [sys.executable, str(script)]})
+    assert with_command.password() == "from-command"
+    assert M.MailSource("m", {"maildir": "x", "since": "30d"}).since_date() is not None
+
+
+def test_jmap_account_read_only(tmp_path):
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    raw = {"e1": _message("Flight booked", "AC 123 departs at 9:40").as_bytes(),
+           "e2": _message("Spam offer", "buy now").as_bytes()}
+    seen_methods = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, body, binary=False):
+            data = body if binary else json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            assert self.headers["Authorization"].startswith("Basic ")
+            if self.path == "/session":
+                port = self.server.server_port
+                return self._send({"apiUrl": f"http://127.0.0.1:{port}/api",
+                                   "downloadUrl": f"http://127.0.0.1:{port}/dl/{{accountId}}/{{blobId}}/{{name}}",
+                                   "primaryAccounts": {"urn:ietf:params:jmap:mail": "A1"}})
+            return self._send(raw[self.path.split("/")[3].replace("blob-", "")], binary=True)
+
+        def do_POST(self):
+            call = json.loads(self.rfile.read(int(self.headers["Content-Length"])))["methodCalls"][0]
+            method, args = call[0], call[1]
+            seen_methods.append(method)
+            if method == "Mailbox/get":
+                result = {"list": [{"id": "inbox", "role": "inbox"}, {"id": "junk", "role": "junk"}]}
+            elif method == "Email/query":
+                skipped = args["filter"]["conditions"][0]["inMailboxOtherThan"]
+                result = {"ids": [] if args["position"] else (["e1"] if skipped == ["junk"] else ["e1", "e2"])}
+            else:
+                result = {"list": [{"id": i, "blobId": f"blob-{i}"} for i in args["ids"]]}
+            self._send({"methodResponses": [[method, result, "0"]]})
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        src = M.MailSource("mail", {"jmap_session": f"http://127.0.0.1:{server.server_port}/session",
+                                    "jmap_user": "me@example.com", "password_env": "PW", "since": "2y"})
+        import os
+        os.environ["PW"] = "pw"
+        items = list(src.plan({}, {}).upserts)
+        assert [i.title for i in items] == ["Flight booked"]
+        assert "9:40" in " ".join(s.text for s in src.load(items[0]))
+        assert set(seen_methods) <= {"Mailbox/get", "Email/query", "Email/get"}   # nothing that changes mail
+    finally:
+        server.shutdown()
