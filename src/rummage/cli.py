@@ -9,6 +9,8 @@
     rummage sources                list the installed source types (core and plugins)
     rummage recall [PROMPT]        cited context for an agent's prompt hook, silent when nothing matches
     rummage watch                  keep the index current as files change
+    rummage recent --minutes 30    the latest chat turns and changed files, newest first
+    rummage sources enable codex   switch on a source found on this machine (agent histories are off by default)
     rummage mcp                    a stdio MCP server (search, get, status) for MCP-only agents
     rummage daemon                 keep the query model loaded (searches use it when it runs)
     rummage serve                  answer searches over HTTP (for an index kept on another machine)
@@ -18,19 +20,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import sys
 import time
 
 import numpy as np
+from pathlib import Path
 
 from . import config as C
 from . import daemon as D
 from . import envelope as E
 from . import runtime as R
-from .indexer import Busy, Embedders, index_source, lock
+from . import text as T
+from .indexer import Busy, Embedders, embed_pending, index_source, lock
 from .search import Searcher
-from .sources import available, build
+from .secrets import mask_value
+from .sources import available, build, load_type
 from .store import Ambiguous, NotFound, Store, VersionMismatch
 
 REFERENCE_TEXTS = [
@@ -56,67 +62,87 @@ def cmd_setup(cfg: C.Config, args) -> int:
 
 
 def cmd_index(cfg: C.Config, args) -> int:
-    names = args.source or list(cfg.sources)
+    names = args.source or C.enabled(cfg)
     unknown = [n for n in names if n not in cfg.sources]
     if unknown:
         _eprint("unknown source:", ", ".join(unknown))
         return 2
     log = (lambda *a: None) if args.quiet else _eprint
+    failures: list[str] = []
+    report: dict = {}
+    deadline = time.monotonic() + args.max_minutes * 60 if args.max_minutes else None
+    cfg.log_dir.mkdir(parents=True, exist_ok=True)
+    embedders = Embedders(_runtime(cfg), cfg.threads, cfg.nice, cfg.log_dir / "llama-server.log")
     try:
-        with lock(cfg.data_dir):
-            if args.rebuild and cfg.index_path.exists():
-                for suffix in ("", "-wal", "-shm"):
-                    cfg.index_path.with_name(cfg.index_path.name + suffix).unlink(missing_ok=True)
-            store = Store(cfg.index_path)
-            store.check_version()
-            cfg.log_dir.mkdir(parents=True, exist_ok=True)
-            embedders = Embedders(_runtime(cfg), cfg.threads, cfg.nice, cfg.log_dir / "llama-server.log")
-            failures = []
-            report = {}
-            deadline = time.monotonic() + args.max_minutes * 60 if args.max_minutes else None
+        if not args.embed_only:
             try:
-                for name in names:
-                    source = build(name, cfg.sources[name], cfg.data_dir)
-                    run = store.start_run(name)
+                with lock(cfg.data_dir, "index", wait=args.wait):
+                    if args.rebuild and cfg.index_path.exists():
+                        for suffix in ("", "-wal", "-shm"):
+                            cfg.index_path.with_name(cfg.index_path.name + suffix).unlink(missing_ok=True)
+                    store = Store(cfg.index_path)
                     try:
-                        counts = index_source(store, source, embedders, log, _eprint, limit=args.limit, deadline=deadline,
-                                              reload=args.reload)
-                    except Exception as error:
-                        store.db.rollback()
-                        store.finish_run(run, False, {}, f"{type(error).__name__}: {error}")
-                        failures.append(f"{name}: {type(error).__name__}: {error}")
-                        _eprint(f"{name}: failed: {type(error).__name__}: {error}")
-                        continue
-                    ok = counts["failed"] == 0
-                    store.finish_run(run, ok, counts, None if ok else f"{counts['failed']} items failed")
-                    if not ok:
-                        failures.append(f"{name}: {counts['failed']} items failed")
-                    report[name] = counts
-                    log(f"{name}: +{counts['added']} ~{counts['updated']} -{counts['removed']} "
-                        f"failed {counts['failed']}, {counts['seconds_embedding']:.0f} s embedding"
-                        + ("" if counts["complete"] else " (stopped early; the next run continues)"))
-                if embedders.current and store.meta("reference") is None:
-                    store.set_meta("reference", json.dumps(
-                        embedders.current.texts(REFERENCE_TEXTS).round(5).tolist()))
-                    store.commit()
-            finally:
-                embedders.close()
-                store.close()
-    except Busy as busy:
-        log(f"skipped: {busy}")
-        return 0
+                        store.check_version()
+                        _read_sources(cfg, store, names, embedders, args, deadline, log, report, failures)
+                    finally:
+                        store.close()
+            except Busy as busy:
+                log(f"skipped reading: {busy}")
+                if args.wait:
+                    return E.INDEX_BUSY
+        if not args.no_embed:
+            try:
+                with lock(cfg.data_dir, "embed"):
+                    store = Store(cfg.index_path)
+                    try:
+                        store.check_version()
+                        made = embed_pending(store, embedders, log, names if args.source else None, deadline)
+                        report["vectors"] = made
+                        if embedders.current and store.meta("reference") is None:
+                            store.set_meta("reference", json.dumps(
+                                embedders.current.texts(REFERENCE_TEXTS).round(5).tolist()))
+                            store.commit()
+                    finally:
+                        store.close()
+            except Busy:
+                log("vectors: another run is making them")
     except VersionMismatch as error:
         _eprint(error)
         return 1
     except R.RuntimeMissing as error:
         _eprint(error)
         return 1
+    finally:
+        embedders.close()
     if args.json:
         print(json.dumps({"sources": report, "failures": failures}, ensure_ascii=False))
     if failures:
         _eprint("problems:\n  " + "\n  ".join(failures))
         return 1
     return 0
+
+
+def _read_sources(cfg, store, names, embedders, args, deadline, log, report, failures) -> None:
+    for name in names:
+        source = build(name, cfg.sources[name], cfg.data_dir)
+        run = store.start_run(name)
+        try:
+            counts = index_source(store, source, embedders, log, _eprint, limit=args.limit, deadline=deadline,
+                                  reload=args.reload)
+        except Exception as error:
+            store.db.rollback()
+            store.finish_run(run, False, {}, f"{type(error).__name__}: {error}")
+            failures.append(f"{name}: {type(error).__name__}: {error}")
+            _eprint(f"{name}: failed: {type(error).__name__}: {error}")
+            continue
+        ok = counts["failed"] == 0
+        store.finish_run(run, ok, counts, None if ok else f"{counts['failed']} items failed")
+        if not ok:
+            failures.append(f"{name}: {counts['failed']} items failed")
+        report[name] = counts
+        if counts["added"] or counts["updated"] or counts["removed"] or counts["failed"]:
+            log(f"{name}: +{counts['added']} ~{counts['updated']} -{counts['removed']} failed {counts['failed']}"
+                + ("" if counts["complete"] else " (stopped early; the next run continues)"))
 
 
 def _remote(spec: dict, path: str, params: list[tuple[str, str]]) -> dict:
@@ -141,6 +167,8 @@ def _remote_search(name: str, spec: dict, args) -> dict:
     params += [("path", p) for p in args.path or []] + [("glob", g) for g in args.glob or []]
     if args.words_only:
         params.append(("words_only", "1"))
+    if args.show_secrets:
+        params.append(("show_secrets", "1"))
     return _remote(spec, "/search", params)
 
 
@@ -158,6 +186,7 @@ def cmd_search(cfg: C.Config, args) -> int:
     errors: list[str] = []
     local_sources = [s for s in (args.source or []) if s in cfg.sources] if args.source else None
     index_empty = True
+    pending = 0
     if not cfg.index_path.exists() and not cfg.remotes:
         return _fail(args, "index_missing", E.INDEX_MISSING, "no index yet: run `rummage index`",
                      [{"intent": "build_index", "reason": "Nothing is indexed yet.", "command": ["rummage", "index"]}])
@@ -165,7 +194,7 @@ def cmd_search(cfg: C.Config, args) -> int:
         store = Store(cfg.index_path)
         try:
             store.check_version()
-            index_empty = store.db.execute("SELECT count(*) FROM items").fetchone()[0] == 0
+            index_empty = store.item_count() == 0
             vector = None
             if not args.words_only and not index_empty:
                 vector = None if args.no_daemon else D.query_vector(cfg.data_dir, args.query)
@@ -173,8 +202,9 @@ def cmd_search(cfg: C.Config, args) -> int:
                     with R.embedder(_runtime(cfg), media=False, threads=cfg.threads, nice=0) as e:
                         vector = e.query(args.query)
             searcher = Searcher(store.db, local_sources, args.path, args.glob)
-            hits += [h.as_dict() for h in searcher.search(
+            hits += [_show(cfg, args, h.as_dict()) for h in searcher.search(
                 args.query, vector, limit=args.limit, kinds=set(args.kind) if args.kind else None)]
+            pending = store.pending_count(local_sources)
         except VersionMismatch as error:
             return _fail(args, "index_invalid", E.INDEX_MISSING, str(error),
                          [{"intent": "rebuild_index", "reason": "The index was made with other vectors.",
@@ -201,6 +231,7 @@ def cmd_search(cfg: C.Config, args) -> int:
     hits.sort(key=lambda h: -h["score"])
     hits = E.truncate(hits[: args.limit], args.truncate)
     doc = E.build(args, hits, errors, time.monotonic() - started, index_empty)
+    doc["summary"]["pending_vectors"] = pending
     for error in errors:
         _eprint("warning:", error)
     if args.files:
@@ -233,43 +264,167 @@ def cmd_search(cfg: C.Config, args) -> int:
     return E.OK
 
 
+def _detected() -> dict[str, dict]:
+    """Source types that read another program's data, with the settings to use, when that data is on this machine."""
+    out = {}
+    for kind in sorted(available()):
+        try:
+            cls = load_type(kind)
+        except Exception:
+            continue
+        spec = cls.detect()
+        if spec:
+            out[kind] = spec
+    return out
+
+
 def cmd_sources(cfg: C.Config, args) -> int:
+    if args.action in ("enable", "disable"):
+        return _switch_source(cfg, args)
     types = available()
+    detected = _detected()
+    on = set(C.enabled(cfg))
+    configured = {n: {"type": s.get("type"), "enabled": n in on} for n, s in cfg.sources.items()}
+    found = {k: {"type": k, "enabled": False, "detected": True} for k in detected if k not in cfg.sources}
     if args.json:
-        print(json.dumps({"types": types, "configured": {n: s.get("type") for n, s in cfg.sources.items()}}))
+        print(json.dumps({"types": types, "configured": configured, "detected": found}))
         return 0
-    for name, target in sorted(types.items()):
-        print(f"{name:20} {target}")
+    print("configured:")
+    for name, entry in configured.items():
+        print(f"  {name:20} {entry['type']:18} {'on' if entry['enabled'] else 'off'}")
+    if found:
+        print("found on this machine, off until enabled (`rummage sources enable <name>`):")
+        for name in found:
+            print(f"  {name}")
+    print("installed types: " + ", ".join(sorted(types)))
     return 0
+
+
+def _switch_source(cfg: C.Config, args) -> int:
+    name = args.name
+    on = args.action == "enable"
+    spec = cfg.sources.get(name)
+    if spec is None:
+        spec = _detected().get(name)
+        if spec is None or not on:
+            _eprint(f"no source {name!r}: configured are {', '.join(cfg.sources) or 'none'}; "
+                    f"found on this machine: {', '.join(_detected()) or 'none'}")
+            return 2
+    C.set_enabled(cfg.path, name, spec, on)
+    if on:
+        print(f"{name} is on: `rummage index -s {name}` reads it now; `rummage watch` keeps it current")
+        return 0
+    print(f"{name} is off")
+    if not cfg.index_path.exists():
+        return 0
+    store = Store(cfg.index_path)
+    try:
+        count = store.item_count([name])
+        drop = args.drop
+        if count and drop is None and sys.stdin.isatty():
+            drop = input(f"drop its {count} items from the index? [y/N] ").strip().lower() in ("y", "yes")
+        if count and drop:
+            store.drop_source(name)
+            print(f"dropped {count} items")
+        elif count:
+            print(f"its {count} items stay in the index (`rummage sources disable {name} --drop` removes them)")
+    finally:
+        store.close()
+    return 0
+
+
+def _show(cfg: C.Config, args, value: dict, source: str | None = None):
+    """`value` with credentials masked, unless `--show-secrets` or the source switched masking off."""
+    if getattr(args, "show_secrets", False) or not C.masks_secrets(cfg, source or value.get("source", "")):
+        return value
+    return mask_value(value)
 
 
 def cmd_get(cfg: C.Config, args) -> int:
     store = Store(cfg.index_path)
     try:
-        doc = store.item(store.find(args.ref), args.loc)
+        row = store.find(args.ref)
+        doc = store.item(row, args.loc)
+        if args.around is not None:
+            doc["around"] = _around(cfg, store, row, doc, args.around)
     except Ambiguous as error:
         _eprint(f"{error}: " + ", ".join(error.candidates))
+        store.close()
         return 1
     except NotFound as error:
         doc = None
         for spec in cfg.remotes.values():
             try:
-                doc = _remote(spec, "/get", [("ref", args.ref)] + ([("loc", args.loc)] if args.loc else []))
+                doc = _remote(spec, "/get", [("ref", args.ref)] + ([("loc", args.loc)] if args.loc else [])
+                              + ([("show_secrets", "1")] if args.show_secrets else []))
                 break
             except Exception:
                 continue
         if doc is None:
             _eprint(error)
+            store.close()
             return 1
-    finally:
-        store.close()
+    store.close()
+    doc = _show(cfg, args, doc)
     if args.head:
         doc["text"] = "\n".join(doc["text"].splitlines()[: args.head])
     if args.json:
         print(json.dumps(doc, ensure_ascii=False))
+        return 0
+    print(f"{doc['id']}  [{doc['source']}] {doc['title']}  ({doc['ref']})\n")
+    around = doc.get("around")
+    if around and around.get("turns"):
+        for turn in around["turns"]:
+            mark = ">>" if turn["id"] == doc["id"] else "  "
+            print(f"{mark} {turn['id']} {turn['title']}\n{turn['text']}\n")
+    elif around and around.get("text"):
+        print(f"lines {around['lines']} of {around['path']}:\n{around['text']}")
     else:
-        print(f"{doc['id']}  [{doc['source']}] {doc['title']}  ({doc['ref']})\n")
         print(doc["text"])
+    return 0
+
+
+def _around(cfg: C.Config, store: Store, row: int, doc: dict, n: int) -> dict:
+    """For a chat turn: the turns before and after it in its session. For a passage of a file in a folder source:
+    the file's lines around it."""
+    if doc["info"].get("session") is not None:
+        return {"turns": [{k: t[k] for k in ("id", "title", "ref", "info", "text")}
+                          for t in store.neighbours(row, n)]}
+    spec = cfg.sources.get(doc["source"]) or {}
+    lines = doc.get("lines")
+    if not spec.get("root") or not lines:
+        return {}
+    path = Path(os.path.expanduser(spec["root"])) / doc["ref"]
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    first, last = (int(x) for x in lines.split("-"))
+    lo, hi = max(1, first - n), min(len(content), last + n)
+    return {"path": str(path), "lines": f"{lo}-{hi}", "text": "\n".join(content[lo - 1:hi])}
+
+
+def cmd_recent(cfg: C.Config, args) -> int:
+    if not cfg.index_path.exists():
+        _eprint("no index yet: run `rummage index`")
+        return E.INDEX_MISSING
+    store = Store(cfg.index_path)
+    try:
+        items = store.recent(time.time() - args.minutes * 60, args.source, args.exclude_session, args.limit)
+    finally:
+        store.close()
+    items = [_show(cfg, args, {k: v for k, v in i.items() if k != "row"}) for i in items]
+    for item in items:
+        item["text"] = T.snippet_head(item["text"], args.chars)
+    if args.json:
+        print(json.dumps({"schema": "rummage.recent.v1", "minutes": args.minutes, "results": items},
+                         ensure_ascii=False))
+        return 0
+    for item in items:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(item["mtime"] or 0))
+        session = item["info"].get("session")
+        print(f"{item['id']} · {item['source']} · {when}" + (f" · session {session}" if session else "")
+              + f" · {item['title']}\n  {item['text']}")
     return 0
 
 
@@ -400,6 +555,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--limit", type=int, help="at most this many new or changed items per source")
     p.add_argument("--max-minutes", type=float,
                    help="stop starting new items after this long; the next run goes on where this one stopped")
+    p.add_argument("--no-embed", action="store_true",
+                   help="only read sources into keyword search; vectors wait for a later run")
+    p.add_argument("--embed-only", action="store_true", help="only make the vectors still missing")
+    p.add_argument("--wait", type=float, default=0,
+                   help="seconds to wait for another run that is reading sources, instead of skipping")
     p.add_argument("-q", "--quiet", action="store_true", help="print only problems")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_index)
@@ -418,6 +578,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="drop the weak tail: at the score curve's elbow (knee) or below half the top score (strong)")
     p.add_argument("--files", action="store_true", help="only the refs of matching items, one per line")
     p.add_argument("--budget-tokens", type=int, help="with --json: trim the output to about this many tokens")
+    p.add_argument("--show-secrets", action="store_true", help="don't mask credentials in the output")
     p.add_argument("--json", action="store_true", help=f"one {E.SCHEMA} object")
     p.set_defaults(func=cmd_search)
 
@@ -425,12 +586,30 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("ref", help="#id (a prefix of 4+ characters works), a result's ref, or source:key")
     p.add_argument("--loc", help="only the passage at this location (a result's loc)")
     p.add_argument("--head", type=int, help="only the first N lines")
+    p.add_argument("--around", type=int, metavar="N",
+                   help="with its context: N chat turns before and after, or N lines around the passage of a file")
+    p.add_argument("--show-secrets", action="store_true", help="don't mask credentials in the output")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_get)
 
-    p = sub.add_parser("sources", help="list the installed source types")
+    p = sub.add_parser("sources", help="list sources (configured, found on this machine), or switch one on or off")
+    p.add_argument("action", nargs="?", choices=["list", "enable", "disable"], default="list")
+    p.add_argument("name", nargs="?", help="the source to switch (a configured name, or a type found here)")
+    drop = p.add_mutually_exclusive_group()
+    drop.add_argument("--drop", action="store_true", default=None, help="with disable: drop its items from the index")
+    drop.add_argument("--keep", dest="drop", action="store_false", help="with disable: keep its items")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_sources)
+
+    p = sub.add_parser("recent", help="the latest items across sources, newest first (chat turns, changed files)")
+    p.add_argument("--minutes", type=float, default=60)
+    p.add_argument("-s", "--source", action="append", help="only this source (repeatable)")
+    p.add_argument("--exclude-session", action="append", help="leave out this chat session (repeatable)")
+    p.add_argument("-n", "--limit", type=int, default=20)
+    p.add_argument("--chars", type=int, default=240, help="how much of each item's text to show")
+    p.add_argument("--show-secrets", action="store_true", help="don't mask credentials in the output")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_recent)
 
     p = sub.add_parser("recall", help="a few cited passages for a prompt, for agents' prompt hooks (quiet otherwise)")
     p.add_argument("query", nargs="?", help="the prompt (default: read stdin)")
@@ -443,6 +622,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--min-z", type=float, default=3.0, help="how far a passage must stand out by meaning")
     p.add_argument("--min-words", type=float, default=0.67, help="share of the prompt's words an item must contain")
     p.add_argument("--max-query-chars", type=int, default=2000)
+    p.add_argument("--session", help="the current chat session's id, left out of the recent part "
+                                    "(with --hook: the hook's session_id)")
+    p.add_argument("--recent-minutes", type=float, default=45,
+                   help="how far back to look in other sessions (0: not at all)")
+    p.add_argument("--recent-items", type=int, default=2)
+    p.add_argument("--show-secrets", action="store_true", help="don't mask credentials in the output")
     p.add_argument("--allow-model-load", action="store_true",
                    help="load the model when no daemon runs (~1.5 s); otherwise fall back to exact words")
     p.add_argument("--json", action="store_true")

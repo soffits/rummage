@@ -58,14 +58,27 @@ class DshSessionSource(Source):
         self.name = name
         home = Path(os.path.expanduser(spec.get("dsh_home") or os.environ.get("DSH_HOME") or "~/.dsh"))
         self.root = Path(os.path.expanduser(spec.get("sessions", str(home / "sessions"))))
-        self.projects = list(spec["projects"])
+        self.projects = list(spec.get("projects") or [])  # empty: every project
         self.people = people_map(spec.get("people"))
         self.assistant = spec.get("assistant_name", "assistant")
         self.skip_prefixes = tuple(spec.get("skip_prefixes", ["[Sent by the agent in dsh session"]))
 
+    def _project_dirs(self) -> list[Path]:
+        if self.projects:
+            return [self.root / p for p in self.projects]
+        return sorted(p for p in self.root.iterdir() if p.is_dir()) if self.root.is_dir() else []
+
     def _logs(self):
-        for project in self.projects:
-            yield from sorted((self.root / project).glob(f"*/{LOG_NAME}"))
+        for project in self._project_dirs():
+            yield from sorted(project.glob(f"*/{LOG_NAME}"))
+
+    def watch_roots(self) -> list[Path]:
+        return self._project_dirs()
+
+    @classmethod
+    def detect(cls) -> dict | None:
+        home = Path(os.environ.get("DSH_HOME") or Path.home() / ".dsh")
+        return {"type": "dsh-sessions"} if (home / "sessions").is_dir() else None
 
     def _speaker(self, text: str, rpc_id: str, oidc: str | None, principal: dict | None = None) -> str:
         users = self.people.get("telegram_users", {})

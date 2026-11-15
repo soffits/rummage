@@ -25,6 +25,11 @@ seafile = "rummage.plugins.seafile:SeafileSource"
 dsh-sessions = "rummage.plugins.dsh_sessions:DshSessionSource"
 hermes = "rummage.plugins.hermes:HermesSource"
 telegram-stickers = "rummage.plugins.telegram_stickers:StickerSource"
+claude-code = "rummage.plugins.claude_code:ClaudeCodeSource"
+codex = "rummage.plugins.codex:CodexSource"
+gemini-cli = "rummage.plugins.gemini_cli:GeminiCliSource"
+opencode = "rummage.plugins.opencode:OpenCodeSource"
+jsonl-chat = "rummage.plugins.jsonl_chat:JsonlChatSource"
 
 [project.scripts]
 rummage = "rummage.cli:main"

@@ -24,16 +24,33 @@ DEFAULT_INJECTED = [
 ]
 
 
+def hermes_home() -> Path:
+    """Hermes Agent's home: `$HERMES_HOME`, else `%LOCALAPPDATA%\\hermes` on Windows and `~/.hermes` elsewhere."""
+    if os.environ.get("HERMES_HOME"):
+        return Path(os.environ["HERMES_HOME"])
+    if os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+        return Path(os.environ["LOCALAPPDATA"]) / "hermes"
+    return Path.home() / ".hermes"
+
+
 class HermesSource(Source):
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
-        self.db_path = os.path.expanduser(spec["db"])
+        self.db_path = os.path.expanduser(spec.get("db") or str(hermes_home() / "state.db"))
         self.frontends = list(spec.get("frontends", DEFAULT_FRONTENDS))
         self.exclude = set(spec.get("exclude_sessions", []))
         self.injected = tuple(spec.get("injected_prefixes", DEFAULT_INJECTED))
         self.people = people_map(spec.get("people"))
         self.assistant = spec.get("assistant_name", "assistant")
         self.unknown = spec.get("unknown_speaker", "unknown")
+
+    def watch_roots(self) -> list[Path]:
+        return [Path(self.db_path).parent]
+
+    @classmethod
+    def detect(cls) -> dict | None:
+        db = hermes_home() / "state.db"
+        return {"type": "hermes", "db": str(db)} if db.exists() else None
 
     def _db(self) -> sqlite3.Connection:
         return sqlite3.connect(f"file:{self.db_path}?mode=ro&immutable=1", uri=True)

@@ -29,7 +29,10 @@ words. Sources are plugins: the core reads folders, plugins add services. It is 
 One SQLite file (`<data_dir>/index.db`, WAL mode): `items` (one note, sticker, file, chat window), `segments`
 (passages, a picture, a name line; each with an optional vector), `fts` (contentless FTS5 over segment text, the
 item title weighted 3×), `source_state` (each source's cursor), `runs` (the last 50 runs per source), `meta`
-(vector version, reference vectors). The index is a cache: deleting it and running `rummage index` rebuilds it.
+(vector version, reference vectors). A segment whose vector isn't made yet keeps the model's input in `pending`;
+keyword search already has it. The index is a cache: deleting it and running `rummage index` rebuilds it. It holds
+text as written, credentials included, so it is created mode 600; masking happens when results are printed
+(`secrets.py`), so a user who asks can still see a value.
 
 ## Sources
 
@@ -44,17 +47,43 @@ name and the items' keys and fingerprints are part of the index format.
 | `seafile` | plugin | a file in a Seafile library, read through the web API with a read-only account | library head commit, then each file's object id |
 | `dsh-sessions` | plugin | a person's message plus the reply, in a DeepSeek Harness session log | per-log mtime+size, then content hash |
 | `hermes` | plugin | the same, in a Hermes Agent `state.db` | message id cursor |
+| `claude-code`, `codex`, `jsonl-chat` | plugin | the same, in append-only JSONL session logs | per-file size+mtime; reading resumes at the last turn's first line |
+| `gemini-cli` | plugin | the same, in Gemini CLI's JSONL logs, replayed with their patch and rewind records | per-file size+mtime, whole file |
+| `opencode` | plugin | the same, in OpenCode 2's `opencode.db` | message `time_updated` cursor |
 | `telegram-stickers` | plugin | a sticker in dsh-telegram-bot's library: saved meaning as text, picture as an image vector | hash of meaning, emoji, file id |
 
 Installers, disk images and media files other than pictures are indexed by name. Each kind has a size limit.
 
+Sources that read another program's data answer `detect()` with the settings to use when that data is on the
+machine; `rummage sources` lists them, and they are read only once a config section switches them on. Each source
+also names the folders whose changes matter (`watch_roots`) for `rummage watch`.
+
 ## Runs
 
-`rummage index` takes a lock (a second run exits 0 at once), starts `llama-server` on 127.0.0.1 on a free port
-only when something needs embedding (with the image encoders only for sources that have pictures), commits item
-by item, and stops the server at the end. A source's cursor is saved only when every planned item went in; a
-failed item is retried on the next run. Exit status is 1 when any source failed or any item failed, with one line
-per problem on stderr, so a scheduler that reports failures shows them.
+`rummage index` works in two speeds. Reading: for each source, plan, drop what's gone, and put every new or changed
+item in, committed one at a time, with vectors reused where the model's input is unchanged and the rest left
+pending; keyword search finds those items at once. Embedding: make the pending vectors, oldest first, in small
+committed batches, until none are left (including ones that arrive meanwhile). `llama-server` starts on 127.0.0.1
+on a free port only when something needs embedding (with the image encoders only for sources that have pictures,
+which are embedded while reading since their bytes aren't kept) and stops at the end. A source's cursor is saved
+only when every planned item went in; a failed item is retried on the next run. Exit status is 1 when any source
+failed or any item failed, with one line per problem on stderr, so a scheduler that reports failures shows them.
+
+### Concurrency
+
+- SQLite in WAL mode: any number of readers (searches, `serve`, `mcp`) alongside one writer at a time; writers
+  wait up to 30 s for each other's short transactions.
+- Two OS file locks in the data directory, released if a process dies: `index.lock` for reading sources and
+  `embed.lock` for making vectors. A run takes them one after the other, never both, so a reader of new items
+  never waits behind a long embedding run, and every write transaction is one item or one batch of vectors.
+- A run that finds `index.lock` held skips reading (exit 0, for schedulers), or waits `--wait` seconds and exits
+  4 if it still can't get in. A run that finds `embed.lock` held skips embedding: the holder keeps going until no
+  vector is pending, the new ones included.
+- A vector is written only if its segment still holds the same pending text, so a passage replaced while its
+  vector was being made is left for the next round instead of getting a stale vector.
+- `rummage watch` reads each batch of changes with `--no-embed --wait`, retries a batch that still found the
+  index busy, and keeps one `--embed-only` process running while vectors are pending; the scheduled hourly run is
+  the backstop for anything a watcher missed.
 
 `rummage search` loads the text model for the query (~1 s), or nothing with `--words-only`.
 
@@ -67,7 +96,8 @@ per problem on stderr, so a scheduler that reports failures shows them.
   index made with another version refuses to be used until `rummage index --rebuild`. `rummage doctor` re-embeds
   three reference texts stored at the first run and compares (cosine ≥ 0.999), so a llama.cpp bump that changes
   vectors is caught before results quietly degrade.
-- **Watching:** schedule `rummage index -q` (hourly is plenty) and `rummage doctor` (daily); both exit 1 with a
+- **Watching:** run `rummage watch` for changes within seconds, and schedule `rummage index -q` (hourly is plenty)
+  and `rummage doctor` (daily); both exit 1 with a
   reason when something's wrong. `rummage status --json` shows counts, the last run per source, and failures.
 - **Removal:** uninstall the tool, delete `data_dir` and the config file. Nothing is written anywhere else.
 - **Server deployment** (file libraries indexed next to the file server): a container with the same CLI, its

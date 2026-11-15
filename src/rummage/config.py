@@ -11,6 +11,10 @@
     [sources.notes]
     type = "files"
     root = "~/Documents"
+    # enabled = false                         # keep the settings but don't index it
+
+Sources of another program's history (agent sessions) are never indexed unless a section for them is present and
+not disabled; `rummage sources enable <name>` writes one.
 """
 
 from __future__ import annotations
@@ -72,3 +76,49 @@ def load(path: Path | None = None) -> Config:
         sources=dict(data.get("sources", {})),
         remotes=dict(data.get("remotes", {})),
     )
+
+
+def masks_secrets(cfg: Config, source: str) -> bool:
+    """Whether output from `source` hides credentials (`mask_secrets`, on unless switched off)."""
+    return (cfg.sources.get(source) or {}).get("mask_secrets", True) is not False
+
+
+def enabled(cfg: Config) -> list[str]:
+    """Configured sources that aren't switched off."""
+    return [name for name, spec in cfg.sources.items() if spec.get("enabled", True) is not False]
+
+
+def set_enabled(path: Path, name: str, spec: dict, on: bool) -> None:
+    """Switches source `name` on or off in the config file, keeping everything else as written. A missing section
+    is appended with `spec`."""
+    import re
+
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    header = re.compile(rf"^\[sources\.(?:{re.escape(name)}|\"{re.escape(name)}\")\]\s*$", re.M)
+    found = header.search(text)
+    line = f"enabled = {'true' if on else 'false'}"
+    if not found:
+        body = "".join(f"{k} = {_toml(v)}\n" for k, v in spec.items())
+        text = text.rstrip("\n") + ("\n\n" if text.strip() else "") + f"[sources.{name}]\n{body}{line}\n"
+    else:
+        nxt = re.compile(r"^\[", re.M).search(text, found.end())
+        end = nxt.start() if nxt else len(text)
+        section = text[found.end():end]
+        flag = re.compile(r"^enabled\s*=.*$", re.M)
+        if flag.search(section):
+            section = flag.sub(line, section, count=1)
+        else:
+            section = "\n" + line + section if not section.startswith("\n") else "\n" + line + section
+        text = text[:found.end()] + section + text[end:]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _toml(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml(v) for v in value) + "]"
+    return "'" + str(value) + "'" if "'" not in str(value) else '"' + str(value).replace('"', '\\"') + '"'

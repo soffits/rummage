@@ -1,7 +1,11 @@
-"""`rummage watch`: keep the index current as files change. Folder sources are watched for file events (with the
-`watch` extra; otherwise their folders are checked every few seconds); other sources are re-planned on an
-interval. Each batch of changes runs `rummage index` for the sources it touched, so locks, run records and
-failure reporting are the same as a scheduled run.
+"""`rummage watch`: keep the index current as sources change.
+
+Each source names the folders whose changes matter (`watch_roots`: a folder source's root, an agent's session
+folder, a database's folder); those are watched for file events (with the `watch` extra, else checked every few
+seconds), and other sources are re-planned on an interval. A batch of changes is read into keyword search at once
+(`rummage index --no-embed`, which waits for a run already reading and is retried if it still can't get in), so it
+is searchable by its words within seconds; vectors are made by one background `rummage index --embed-only` that
+runs while any are missing.
 """
 
 from __future__ import annotations
@@ -13,26 +17,76 @@ import time
 from pathlib import Path
 
 from . import config as C
+from . import envelope as E
 from .sources import build
-from .sources.folder import FolderSource
+from .store import Store
+
+BUSY_RETRY_SECONDS = 15
 
 
-def _index(cfg: C.Config, names: list[str]) -> None:
-    command = [sys.executable, "-m", "rummage", "--config", str(cfg.path), "index", "-q"]
-    for name in names:
-        command += ["-s", name]
-    run = subprocess.run(command, capture_output=True, text=True)
-    stamp = time.strftime("%H:%M:%S")
-    if run.returncode:
-        print(f"{stamp} index {', '.join(names)} failed:\n{run.stderr.strip()}", file=sys.stderr, flush=True)
-    else:
-        print(f"{stamp} indexed {', '.join(names)}", file=sys.stderr, flush=True)
+def _command(cfg: C.Config, *extra: str) -> list[str]:
+    return [sys.executable, "-m", "rummage", "--config", str(cfg.path), "index", "-q", *extra]
 
 
-def _snapshot(roots: dict[str, Path]) -> dict[str, tuple]:
-    """A cheap fingerprint per folder: the newest mtime and the number of entries under it."""
+def _say(text: str) -> None:
+    print(f"{time.strftime('%H:%M:%S')} {text}", file=sys.stderr, flush=True)
+
+
+class Runner:
+    """Reads batches into keyword search and keeps one vector maker going while vectors are missing."""
+
+    def __init__(self, cfg: C.Config):
+        self.cfg = cfg
+        self.embedding: subprocess.Popen | None = None
+        self.retry: set[str] = set()
+        self.retry_at = 0.0
+
+    def read(self, names: set[str]) -> None:
+        names = sorted(names | self.retry)
+        if not names:
+            return
+        command = _command(self.cfg, "--no-embed", "--wait", "30")
+        for name in names:
+            command += ["-s", name]
+        run = subprocess.run(command, capture_output=True, text=True)
+        if run.returncode == E.INDEX_BUSY:
+            self.retry, self.retry_at = set(names), time.monotonic() + BUSY_RETRY_SECONDS
+            _say(f"another run is reading; {', '.join(names)} again in {BUSY_RETRY_SECONDS} s")
+            return
+        self.retry = set()
+        if run.returncode:
+            _say(f"reading {', '.join(names)} failed:\n{run.stderr.strip()}")
+        else:
+            _say(f"read {', '.join(names)}")
+        self.embed()
+
+    def embed(self) -> None:
+        if self.embedding is not None and self.embedding.poll() is None:
+            return
+        self.embedding = None
+        try:
+            store = Store(self.cfg.index_path)
+            try:
+                waiting = store.pending_count()
+            finally:
+                store.close()
+        except Exception:
+            return
+        if waiting:
+            self.embedding = subprocess.Popen(_command(self.cfg, "--embed-only"), stdout=subprocess.DEVNULL)
+
+    def tick(self) -> None:
+        """Between events: retry a batch that found the index busy, restart the vector maker if more arrived."""
+        if self.retry and time.monotonic() >= self.retry_at:
+            self.read(set())
+        if self.embedding is not None and self.embedding.poll() is not None:
+            self.embed()
+
+
+def _snapshot(roots: dict[Path, str]) -> dict[Path, tuple]:
+    """A cheap fingerprint per watched folder: the newest mtime and the number of entries under it."""
     out = {}
-    for name, root in roots.items():
+    for root in roots:
         newest, count = 0.0, 0
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if not d.startswith(".")]
@@ -42,47 +96,52 @@ def _snapshot(roots: dict[str, Path]) -> dict[str, tuple]:
                 except OSError:
                     continue
                 count += 1
-        out[name] = (newest, count)
+        out[root] = (newest, count)
     return out
 
 
 def run(cfg: C.Config, names: list[str], poll_minutes: float, settle_seconds: float) -> int:
-    roots, others = {}, []
+    roots: dict[Path, str] = {}
+    others = []
     for name in names:
-        source = build(name, cfg.sources[name], cfg.data_dir)
-        if isinstance(source, FolderSource):
-            roots[name] = source.root
-        else:
+        found = [r for r in build(name, cfg.sources[name], cfg.data_dir).watch_roots() if r.is_dir()]
+        for root in found:
+            roots[root] = name
+        if not found:
             others.append(name)
-    print(f"watching {', '.join(names)} (folders: {len(roots)}, re-planned every {poll_minutes:g} min: "
-          f"{len(others)})", file=sys.stderr, flush=True)
-    _index(cfg, names)
+    _say(f"watching {', '.join(names)} ({len(roots)} folders; re-planned every {poll_minutes:g} min: "
+         f"{', '.join(others) or 'none'})")
+    runner = Runner(cfg)
+    runner.read(set(names))
     next_poll = time.monotonic() + poll_minutes * 60
+
+    def batch(touched: set[str]) -> None:
+        nonlocal next_poll
+        due = time.monotonic() >= next_poll
+        if due:
+            next_poll = time.monotonic() + poll_minutes * 60
+        runner.read(touched | (set(others) if due else set()))
+        runner.tick()
+
+    def owner(path: str) -> str | None:
+        best = None
+        for root, name in roots.items():
+            if path.startswith(str(root)) and (best is None or len(str(root)) > len(str(best[0]))):
+                best = (root, name)
+        return best[1] if best else None
+
     try:
         from watchfiles import watch
     except ImportError:
         watch = None
     if watch and roots:
-        by_path = {str(root): name for name, root in roots.items()}
-        for changes in watch(*roots.values(), debounce=int(settle_seconds * 1000), yield_on_timeout=True,
-                             rust_timeout=int(min(poll_minutes * 60, 60) * 1000)):
-            touched = {name for _, changed in changes for root, name in by_path.items() if changed.startswith(root)}
-            due = time.monotonic() >= next_poll
-            batch = sorted(touched | (set(others) if due else set()))
-            if due:
-                next_poll = time.monotonic() + poll_minutes * 60
-            if batch:
-                _index(cfg, batch)
+        for changes in watch(*roots, debounce=int(settle_seconds * 1000), yield_on_timeout=True,
+                             rust_timeout=5000):
+            batch({n for _, changed in changes if (n := owner(changed))})
         return 0
     last = _snapshot(roots)
     while True:
         time.sleep(settle_seconds)
         now = _snapshot(roots)
-        touched = {name for name in roots if now[name] != last[name]}
+        batch({name for root, name in roots.items() if now[root] != last[root]})
         last = now
-        due = time.monotonic() >= next_poll
-        if due:
-            next_poll = time.monotonic() + poll_minutes * 60
-        batch = sorted(touched | (set(others) if due else set()))
-        if batch:
-            _index(cfg, batch)

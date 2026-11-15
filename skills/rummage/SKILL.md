@@ -35,5 +35,10 @@ rummage get '#3f2a9c01be' --loc 1800  # only the matched passage (a result's `lo
 rummage get 'notes/lease.md' --head 40
 ```
 
+For a chat result, `rummage get '#id' --around 3` shows the turns before and after it; for a file passage it shows
+the lines around it. `rummage recent --minutes 30 --json` lists what was said or changed lately, newest first.
+
+Credentials in results print as `[secret]`. Add `--show-secrets` only when the user asks for a value.
+
 Quote the file and lines you relied on. A miss doesn't prove the thing isn't there: try other words, exact
 names, or the folder directly before saying so.

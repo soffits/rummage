@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -116,7 +117,10 @@ class Store:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
+        new = not path.exists()
         self.db = sqlite3.connect(path, timeout=30)
+        if new and os.name == "posix":
+            os.chmod(path, 0o600)  # the index holds text as written, credentials included
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA synchronous=NORMAL")
@@ -126,7 +130,11 @@ class Store:
             self.db.execute("ALTER TABLE segments ADD COLUMN embed_hash TEXT")
         if "lines" not in columns:
             self.db.execute("ALTER TABLE segments ADD COLUMN lines TEXT")
+        if "pending" not in columns:
+            self.db.execute("ALTER TABLE segments ADD COLUMN pending TEXT")
         self.db.execute("CREATE INDEX IF NOT EXISTS segments_embed_hash ON segments(embed_hash)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS segments_pending ON segments(id) WHERE pending IS NOT NULL")
+        self.db.execute("CREATE INDEX IF NOT EXISTS items_mtime ON items(mtime)")
         version = self.meta("vector_version")
         if version is None:
             self.set_meta("vector_version", VECTOR_VERSION)
@@ -164,6 +172,21 @@ class Store:
 
     # items
 
+    def item_count(self, sources: list[str] | None = None) -> int:
+        if sources:
+            return self.db.execute(f"SELECT count(*) FROM items WHERE source IN ({','.join('?' * len(sources))})",
+                                   list(sources)).fetchone()[0]
+        return self.db.execute("SELECT count(*) FROM items").fetchone()[0]
+
+    def drop_source(self, source: str) -> int:
+        """Removes every item of `source` and where its reading had got to."""
+        keys = [k for (k,) in self.db.execute("SELECT key FROM items WHERE source = ?", (source,))]
+        for key in keys:
+            self.remove(source, key)
+        self.db.execute("DELETE FROM source_state WHERE source = ?", (source,))
+        self.db.commit()
+        return len(keys)
+
     def fingerprints(self, source: str) -> dict[str, str | None]:
         return dict(self.db.execute("SELECT key, fingerprint FROM items WHERE source = ?", (source,)))
 
@@ -197,12 +220,42 @@ class Store:
             blob = None
             if seg.vector is not None:
                 blob = np.asarray(seg.vector[:DIM], np.float16).tobytes()
+            pending = seg.embed_text if blob is None and seg.embed_text and not seg.image else None
             seg_id = self.db.execute(
-                "INSERT INTO segments(item, kind, loc, text, vector, embed_hash, lines) VALUES(?, ?, ?, ?, ?, ?, ?)",
-                (item_id, seg.kind, seg.loc, seg.text, blob, seg.embed_hash if blob else None, seg.lines)).lastrowid
+                "INSERT INTO segments(item, kind, loc, text, vector, embed_hash, lines, pending) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+                (item_id, seg.kind, seg.loc, seg.text, blob, seg.embed_hash if blob else None, seg.lines,
+                 pending)).lastrowid
             if seg.text or seg.kind == "name":
                 self.db.execute("INSERT INTO fts(rowid, title, body) VALUES(?, ?, ?)",
                                 (seg_id, title, T.for_index(seg.text or "")))
+
+    # vectors that wait for the model: keyword search has the segment already
+
+    def pending(self, sources: list[str] | None = None, limit: int = 64) -> list[tuple[int, str]]:
+        """Segments whose text is in keyword search but whose vector isn't made yet, oldest first."""
+        where, args = "", []
+        if sources:
+            where = f" AND i.source IN ({','.join('?' * len(sources))})"
+            args = list(sources)
+        return self.db.execute(
+            f"SELECT s.id, s.pending FROM segments s JOIN items i ON i.id = s.item WHERE s.pending IS NOT NULL{where} "
+            f"ORDER BY s.id LIMIT ?", [*args, limit]).fetchall()
+
+    def pending_count(self, sources: list[str] | None = None) -> int:
+        where, args = "", []
+        if sources:
+            where = f" AND i.source IN ({','.join('?' * len(sources))})"
+            args = list(sources)
+        return self.db.execute(f"SELECT count(*) FROM segments s JOIN items i ON i.id = s.item "
+                               f"WHERE s.pending IS NOT NULL{where}", args).fetchone()[0]
+
+    def set_vector(self, segment: int, vector, embed_text: str) -> None:
+        """Fills a pending segment's vector, unless the segment was replaced meanwhile (then nothing happens)."""
+        blob = np.asarray(vector[:DIM], np.float16).tobytes()
+        embed_hash = "t:" + hashlib.sha256(embed_text.encode("utf-8")).hexdigest()
+        self.db.execute("UPDATE segments SET vector = ?, embed_hash = ?, pending = NULL WHERE id = ? AND pending = ?",
+                        (blob, embed_hash, segment, embed_text))
 
     def known_vectors(self, hashes: list[str]) -> dict[str, np.ndarray]:
         """Stored vectors for these embedding inputs, from any item: unchanged passages of an edited note, or a file
@@ -279,11 +332,52 @@ class Store:
                 "ref": ref, "mtime": mtime, "info": json.loads(info or "{}"), "loc": loc,
                 "lines": segments[0][3] if loc is not None and segments else None, "text": text}
 
+    def recent(self, since: float, sources: list[str] | None = None, exclude_sessions: list[str] | None = None,
+               limit: int = 50) -> list[dict]:
+        """Items from `since` (epoch seconds) on, newest first: chat turns and changed files alike."""
+        where, args = "", [since]
+        if sources:
+            where += f" AND source IN ({','.join('?' * len(sources))})"
+            args += list(sources)
+        out = []
+        for row, source, key, kind, title, ref, mtime, info in self.db.execute(
+                f"SELECT id, source, key, kind, title, ref, mtime, info FROM items WHERE mtime >= ?{where} "
+                f"ORDER BY mtime DESC LIMIT ?", [*args, limit * 4]):
+            info = json.loads(info or "{}")
+            if exclude_sessions and info.get("session") in exclude_sessions:
+                continue
+            text = self.db.execute("SELECT text FROM segments WHERE item = ? AND kind = 'text' ORDER BY id LIMIT 1",
+                                   (row,)).fetchone()
+            pending = self.db.execute("SELECT count(*) FROM segments WHERE item = ? AND pending IS NOT NULL",
+                                      (row,)).fetchone()[0]
+            out.append({"id": "#" + item_id(source, key), "row": row, "source": source, "kind": kind, "title": title,
+                        "ref": ref, "mtime": mtime, "info": info, "text": text[0] if text else "",
+                        "pending_vectors": pending})
+            if len(out) >= limit:
+                break
+        return out
+
+    def neighbours(self, row: int, around: int) -> list[dict]:
+        """The chat turns around item `row` in its session, in time order (the item itself included)."""
+        source, info = self.db.execute("SELECT source, info FROM items WHERE id = ?", (row,)).fetchone()
+        session = json.loads(info or "{}").get("session")
+        if session is None:
+            return []
+        rows = self.db.execute(
+            "SELECT id, mtime FROM items WHERE source = ? AND json_extract(info, '$.session') = ? ORDER BY mtime, id",
+            (source, session)).fetchall()
+        ids = [r[0] for r in rows]
+        at = ids.index(row)
+        return [self.item(r) for r in ids[max(0, at - around): at + around + 1]]
+
     def summary(self) -> dict:
         out: dict = {"path": str(self.path), "vector_version": self.vector_version,
                      "bytes": self.path.stat().st_size if self.path.exists() else 0, "sources": {}}
         for source, items in self.db.execute("SELECT source, count(*) FROM items GROUP BY source"):
             out["sources"].setdefault(source, {})["items"] = items
+        for source, n in self.db.execute("SELECT i.source, count(*) FROM segments s JOIN items i ON i.id = s.item "
+                                         "WHERE s.pending IS NOT NULL GROUP BY i.source"):
+            out["sources"].setdefault(source, {})["pending_vectors"] = n
         for source, kind, n, vectors in self.db.execute(
                 "SELECT i.source, s.kind, count(*), count(s.vector) FROM segments s JOIN items i ON i.id = s.item "
                 "GROUP BY i.source, s.kind"):

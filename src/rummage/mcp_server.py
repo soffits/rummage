@@ -16,6 +16,7 @@ from . import daemon as D
 from . import envelope as E
 from . import runtime as R
 from .search import Searcher
+from .secrets import mask_value
 from .store import Store
 
 
@@ -29,6 +30,11 @@ def build(cfg: C.Config):
     lock = threading.Lock()
     embedder: dict = {}
     read_only = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+
+    def shown(value: dict, show_secrets: bool) -> dict:
+        if show_secrets or not C.masks_secrets(cfg, value.get("source", "")):
+            return value
+        return mask_value(value)
 
     def query_vector(text: str):
         vector = D.query_vector(cfg.data_dir, text)
@@ -44,9 +50,11 @@ def build(cfg: C.Config):
 
     @server.tool(annotations=read_only)
     def search(query: str, limit: int = 10, sources: list[str] | None = None, paths: list[str] | None = None,
-               globs: list[str] | None = None, words_only: bool = False, truncate: str = "off") -> dict:
+               globs: list[str] | None = None, words_only: bool = False, truncate: str = "off",
+               show_secrets: bool = False) -> dict:
         """Search the index by meaning and exact words. Use words_only for exact names, IDs and numbers. paths and
-        globs narrow by where items are (a folder prefix of their ref, or a pattern like '*.pdf')."""
+        globs narrow by where items are (a folder prefix of their ref, or a pattern like '*.pdf'). Credentials are
+        masked unless show_secrets is set (only when the user asked for one)."""
         started = time.monotonic()
         if not cfg.index_path.exists():
             return E.error("index_missing", "nothing is indexed yet", [
@@ -54,30 +62,35 @@ def build(cfg: C.Config):
         store = Store(cfg.index_path)
         try:
             store.check_version()
-            index_empty = store.db.execute("SELECT count(*) FROM items").fetchone()[0] == 0
+            index_empty = store.item_count() == 0
             vector = None if words_only or index_empty else query_vector(query)
             hits = Searcher(store.db, sources, paths, globs).search(query, vector, limit=limit)
         finally:
             store.close()
         args = SimpleNamespace(query=query, limit=limit, source=sources, kind=None, words_only=words_only,
                                truncate=truncate, path=paths, glob=globs)
-        return E.build(args, E.truncate([h.as_dict() for h in hits], truncate), [], time.monotonic() - started,
-                       index_empty)
+        results = [shown(h.as_dict(), show_secrets) for h in hits]
+        return E.build(args, E.truncate(results, truncate), [], time.monotonic() - started, index_empty)
 
     @server.tool(annotations=read_only)
-    def get(ref: str, loc: str | None = None, head: int | None = None) -> dict:
+    def get(ref: str, loc: str | None = None, head: int | None = None, around: int | None = None,
+            show_secrets: bool = False) -> dict:
         """Read an item by a result's id (#...), its ref, or source:key; loc limits it to one passage, head to the
-        first lines."""
+        first lines, around adds the chat turns before and after it. Credentials are masked unless show_secrets is
+        set (only when the user asked for one)."""
         store = Store(cfg.index_path)
         try:
-            doc = store.item(store.find(ref), loc)
+            row = store.find(ref)
+            doc = store.item(row, loc)
+            if around:
+                doc["around"] = {"turns": store.neighbours(row, around)}
         except LookupError as error:
             return {"error": str(error)}
         finally:
             store.close()
         if head:
             doc["text"] = "\n".join(doc["text"].splitlines()[:head])
-        return doc
+        return shown(doc, show_secrets)
 
     @server.tool(annotations=read_only)
     def status() -> dict:
