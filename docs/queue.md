@@ -20,8 +20,6 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 [ruggiio](https://github.com/ruggiio/semfind)), [obsidian-rag-mcp](https://github.com/AdrianBodrug/obsidian-rag-mcp),
 [qkb](https://github.com/miguelarios/qkb). Ideas only; no code is taken from them.
 
-8. **Path and glob scoping.** `--path <prefix>` and `--glob` filters on top of `-s SOURCE`, like ripgrep's path
-   arguments (vecgrep, fidx collections, qmd `-c`, obsidian-rag-mcp folders/tags).
 9. **Public benchmark.** Corpora, query sets and a runner reporting R@1/3/10, MRR, nDCG@10, noise in the top 10,
    p50/p95 latency and index size, so ranking changes are measured and comparisons are reproducible (fidx `bench/`,
    claudegrep eval, obsidian-rag-mcp, ruggiio/semfind's table).

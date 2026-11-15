@@ -1,6 +1,7 @@
 """`rummage serve`: answer searches over HTTP from a machine that holds an index, and keep that index current.
 
-    GET /search?q=...&limit=10&source=...&kind=...&words_only=1   a rummage.search.v1 object, as `search --json`
+    GET /search?q=...&limit=10&source=...&kind=...&path=...&glob=...&words_only=1
+                                                                   a rummage.search.v1 object, as `search --json`
     GET /get?ref=#id&loc=...                                      the same JSON as `rummage get --json`
     GET /status                                                   the same JSON as `rummage status --json`
     GET /health                                                   200 "ok"
@@ -46,18 +47,20 @@ class Service:
                 self.embedder.start()
             return self.embedder.query(text)
 
-    def search(self, q: str, limit: int, sources: list[str], kinds: list[str], words_only: bool) -> dict:
+    def search(self, q: str, limit: int, sources: list[str], kinds: list[str], words_only: bool,
+               paths: list[str] | None = None, globs: list[str] | None = None) -> dict:
         started = time.monotonic()
         store = Store(self.cfg.index_path)
         try:
             store.check_version()
             index_empty = store.db.execute("SELECT count(*) FROM items").fetchone()[0] == 0
             vector = None if words_only or index_empty else self.query_vector(q)
-            hits = Searcher(store.db, sources or None).search(q, vector, limit=limit, kinds=set(kinds) or None)
+            hits = Searcher(store.db, sources or None, paths, globs).search(q, vector, limit=limit,
+                                                                            kinds=set(kinds) or None)
         finally:
             store.close()
         args = SimpleNamespace(query=q, limit=limit, source=sources, kind=kinds, words_only=words_only,
-                               truncate="off")
+                               truncate="off", path=paths, glob=globs)
         return E.build(args, [h.as_dict() for h in hits], [], time.monotonic() - started, index_empty)
 
     def get(self, ref: str, loc: str | None) -> dict:
@@ -116,7 +119,8 @@ def handler(service: Service):
                         return self._send(400, {"error": "q is required"})
                     limit = max(1, min(100, int((params.get("limit") or ["10"])[0])))
                     return self._send(200, service.search(q, limit, params.get("source", []), params.get("kind", []),
-                                                          (params.get("words_only") or ["0"])[0] in ("1", "true")))
+                                                          (params.get("words_only") or ["0"])[0] in ("1", "true"),
+                                                          params.get("path", []), params.get("glob", [])))
                 if url.path == "/get":
                     ref = (params.get("ref") or [""])[0]
                     try:

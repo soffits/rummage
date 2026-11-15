@@ -57,6 +57,10 @@ def _base(args) -> list[str]:
         base += ["-s", s]
     for k in args.kind or []:
         base += ["-k", k]
+    for p in getattr(args, "path", None) or []:
+        base += ["--path", p]
+    for g in getattr(args, "glob", None) or []:
+        base += ["--glob", g]
     return base
 
 
@@ -77,8 +81,8 @@ def next_actions(args, status: str, hits: list[dict], strong: int) -> list[dict]
                             "reason": f"Only {strong} of {len(hits)} results score near the top; drop the weak tail.",
                             "command": base + ["--truncate", "knee"]})
         return actions
-    if args.source or args.kind:
-        actions.append({"intent": "broaden_scope", "reason": "Nothing matched inside the requested sources or kinds.",
+    if args.source or args.kind or getattr(args, "path", None) or getattr(args, "glob", None):
+        actions.append({"intent": "broaden_scope", "reason": "Nothing matched inside the requested scope.",
                         "command": ["rummage", "search", args.query, "--json", "-n", str(args.limit)]})
     if args.words_only:
         actions.append({"intent": "search_by_meaning", "reason": "Exact words found nothing; search by meaning too.",
@@ -105,6 +109,7 @@ def build(args, hits: list[dict], errors: list[str], seconds: float, index_empty
         "query": args.query,
         "status": status,
         "request": {"limit": args.limit, "sources": args.source or [], "kinds": args.kind or [],
+                    "paths": getattr(args, "path", None) or [], "globs": getattr(args, "glob", None) or [],
                     "mode": "words" if args.words_only else "hybrid", "truncate": args.truncate},
         "summary": {"result_count": len(hits), "strong": strong, "top_score": hits[0]["score"] if hits else None,
                     "meaning_matches": sum(1 for h in hits if (h.get("z") or 0) >= 2),
