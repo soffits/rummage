@@ -87,6 +87,8 @@ rummage search "lease" --path housing --glob '*.pdf'   # only part of a source
 rummage get "#3f2a9c"     # a result's text by its id (or ref); --loc for one passage, --head N
 rummage get "#3f2a9c" --around 3   # with context: 3 chat turns before and after, or 3 lines around a passage
 rummage recent --minutes 30          # the latest chat turns and changed files, newest first
+rummage dupes -s notes     # passages that say nearly the same thing in different notes
+rummage conflicts -s notes # passages about the same thing whose dates or numbers differ
 rummage status --json      # counts, last run per source, failures
 rummage doctor             # runtime files, vector version, freshness; exit 1 on a problem
 rummage watch              # index changes as they happen (install the `watch` extra for file events)

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `rummage dupes` and `rummage conflicts`: reports for tidying a collection, from the stored vectors (no model time). Dupes are passages in different items that say nearly the same thing; conflicts are passages about the same thing whose dates, times, amounts or other numbers differ, leaving out records of one numbered or dated series and number-heavy tables. `--json` for an upkeep job to work through.
 - `mail` source: a Maildir, an mbox or an IMAP account, read-only (IMAP folders opened with EXAMINE, bodies fetched with BODY.PEEK, so nothing is marked read). One item per message with subject, sender, recipients and date; the plain-text body (or the HTML's text) and the text of attached documents are searchable. IMAP resumes by UID; `since` limits how far back it reads.
 - One chat message recorded by two sources (a harness that runs another agent as its model, say) is one search hit: messages with the same text, notices in front aside, within 10 minutes of each other collapse, and the hit lists the other records in `also`; `get` shows them too. Chat items index this as `info.said`; run `rummage index --reload` once for chat sources indexed before (vectors are reused).
 - `[embedder] url`: index with a `llama-server` on another machine (a GPU box running the same pinned model) while it answers and its reference vectors agree with the index's (cosine ≥ 0.999); otherwise this machine's runtime does it. `doctor` reports whether the remote one agrees.
