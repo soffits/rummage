@@ -185,3 +185,23 @@ def test_tiny_index_still_finds_by_meaning(tmp_path):
     hits = Searcher(store).search("query with no shared words", target, limit=3)
     assert hits and hits[0].ref == "r0"
     store.close()
+
+
+def test_ranking_variants_switch_off_one_signal_each(tmp_path):
+    from rummage.search import Ranking
+
+    store = Store(tmp_path / "index.db")
+    target = _vec(5)
+    store.put(Item("s", "near", "note", "near", "near"), [Segment("text", "nothing shared", loc="0", vector=target)])
+    store.put(Item("s", "words", "note", "words", "words"), [Segment("text", "blue lantern festival", loc="0",
+                                                                      vector=_vec(9))])
+    for n in range(30):
+        store.put(Item("s", f"x{n}", "note", f"x{n}", f"x{n}"), [Segment("text", f"filler {n}", loc="0",
+                                                                         vector=_vec(100 + n))])
+    store.commit()
+    refs = lambda **kw: [h.ref for h in Searcher(store, ranking=Ranking(**kw)).search("blue lantern", target, limit=3)]
+    assert "near" in refs() and "words" in refs()
+    assert "near" not in refs(meaning=False) and refs(meaning=False)[0] == "words"
+    assert "words" not in refs(words=False)
+    assert len(refs(gate=False)) == 3
+    store.close()

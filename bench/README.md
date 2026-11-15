@@ -19,3 +19,15 @@ the same folder of Markdown files (one per document, the title in the frontmatte
 indexes go under `bench/work/` (ignored by git). `--runtime-dir` reuses an existing rummage `runtime/` folder instead
 of downloading the model again. Results are in `bench/work/<dataset>/results/<engine>.json`; published numbers are
 in [docs/benchmarks.md](../docs/benchmarks.md).
+
+## Engines, datasets and resuming
+
+`bench/run.py --engine` takes `rummage`, `rummage-ablations` (the ranking variants of `bench/engines.py` over the
+index the `rummage` run built, so only the ranking differs), `fidx` (`--fidx-profile` picks its embedding profile),
+`qmd-search`, `qmd-vsearch` and `qmd-query` (`--qmd-model` sets `QMD_EMBED_MODEL`). `--dataset` takes a BEIR name,
+`miracl:<lang>` or `miracl-hn:<lang>` (MTEB's hard-negative corpus). `--embedder-url` lets rummage embed through a
+llama-server elsewhere (a GPU); the result records it. Finished runs keep their result file and are skipped next
+time, so a long series resumes where it stopped (`--force` runs again).
+
+`bench/memory.py` measures `rummage recall` on LoCoMo and LongMemEval-S: how often the injected block holds the
+answering turn, and how often recall stays silent when the history has no answer.

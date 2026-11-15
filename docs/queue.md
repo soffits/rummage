@@ -52,3 +52,20 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 Same rules as everything else: general, any language family, sources opt-in where they read someone's private
 data, tests.
 - `media`: whisper.cpp publishes no prebuilt binaries for every system, so `rummage setup` can't fetch and pin it the way it does llama.cpp; people install `whisper-cli` and a model themselves. Not yet run against a real whisper.cpp build here (tests use stand-ins for ffmpeg and whisper-cli).
+
+## After the evaluation
+
+1. **Recall feedback:** log each injection (query, items, scores) and whether the assistant then used an item
+   (opened it with `get`, cited its path, or searched the same thing again, which counts as a miss);
+   `rummage recall --stats` shows false-injection and miss rates, and the gate tunes itself per index from that log.
+2. **Misses become aliases:** a search that ended with nothing opened, followed by one that found the note, proposes
+   the first query's words as aliases for that note, as a report an upkeep job applies; notes are never edited
+   automatically.
+3. **Supersession at recall time:** when two hits state different values for the same thing (the `conflicts`
+   check), prefer the newer and mark the older "may be outdated".
+4. **Query expansion from names:** `[people]` aliases and note aliases expand a query, so a nickname finds the
+   person's notes.
+5. **`rummage related --file/--text`:** related items for something that just arrived (a mail, a calendar event),
+   for event-driven recall.
+6. **Golden questions:** a regression set of questions with known answers, run weekly to catch quality drops.
+7. **Optional local cross-encoder rerank** for hard queries, off by default, measured in the evaluation.
