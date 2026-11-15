@@ -5,7 +5,9 @@ matches, and word coverage rescues what no vector holds exactly (names, IDs, num
 
 from __future__ import annotations
 
+import datetime
 import json
+import math
 import sqlite3
 from dataclasses import asdict, dataclass
 
@@ -17,6 +19,13 @@ from .store import item_id
 
 WORD_WEIGHT = 2.0
 Z_GATE = 2.0
+
+
+def gate_for(base: float, count: int) -> float:
+    """The meaning gate for an index of `count` vectors. A z-score among n values can't exceed sqrt(n - 1), so a
+    fixed gate of 2 would hide everything in an index of a handful of passages; small indexes get a gate the top
+    match can reach."""
+    return min(base, 0.75 * math.sqrt(max(count - 1, 1)))
 
 
 @dataclass
@@ -33,6 +42,7 @@ class Hit:
     segment: str | None
     loc: str | None
     lines: str | None
+    date: str | None
     snippet: str
     info: dict
 
@@ -84,6 +94,11 @@ class Searcher:
             self.matrix = np.zeros((0, DIM), np.float16)
         self._loaded = True
 
+    def vector_count(self) -> int:
+        if not self._loaded:
+            self._load()
+        return len(self.matrix)
+
     def meaning(self, query: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Cosine of every vector, and its z: minus the mean of its own modality (text and image vectors sit at
         different levels for the same query), over the deviation of all of them together."""
@@ -110,6 +125,7 @@ class Searcher:
         words = T.terms(query)
         best: dict[int, tuple[float, float, int]] = {}
         if vector is not None:
+            z_gate = gate_for(z_gate, self.vector_count())
             scores, z = self.meaning(vector)
             order = np.argsort(-z)
             for row in order[: max(2000, limit * 50)]:
@@ -145,7 +161,8 @@ class Searcher:
         for score, item in scored:
             if len(hits) >= limit:
                 break
-            row = self.db.execute("SELECT source, kind, title, ref, info, key FROM items WHERE id = ?", (item,)).fetchone()
+            row = self.db.execute("SELECT source, kind, title, ref, info, key, mtime FROM items WHERE id = ?",
+                                  (item,)).fetchone()
             if row is None or (kinds and row[1] not in kinds):
                 continue
             semantic = best.get(item)
@@ -161,6 +178,7 @@ class Searcher:
                 id="#" + item_id(row[0], row[5]), source=row[0], kind=row[1], title=row[2] or "", ref=row[3] or "", score=score,
                 z=semantic[0] if semantic else None, cosine=semantic[1] if semantic else None,
                 words=coverage.get(item, 0.0), segment=seg_kind, loc=loc, lines=lines,
+                date=_date(json.loads(row[4] or "{}"), row[6]),
                 snippet=T.snippet(seg_text or "", words), info=json.loads(row[4] or "{}")))
         return hits
 
@@ -175,3 +193,12 @@ class Searcher:
         for item, seg in rows:
             seen.setdefault(item, seg)
         return list(seen.items())
+
+
+def _date(info: dict, mtime: float | None) -> str | None:
+    """When the item is from: a chat message's own time, else the file's modification date."""
+    if info.get("time"):
+        return str(info["time"])[:10]
+    if mtime:
+        return datetime.datetime.fromtimestamp(mtime, datetime.timezone.utc).date().isoformat()
+    return None
