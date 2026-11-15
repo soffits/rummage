@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1
+
+- Small indexes find things by meaning again: the meaning gate (z ≥ 2) is lowered to what the top match can reach when an index has only a handful of passages (found by the install check, where a three-file index returned nothing).
+- `recall` no longer stays silent when search clearly finds something: the short-prompt skip applies only to `--hook`, counts the words as written, and the meaning gate follows the index size. Each recalled item now carries its #id, source, path and lines (or chat session and message), date, title and why it matched, in the text block, `--json` and the hook reply.
+- Every search result has a `date` (a chat message's time, else the file's modification date).
+
 ## 0.6.0
 
 - Keyword search treats CJK as one family: Han, kana (half-width included, folded by NFKC) and Hangul syllables and jamo are single tokens, and a CJK query run is matched by overlapping character pairs, so Korean particles and Japanese inflection don't stop a match. Tests cover Chinese, Japanese and Korean.
