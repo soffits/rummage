@@ -123,6 +123,15 @@ def chunks(text: str, size: int = 1800, overlap: int = 200, limit: int = 400) ->
     return out
 
 
+def snippet_head(text: str, width: int = 240) -> str:
+    """The start of `text` on one line, cut at a word near `width` characters."""
+    flat = " ".join((text or "").split())
+    if len(flat) <= width:
+        return flat
+    cut = flat.rfind(" ", 0, width)
+    return flat[: cut if cut > width // 2 else width] + "…"
+
+
 def snippet(text: str, words: list[str], width: int = 240) -> str:
     """One stretch of `text` around the first query word it has (case-insensitive), else its start."""
     flat = re.sub(r"\s+", " ", text).strip()

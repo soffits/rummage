@@ -1,7 +1,7 @@
 import json
 
 from rummage.cli import main
-from rummage.indexer import index_source
+from conftest import index_all
 from rummage.recall import worth_recalling
 from rummage.sources import build
 from rummage.store import Store
@@ -27,7 +27,7 @@ def _setup(tmp_path):
     cfg = tmp_path / "config.toml"
     cfg.write_text(f"""data_dir = '{tmp_path / "data"}'\n[sources.notes]\ntype = "markdown"\nroot = '{notes}'\n""", encoding="utf-8")
     store = Store(tmp_path / "data" / "index.db")
-    index_source(store, build("notes", {"type": "markdown", "root": str(notes)}, tmp_path), _NoModel(),
+    index_all(store, build("notes", {"type": "markdown", "root": str(notes)}, tmp_path), _NoModel(),
                  lambda *a: None, print)
     store.close()
     return cfg
@@ -93,7 +93,7 @@ def test_recall_finds_what_search_finds_and_says_where(tmp_path, capsys, monkeyp
                    encoding="utf-8")
     model = _TopicModel()
     store = Store(tmp_path / "data" / "index.db")
-    index_source(store, build("notes", {"type": "markdown", "root": str(notes)}, tmp_path), model,
+    index_all(store, build("notes", {"type": "markdown", "root": str(notes)}, tmp_path), model,
                  lambda *a: None, print)
     store.close()
     monkeypatch.setattr("rummage.daemon.query_vector", lambda data_dir, text, timeout=10.0: model.vector(text))

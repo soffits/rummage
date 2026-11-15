@@ -42,3 +42,12 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 - Audio and video are not indexed.
 - A message that another agent sends into a DSH session through `open_session` without the "[Sent by the agent" prefix is attributed to the web user.
 - Vectors are loaded from SQLite on every search; a memory-mapped cache would help once an index passes a few hundred thousand segments.
+
+## Leftovers from the agent-history batch
+
+- **Same conversation in two sources.** When one harness drives another (a harness that runs Claude Code as its
+  model, say), the same messages land in both sources. Collapse hits whose person text is nearly the same and whose
+  times are minutes apart into one hit with the other refs as aliases; `get` shows both.
+- **OpenCode 1.x databases** (`session`, `message`, `part` tables) and its older JSON `storage/` folder.
+- **Storage seam** (planned next): one storage interface with SQLite as the only backend, `rummage export` /
+  `import` in a versioned engine-neutral format, and `docs/backends.md` on what a Postgres/pgvector backend needs.

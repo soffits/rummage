@@ -62,11 +62,11 @@ def test_words_only_search_cli(tmp_path, capsys):
     (notes / "other.md").write_text("Nothing to see here about furniture or orders at all, really.", encoding="utf-8")
     cfg = tmp_path / "config.toml"
     cfg.write_text(f"""data_dir = '{tmp_path / "data"}'\n[sources.notes]\ntype = "markdown"\nroot = '{notes}'\n""", encoding="utf-8")
-    from rummage.indexer import index_source
+    from conftest import index_all
     from rummage.sources import build
     from rummage.store import Store
     store = Store(tmp_path / "data" / "index.db")
-    index_source(store, build("notes", {"type": "markdown", "root": str(notes)}, tmp_path), _NoModel(), lambda *a: None, print)
+    index_all(store, build("notes", {"type": "markdown", "root": str(notes)}, tmp_path), _NoModel(), lambda *a: None, print)
     store.close()
     assert main(["--config", str(cfg), "search", "INV-20931", "--words-only", "--json"]) == 0
     doc = json.loads(capsys.readouterr().out)

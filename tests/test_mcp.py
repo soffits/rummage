@@ -4,7 +4,7 @@ import json
 import pytest
 
 from rummage import config as C
-from rummage.indexer import index_source
+from conftest import index_all
 from rummage.sources import build
 from rummage.store import Store
 
@@ -38,7 +38,7 @@ def test_mcp_tools(tmp_path):
     cfg_path = tmp_path / "config.toml"
     cfg_path.write_text(f"""data_dir = '{tmp_path / "data"}'\n[sources.notes]\ntype = "markdown"\nroot = '{notes}'\n""", encoding="utf-8")
     store = Store(tmp_path / "data" / "index.db")
-    index_source(store, build("notes", {"type": "markdown", "root": str(notes)}, tmp_path), _NoModel(),
+    index_all(store, build("notes", {"type": "markdown", "root": str(notes)}, tmp_path), _NoModel(),
                  lambda *a: None, print)
     store.close()
     server, stop = build_server(C.load(cfg_path))

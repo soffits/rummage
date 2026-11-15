@@ -45,21 +45,38 @@ class Source:
     def load(self, item: Item) -> list[Segment]:
         raise NotImplementedError
 
+    def watch_roots(self) -> list[Path]:
+        """Folders whose file changes mean this source has something new (for `rummage watch`); empty when the
+        source can only be re-planned on an interval."""
+        return []
+
+    @classmethod
+    def detect(cls) -> dict | None:
+        """For sources that read another program's data: the settings to use when that program's data is on this
+        machine, else None. Such sources are listed by `rummage sources` and indexed only once enabled."""
+        return None
+
 
 def available() -> dict[str, str]:
     """Registered source types and where each comes from."""
     return {ep.name: ep.value for ep in entry_points(group=GROUP)}
 
 
-def build(name: str, spec: dict, data_dir: Path) -> Source:
-    kind = spec.get("type")
+def load_type(kind: str) -> type[Source]:
     matches = [ep for ep in entry_points(group=GROUP) if ep.name == kind]
     if not matches:
         known = ", ".join(sorted(available())) or "none"
-        raise ValueError(f"source {name}: no source type {kind!r} is installed (installed: {known})")
+        raise ValueError(f"no source type {kind!r} is installed (installed: {known})")
     try:
-        cls = matches[0].load()
+        return matches[0].load()
     except ImportError as error:
-        raise ValueError(f"source {name}: type {kind!r} needs a missing package ({error.name}); "
+        raise ValueError(f"source type {kind!r} needs a missing package ({error.name}); "
                          f"install its extra, e.g. `rummage[{kind}]`") from error
+
+
+def build(name: str, spec: dict, data_dir: Path) -> Source:
+    try:
+        cls = load_type(spec.get("type"))
+    except ValueError as error:
+        raise ValueError(f"source {name}: {error}") from error
     return cls(name, spec, data_dir)

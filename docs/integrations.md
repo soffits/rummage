@@ -10,6 +10,12 @@ Any agent that can run a command can use rummage: `rummage search "<query>" --js
   otherwise. It never loads the model on its own, so keep `rummage daemon` running for meaning matches; without it,
   recall matches exact words only. Each recalled line reads `#id · source · path:lines (or chat session#message) · date · "title" · why it matched`, followed by a snippet. Options: `--max-items` (4), `--max-chars` (1500), `--min-z` (3.0), `-s`,
   `--path`.
+  Recall also adds up to two turns said in the last 45 minutes in other chat sessions (`--recent-minutes`,
+  `--recent-items`) when the prompt shares words with them or refers back ("just now", "as I said", and the same in
+  other languages), so a conversation continued in a new window keeps its context; the current session is left
+  out (`--session`, or the hook's `session_id`). Credentials are masked in the block unless `--show-secrets`.
+- **`rummage recent`** lists the latest chat turns and changed files across sources (`--minutes`, `-s`,
+  `--exclude-session`, `--json`), and **`rummage get <#id> --around N`** shows a chat hit with the turns around it.
 
 The snippets below call `rummage recall` from each tool's prompt hook. Adjust the command path if rummage is not on
 the hook's `PATH`. `recall --hook` follows the documented `UserPromptSubmit` input and output of Claude Code and
