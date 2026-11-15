@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.20.0
+
+- `seafile` reads libraries with their own API tokens (Seafile's per-library "API token", the `via-repo-token` API), so a library can be indexed without an account it is shared with: `library_tokens = [{ env_file = "...", token_env = "..." }]`, one entry per library, alongside or instead of an account token. Unchanged libraries are skipped by their root folder's id, deleted files are dropped, and rummage only ever reads. Every token setting also takes `env_file`, a KEY=value file to read `token_env` from.
+
 ## 0.19.0
 
 - A reply that quotes another message is found by what it quotes: the quote is its own passage (with the reply's words after it), so a search for the quoted topic finds the reply, while the reply's own passage still holds only the person's words and a long quote can't drown a short answer. A note right under a quote (such as where to read more) counts as part of it.
