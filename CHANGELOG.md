@@ -11,6 +11,10 @@
   in their text ("Index still building: 340 of 1,200 passages have vectors; the others match only by their words;
   about 6 min left."). Recall's hook reply also carries the status line as `systemMessage` for the person, and the
   whole summary as `rummage.index` for harness adapters.
+- The OpenCode plugin shows indexing progress in the footer and toasts when indexing starts, finishes or fails; the
+  Claude Code hook shows the status line under the prompt, and `rummage status --line` works as a Claude Code
+  statusLine (`docs/integrations.md`). The OpenCode and Hermes adapters send the session's `cwd` and `harness` to
+  recall.
 
 ## 0.11.3
 

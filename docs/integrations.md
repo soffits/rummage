@@ -54,6 +54,21 @@ Without the plugin, the same hook goes in `~/.claude/settings.json` or `~/.codex
 }
 ```
 
+### Indexing progress in Claude Code
+
+While the index is still filling up, paused or broken, the recall hook shows one line under your prompt
+("rummage: indexing 340/1,200, ~6 min left"), and the model gets the same news in a sentence. Nothing shows once it's
+complete. To keep the line in view between prompts, add rummage to your status line in `~/.claude/settings.json`
+(plugins can't set it for you):
+
+```json
+{ "statusLine": { "type": "command", "command": "rummage status --line", "refreshInterval": 5 } }
+```
+
+It prints nothing when the index is complete, and reads one small file, so a short interval costs little. On
+Windows the same command works whether Claude Code runs it through Git Bash or PowerShell. If you already have a
+status line script, print `rummage status --line` from it too.
+
 ## OpenCode
 
 The plugin in [integrations/opencode](../integrations/opencode) targets the OpenCode 2 plugin API. It runs recall once
@@ -72,6 +87,9 @@ request, so the text you typed stays as you typed it. It also registers the rumm
 
 `args` are passed on to `rummage recall` (for example `["-s", "notes"]`); `"skill": false` leaves the skill out.
 
+The package's TUI part shows indexing progress in the footer while the index is unfinished, paused or broken, and a
+toast when indexing starts, finishes or fails. Between index runs it only checks the progress file's time stamp.
+
 ## Hermes Agent
 
 The plugin in [integrations/hermes](../integrations/hermes) adds a `pre_llm_call` hook; Hermes appends what it returns
@@ -81,6 +99,10 @@ to the turn's user message. `RUMMAGE_COMMAND` and `RUMMAGE_RECALL_TIMEOUT` (seco
 hermes plugins install soffits/rummage/integrations/hermes --enable
 hermes skills install soffits/rummage/skills/rummage
 ```
+
+Hermes has no status area for plugins: the model still hears when the index is incomplete, and
+`rummage status --watch` in another terminal (or `rummage status --line` in your prompt) shows the progress. The same
+goes for Codex, whose hook output has no status line.
 
 ## DeepSeek Harness
 
@@ -111,6 +133,31 @@ export function apply(ctx) {
   })
 }
 ```
+
+## Index progress for adapters
+
+`rummage recall --hook` reads a JSON object on stdin: `prompt`, `session_id`, and `cwd` and `harness` when the
+harness knows them. It always replies with JSON, also when it has nothing to recall:
+
+- `hookSpecificOutput.additionalContext`: the block for the model, when there is one. While the index is
+  incomplete it ends with one sentence saying so; when nothing matched it is only that sentence.
+- `systemMessage`: the status line for the person, only while the index isn't complete.
+- `rummage.index`: the whole summary, the same object `rummage status --line --json` prints:
+
+| Field | Meaning |
+|---|---|
+| `state` | `complete`, `building`, `paused`, `stopped` (a run died part way) or `error` |
+| `line` | short status-bar text, `""` when complete |
+| `note` | one sentence for a model, `""` when complete |
+| `items` | `{done, total}` items read by a run that is reading now, else `null` |
+| `vectors` | `{done, total}` passages with a vector of the model searches use, else `null` |
+| `eta_seconds` | time left for those vectors at the recent pace, else `null` |
+| `paused`, `error` | why work stopped with some left, what failed, else `null` |
+| `updated` | when a run last wrote progress (Unix time), else `null` |
+| `file` | the progress file; poll its modification time and run `status --line --json` only when it changes |
+
+`search --json`, `get --json` and `recall --json` carry `state`, `note`, `items`, `vectors`, `eta_seconds`, `paused`
+and `error` as `index` while the index is incomplete, and leave it out once it's complete.
 
 ## Any other agent
 
