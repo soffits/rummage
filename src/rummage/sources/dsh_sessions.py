@@ -1,9 +1,13 @@
 """Chats in DeepSeek Harness session logs (`<sessions>/<project>/<session>/session.v4.jsonl.zstd`), read-only.
 
 Only top-level sessions are read (subagents are the agent talking to itself). A person's message is a
-`user/message` event with source kind "user" that a client sent (it has an rpcId, or a Telegram sender tag); the
-turn runs until the next one and collects the assistant's visible text. Who wrote it comes from the Telegram
-sender tag or the dsh-oidc sender notice before a Web message, mapped through the `people` file.
+`user/message` event with source kind "user" that a client sent (it has an rpcId, a sender principal, or a Telegram
+sender tag); the turn runs until the next one and collects the assistant's visible text.
+
+Who wrote it comes first from `source.principal`, DSH's field for the caller behind a user message, which
+dsh-oidc (`oidc-user`) and dsh-telegram-bot (`telegram-user`) fill with `{kind, channel, id, name?, ...}`. Older
+messages fall back to the Telegram sender tag in the text or the dsh-oidc sender notice before a Web message. Ids
+are mapped to names through the `people` file.
 """
 
 from __future__ import annotations
@@ -36,6 +40,14 @@ def read_log(path: Path) -> list[dict]:
     return events
 
 
+def principal_of(data: dict) -> dict | None:
+    """The structured sender on a message's `source.principal`, or None for older messages."""
+    principal = (data.get("source") or {}).get("principal")
+    if isinstance(principal, dict) and isinstance(principal.get("kind"), str) and principal.get("id") is not None:
+        return principal
+    return None
+
+
 def _text(data: dict) -> str:
     return "\n".join(p.get("text", "") for p in data.get("content") or []
                      if isinstance(p, dict) and p.get("type") == "text").strip()
@@ -55,10 +67,16 @@ class DshSessionSource(Source):
         for project in self.projects:
             yield from sorted((self.root / project).glob(f"*/{LOG_NAME}"))
 
-    def _speaker(self, text: str, rpc_id: str, oidc: str | None) -> str:
+    def _speaker(self, text: str, rpc_id: str, oidc: str | None, principal: dict | None = None) -> str:
+        users = self.people.get("telegram_users", {})
+        if principal is not None:
+            kind, pid = principal["kind"], str(principal["id"])
+            if kind == "telegram-user":
+                return users.get(pid, f"telegram user {pid}")
+            if kind == "oidc-user":
+                return self.people.get("oidc_users", {}).get(pid, f"oidc user {pid}")
         if text.startswith("[Sent to the Telegram topic "):  # a bot send recorded in the topic's session
             return f"{self.assistant} (sent)"
-        users = self.people.get("telegram_users", {})
         m = _TG_TAG.match(text)
         if m:
             return users.get(m.group(1), f"telegram user {m.group(1)}")
@@ -92,10 +110,14 @@ class DshSessionSource(Source):
                 rpc_id = str(source.get("rpcId") or "")
                 if source.get("kind") != "user" or not text or text.startswith(self.skip_prefixes):
                     continue
-                if not rpc_id and not _TG_TAG.match(text):
+                principal = principal_of(data)
+                if not rpc_id and not _TG_TAG.match(text) and principal is None:
                     continue
-                speaker = self._speaker(text, rpc_id, subject)
-                channel = "telegram" if _TG_TAG.match(text) or rpc_id.startswith("telegram") else "web"
+                speaker = self._speaker(text, rpc_id, subject, principal)
+                if principal is not None and isinstance(principal.get("channel"), str):
+                    channel = principal["channel"]
+                else:
+                    channel = "telegram" if _TG_TAG.match(text) or rpc_id.startswith("telegram") else "web"
                 body = text.split("\n", 1)[1] if _TG_TAG.match(text) and "\n" in text else text
                 turns.append(Turn(sid, str(event.get("seq")), (event.get("time") or 0) / 1000, speaker, body.strip(),
                                   "", channel))
