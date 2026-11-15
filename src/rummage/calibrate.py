@@ -40,27 +40,36 @@ def probes(store: Store, model: str, count: int = PROBES, seed: int = 0) -> list
     return [(seg, item, probe_text(text)) for seg, item, text in store.sample_texts(count, model, seed)]
 
 
+def standardize(scores: np.ndarray, kinds: np.ndarray) -> np.ndarray:
+    """Cosines as z-scores: minus the mean of their own modality (text and image vectors sit at different levels for
+    the same query), over the deviation of all of them together. Modalities under 20 vectors use the mean of
+    everything."""
+    z = np.empty_like(scores)
+    if len(scores) == 0:
+        return z
+    everyone = float(scores.mean())
+    spread = float(scores.std()) or 1.0
+    for kind in np.unique(kinds):
+        mask = kinds == kind
+        z[mask] = (scores[mask] - (float(scores[mask].mean()) if mask.sum() >= 20 else everyone)) / spread
+    return z
+
+
 class Space:
     """One model's vectors in the index, as search sees them."""
 
     def __init__(self, store: Store, model: str):
-        self.ids, self.items, self.kinds, matrix = store.vectors(Scope(), model)
-        self.matrix = matrix.astype(np.float32)
+        v = store.vectors(Scope(), model)
+        self.ids, self.items, self.kinds = v.ids, v.items, v.kinds
+        self.matrix = v.matrix.astype(np.float32)
         self.text = self.kinds == "text"
 
     def __len__(self) -> int:
         return int(self.text.sum())
 
     def z(self, query: np.ndarray) -> np.ndarray:
-        """As `Searcher.meaning`: cosine minus its modality's mean, over the spread of all of them."""
-        scores = self.matrix @ query.astype(np.float32)
-        z = np.empty_like(scores)
-        spread = float(scores.std()) or 1.0
-        everyone = float(scores.mean())
-        for kind in np.unique(self.kinds):
-            mask = self.kinds == kind
-            z[mask] = (scores[mask] - (float(scores[mask].mean()) if mask.sum() >= 20 else everyone)) / spread
-        return z
+        """As `Searcher.meaning`: `standardize`d cosines."""
+        return standardize(self.matrix @ query.astype(np.float32), self.kinds)
 
     def unrelated_z(self, queries: np.ndarray, items: list[int], per_query: int = 4000, seed: int = 0) -> np.ndarray:
         """z-scores of every query against passages of other items (a fixed sample of them per query)."""

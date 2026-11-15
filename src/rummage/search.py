@@ -13,10 +13,22 @@ import numpy as np
 
 from . import text as T
 from .store import Scope, Store, Within, same_message_key
+from .calibrate import standardize
 from .switch import calibration
 
 WORD_WEIGHT = 2.0
 OPENED_WEIGHT = 0.4    # bonus per time an item was opened after a search with mostly the same words (max 2)
+RECENCY_WEIGHT = 1.0   # bonus of the newest plausible match; older ones get less, halving every RECENCY_HALF_LIFE
+RECENCY_HALF_LIFE = 3 * 86400.0
+
+
+def recency(times: dict[int, float], half_life: float) -> dict[int, float]:
+    """Each item's freshness among `times`: 1 for the newest, halving per `half_life` it is older. Age counts from
+    the newest of them, not from now, so an old archive still has its newest items."""
+    if not times or half_life <= 0:
+        return {}
+    newest = max(times.values())
+    return {item: 0.5 ** ((newest - when) / half_life) for item, when in times.items()}
 
 
 def gate_for(base: float, count: int) -> float:
@@ -36,6 +48,10 @@ class Ranking:
     gate: bool = True           # only vectors that stand out count (off: every top vector is a candidate)
     fixed_cosine: float = 0.0   # with zscore off: the raw cosine a vector needs
     cjk_pairs: bool = True      # CJK query runs matched by character pairs (off: the whole run as one phrase)
+    scripts: bool = True        # the word bonus weighed by how many meaning matches share the query's script (off:
+    #                             words at full weight)
+    recency: float = RECENCY_WEIGHT          # bonus of the newest plausible match (0: none)
+    half_life: float = RECENCY_HALF_LIFE     # seconds over which the recency bonus halves
 
 
 @dataclass
@@ -83,7 +99,9 @@ class Searcher:
         self._loaded = False
 
     def _load(self) -> None:
-        self.seg_ids, self.seg_items, self.seg_kinds, self.matrix = self.store.vectors(self.scope, self.model)
+        v = self.store.vectors(self.scope, self.model)
+        self.seg_ids, self.seg_items, self.seg_kinds, self.matrix = v.ids, v.items, v.kinds, v.matrix
+        self.seg_scripts = v.scripts
         self._loaded = True
 
     def vector_count(self) -> int:
@@ -92,8 +110,7 @@ class Searcher:
         return len(self.matrix)
 
     def meaning(self, query: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Cosine of every vector, and its z: minus the mean of its own modality (text and image vectors sit at
-        different levels for the same query), over the deviation of all of them together."""
+        """Cosine of every vector, and its z (`standardize`)."""
         if not self._loaded:
             self._load()
         if len(self.matrix) == 0:
@@ -103,14 +120,7 @@ class Searcher:
         step = 8192
         for start in range(0, len(self.matrix), step):
             scores[start:start + step] = self.matrix[start:start + step].astype(np.float32) @ q
-        z = np.empty_like(scores)
-        everyone = float(scores.mean())
-        spread = float(scores.std()) or 1.0
-        for kind in np.unique(self.seg_kinds):
-            mask = self.seg_kinds == kind
-            mean = float(scores[mask].mean()) if mask.sum() >= 20 else everyone
-            z[mask] = (scores[mask] - mean) / spread
-        return scores, z
+        return scores, standardize(scores, self.seg_kinds)
 
     def search(self, query: str, vector: np.ndarray | None, limit: int = 10, kinds: set[str] | None = None,
                z_gate: float | None = None) -> list[Hit]:
@@ -120,6 +130,7 @@ class Searcher:
         words = T.terms(query, cjk_pairs=r.cjk_pairs) if r.words else []
         vector = vector if r.meaning else None
         best: dict[int, tuple[float, float, int]] = {}
+        same_script = 1.0
         if vector is not None:
             z_gate = gate_for(z_gate, self.vector_count())
             scores, z = self.meaning(vector)
@@ -130,6 +141,7 @@ class Searcher:
                 item = int(self.seg_items[row])
                 if item not in best:
                     best[item] = (float(z[row]), float(scores[row]), int(self.seg_ids[row]))
+            same_script = self._same_script(query, z, z_gate)
 
         coverage: dict[int, float] = {}
         word_seg: dict[int, int] = {}
@@ -144,15 +156,16 @@ class Searcher:
                 word_seg.setdefault(item, seg)
 
         lookup = T.is_lookup(words)
-        meaning_weight, words_weight = (0.5, WORD_WEIGHT * 2) if lookup else (1.0, WORD_WEIGHT)
+        meaning_weight, words_weight = (0.5, WORD_WEIGHT * 2) if lookup else (1.0, WORD_WEIGHT * same_script)
         candidates = {i for i, (zz, _, _) in best.items() if zz >= z_gate or not r.gate}
         candidates |= {i for i, share in coverage.items() if share >= 0.5}
         opened = self.store.opened_for(words, candidates)
+        fresh = recency(self.store.times(sorted(candidates)), r.half_life) if r.recency else {}
         scored = []
         for item in candidates:
             zz = best.get(item, (0.0, 0.0, 0))[0]
             score = meaning_weight * max(zz, 0.0) + words_weight * coverage.get(item, 0.0) ** 1.5
-            score += OPENED_WEIGHT * min(opened.get(item, 0), 2)
+            score += OPENED_WEIGHT * min(opened.get(item, 0), 2) + r.recency * fresh.get(item, 0.0)
             scored.append((score, item))
         scored.sort(key=lambda s: (-s[0], s[1]))
 
@@ -183,6 +196,16 @@ class Searcher:
             if key:
                 said[key] = (hits[-1], row["mtime"] or 0)
         return hits
+
+
+    def _same_script(self, query: str, z: np.ndarray, z_gate: float) -> float:
+        """The share of meaning matches written in the query's script. Exact words can only be found in that
+        script, so the word bonus counts in proportion: across languages, meaning decides."""
+        if not self.ranking.scripts:
+            return 1.0
+        mine = T.script(query)
+        found = self.seg_scripts[(z >= z_gate) & (self.seg_scripts != "")]
+        return float((found == mine).mean()) if len(found) and mine else 1.0
 
 
 def _date(info: dict, mtime: float | None) -> str | None:

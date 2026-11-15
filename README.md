@@ -290,7 +290,10 @@ After the first index, a run only embeds what changed.
 Every stored vector is scored against the query. Scores are put on one scale per query (z-scores, with a separate
 mean per modality so pictures and passages compare), and only segments well above the rest count as meaning
 matches, which also gives an honest "nothing found". Exact-word matches from SQLite FTS5 add a bonus that grows
-with how many of the query's words an item has. CJK text (Chinese, Japanese, Korean) is indexed one character per token and queried by character pairs, so
+with how many of the query's words an item has, weighed by how many of the meaning matches are in the query's
+script, so a question about a note in another language is decided by meaning. Among plausible matches, newer ones
+get a small bonus that halves with every three days of age, so a current note comes before an older chat line that says
+something different. CJK text (Chinese, Japanese, Korean) is indexed one character per token and queried by character pairs, so
 two-character words match. The ranking is adapted from [DigUp](https://github.com/ARahim3/DigUp). More in
 [docs/design.md](docs/design.md).
 

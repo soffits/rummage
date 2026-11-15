@@ -25,7 +25,9 @@
 - CJK characters (Han, kana, Hangul) are single FTS tokens and CJK query runs become overlapping character pairs, so two-character words match in any CJK language and Korean particles don't block a match; trigram tokenizers can't match two-character words.
 - Brute-force numpy scoring instead of an ANN index or sqlite-vec: fast enough for a few hundred thousand vectors, no alpha dependency.
 
-- One z-score scale per modality, not per script: scaling CJK passages separately cut their drift into unrelated CJK queries only slightly and pushed a CJK answer down for a CJK question on a mostly English corpus.
+- One z-score scale per modality, not per script: scaling CJK passages separately cut their drift into unrelated CJK queries only slightly and pushed a CJK answer down for a CJK question on a mostly English corpus. Measured again with the script stored per passage: per-script centring lifted answers in another script for CJK questions but pushed them down for Latin questions and pushed same-script answers down, so it stays per modality.
+- The word bonus is weighed by the share of meaning matches (z at or above the gate) written in the query's script: exact words can only be found in that script, so when most plausible matches are in another one, meaning decides. ID and number queries keep the full weight. A passage's script (`text.script`: CJK as one family, else the Unicode script of its letters) is stored with the segment and filled in on open for segments that have none.
+- Recency is an additive bonus over the plausible matches (`RECENCY_WEIGHT` for the newest, halving every `RECENCY_HALF_LIFE`), as in Generative Agents' recency decay and time-decayed hybrid search, rather than newest-first order: a weak new match must not jump a clearly better old one. Age counts from the newest candidate, not from now, so an old archive still ranks its newest items first. An item's time is a message's own time, else the file's modification time.
 
 ## Progress
 

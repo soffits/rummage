@@ -233,6 +233,18 @@ silence here too (min z 4 with words off: hit rate 0.687, abstention questions i
 asks about a hamster when the user only mentioned a cat), which is the context a reader needs to say so. Whether it
 does is the next measure.
 
+### Newer evidence first (0.18.0)
+
+When an answer changed over time, the latest session says what is true now. On LongMemEval-S's knowledge-update
+and temporal-reasoning questions (211 with a dated answer session; turns carry their session's date), the recency
+bonus (weight 1, half-life 3 days, age counted from the newest match) puts the newest answer session first in plain
+search for 0.607 of them instead of 0.446, in the top 3 for 0.858 instead of 0.815 and in the top 5 for 0.915
+instead of 0.886; recall's hit rate on the same questions stays at 0.9095. Heavier or slower settings moved more
+items first but cost recall hits (weight 2-3, or a 14-day half-life: 0.9045). LoCoMo has no questions about change
+over time, so there the bonus only reorders: evidence in plain search's top 10 0.801 instead of 0.805, recall hit
+rate 0.483 instead of 0.485. SciFact, whose documents share one date, is unchanged (nDCG@10 0.864).
+`bench/memory.py` reports each ranking of its `RANKINGS` side by side.
+
 ### Answers on LongMemEval-S: no memory, one recall injection, an agent with rummage
 
 `bench/memory_qa.py`: the same reader (Claude Sonnet, through the `claude` CLI) answers every question three ways,

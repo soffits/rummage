@@ -64,6 +64,27 @@ def cjk_count(text: str) -> int:
     return len(_CJK_CHAR.findall(text))
 
 
+_ASCII_LETTER = re.compile(r"[A-Za-z]")
+_OTHER_LETTER = re.compile(rf"[^\W\d_A-Za-z{_CJK}]")
+CJK_LETTER_WEIGHT = 3   # one CJK character carries about as much as three letters of an alphabet
+SCRIPT_SAMPLE = 1000    # characters read to tell a passage's script
+
+
+def script(text: str) -> str:
+    """The writing system most of `text` is in: `CJK` for Chinese, Japanese and Korean together (one family, since
+    their texts mix), else the Unicode script name of the letters (`LATIN`, `CYRILLIC`, `GREEK`, `ARABIC`...), or ""
+    without letters. Search compares meaning scores within a script and weighs exact words by it."""
+    sample = unicodedata.normalize("NFKC", text[:SCRIPT_SAMPLE])
+    counts = {"CJK": CJK_LETTER_WEIGHT * cjk_count(sample), "LATIN": len(_ASCII_LETTER.findall(sample))}
+    for letter in _OTHER_LETTER.findall(sample):
+        name = unicodedata.name(letter, "")
+        if name:
+            first = name.split()[0]
+            counts[first] = counts.get(first, 0) + 1
+    best = max(counts, key=counts.get)
+    return best if counts[best] else ""
+
+
 def fts_pattern(term: str, prefix: bool = False) -> str:
     """An FTS5 pattern for one term: CJK as a phrase of characters, anything else as a quoted token or phrase."""
     if _CJK_RUN.fullmatch(term):

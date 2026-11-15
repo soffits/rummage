@@ -48,7 +48,7 @@ from .query import meaning_vector
 from .limits import describe
 from .secrets import masked_total, shown
 from .sources import available, build, detected, found, load_type
-from .store import Ambiguous, NotFound, Scope, Store
+from .store import Ambiguous, NotFound, Scope, Store, timestamp
 
 
 
@@ -283,16 +283,7 @@ def _fail(args, status: str, code: int, message: str, actions: list[dict] | None
 
 def _item_time(hit: dict) -> float:
     """When a hit is from, for newest-first order: a chat message's or mail's own time, else the item's date."""
-    import datetime as dt
-
-    for value in ((hit.get("info") or {}).get("time"), hit.get("date")):
-        if value:
-            try:
-                when = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-            except ValueError:
-                continue
-            return (when if when.tzinfo else when.astimezone()).timestamp()
-    return 0.0
+    return timestamp((hit.get("info") or {}).get("time")) or timestamp(hit.get("date")) or 0.0
 
 
 def cmd_search(cfg: C.Config, args) -> int:
