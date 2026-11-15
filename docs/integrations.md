@@ -12,7 +12,9 @@ Any agent that can run a command can use rummage: `rummage search "<query>" --js
   `--path`.
 
 The snippets below call `rummage recall` from each tool's prompt hook. Adjust the command path if rummage is not on
-the hook's `PATH`.
+the hook's `PATH`. `recall --hook` follows the documented `UserPromptSubmit` input and output of Claude Code and
+Codex; the OpenCode, Hermes Agent and DeepSeek Harness plugins are short starting points written against those
+tools' plugin docs and have not been run end to end yet.
 
 ## Claude Code
 
