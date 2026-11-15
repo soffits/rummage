@@ -173,3 +173,13 @@ def test_repaired_pdfs_print_nothing(caplog):
     with caplog.at_level(logging.WARNING):
         assert X.pdf_pages(io.BytesIO(broken), Limits.of({}))[1] == 1
     assert [r.getMessage() for r in caplog.records if r.name.startswith("pypdf")] == []
+
+
+def test_aes_encrypted_pdfs_are_read():
+    from pypdf import PdfWriter
+    writer = PdfWriter()
+    writer.add_blank_page(100, 100)
+    writer.encrypt(user_password="", owner_password="owner", algorithm="AES-256")
+    buf = io.BytesIO()
+    writer.write(buf)
+    assert X.pdf_pages(io.BytesIO(buf.getvalue()), Limits.of({}))[1] == 1

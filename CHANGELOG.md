@@ -3,6 +3,7 @@
 ## 0.20.1
 
 - Fixed: indexing a slightly malformed PDF printed pypdf's repair notes ("Ignoring wrong pointing object", "incorrect startxref pointer") on stderr, even with `-q`. The recovered text was always kept; the notes are no longer printed.
+- Fixed: PDFs encrypted with AES (common for fillable government forms that open without a password) failed to read and were left out of the index, name included. pypdf's `crypto` extra (`cryptography`) is now a core dependency.
 
 ## 0.20.0
 
