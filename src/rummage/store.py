@@ -6,6 +6,7 @@ Nothing here is the source of truth; the index can be deleted and built again fr
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import os
@@ -41,7 +42,8 @@ CREATE TABLE IF NOT EXISTS segments (
     loc TEXT,
     text TEXT,
     lines TEXT,
-    input TEXT
+    input TEXT,
+    script TEXT
 );
 CREATE INDEX IF NOT EXISTS segments_item ON segments(item);
 CREATE TABLE IF NOT EXISTS vectors (
@@ -89,6 +91,37 @@ class Segment:
 
 def input_json(embed: tuple[str | None, str] | None) -> str | None:
     return json.dumps(list(embed), ensure_ascii=False) if embed else None
+
+
+def segment_script(kind: str, text: str | None, embed: tuple[str | None, str] | None) -> str:
+    """A text passage's script (`text.script`); media and keyword-only segments have none."""
+    return T.script(text or (embed[1] if embed else "")) if kind == "text" else ""
+
+
+def timestamp(value) -> float | None:
+    """An ISO date or time as a timestamp (a time without zone is local), or None."""
+    if not value:
+        return None
+    try:
+        when = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (when if when.tzinfo else when.astimezone()).timestamp()
+
+
+def item_time(time_value, mtime: float | None) -> float | None:
+    """When an item is from: a chat message's or mail's own time, else the file's modification time."""
+    return timestamp(time_value) or mtime or None
+
+
+@dataclass
+class Vectors:
+    """An index's vectors as search reads them, row by row."""
+    ids: np.ndarray       # segment ids
+    items: np.ndarray     # their items
+    kinds: np.ndarray     # "text", "image"...
+    scripts: np.ndarray   # `text.script` of text passages, "" otherwise
+    matrix: np.ndarray    # float16 rows
 
 
 def text_hash(model_text: str) -> str:
@@ -257,9 +290,11 @@ class Store:
         self.db.execute("PRAGMA synchronous=NORMAL")
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(segments)")}
         self.db.executescript(SCHEMA)
-        for column in ("lines", "input"):
+        for column in ("lines", "input", "script"):
             if columns and column not in columns:
                 self.db.execute(f"ALTER TABLE segments ADD COLUMN {column} TEXT")
+        if columns and "script" not in columns:
+            _fill_scripts(self.db)
         if "vector" in columns:
             _migrate_single_model(self.db)
         self.db.execute("CREATE INDEX IF NOT EXISTS segments_input ON segments(id) WHERE input IS NOT NULL")
@@ -362,8 +397,9 @@ class Store:
         title = T.for_index(item.title or "")
         for seg in segments:
             seg_id = self.db.execute(
-                "INSERT INTO segments(item, kind, loc, text, lines, input) VALUES(?, ?, ?, ?, ?, ?)",
-                (item_id, seg.kind, seg.loc, seg.text, seg.lines, input_json(seg.embed))).lastrowid
+                "INSERT INTO segments(item, kind, loc, text, lines, input, script) VALUES(?, ?, ?, ?, ?, ?, ?)",
+                (item_id, seg.kind, seg.loc, seg.text, seg.lines, input_json(seg.embed),
+                 segment_script(seg.kind, seg.text, seg.embed))).lastrowid
             for model, vector in seg.vectors.items():
                 self.db.execute("INSERT INTO vectors(segment, model, vector, hash) VALUES(?, ?, ?, ?)",
                                 (seg_id, model, np.asarray(vector, np.float16).tobytes(), seg.hashes.get(model)))
@@ -373,19 +409,31 @@ class Store:
 
     # what search reads
 
-    def vectors(self, scope: Scope, model: str | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Every vector of `model` (default: the active one) in scope: segment ids, their items, their kinds, and the
-        vectors (float16 rows)."""
+    def vectors(self, scope: Scope, model: str | None = None) -> Vectors:
+        """Every vector of `model` (default: the active one) in scope."""
         where, args = scope.where()
         rows = self.db.execute(
-            f"SELECT s.id, s.item, s.kind, v.vector FROM vectors v JOIN segments s ON s.id = v.segment "
-            f"JOIN items i ON i.id = s.item WHERE v.model = ?{where} ORDER BY s.id",
+            f"SELECT s.id, s.item, s.kind, COALESCE(s.script, ''), v.vector FROM vectors v "
+            f"JOIN segments s ON s.id = v.segment JOIN items i ON i.id = s.item WHERE v.model = ?{where} ORDER BY s.id",
             [model or self.model, *args]).fetchall()
-        dim = len(rows[0][3]) // 2 if rows else 0
-        matrix = (np.frombuffer(b"".join(r[3] for r in rows), np.float16).reshape(len(rows), dim) if rows
+        dim = len(rows[0][4]) // 2 if rows else 0
+        matrix = (np.frombuffer(b"".join(r[4] for r in rows), np.float16).reshape(len(rows), dim) if rows
                   else np.zeros((0, 0), np.float16))
-        return (np.array([r[0] for r in rows], np.int64), np.array([r[1] for r in rows], np.int64),
-                np.array([r[2] for r in rows]), matrix)
+        return Vectors(np.array([r[0] for r in rows], np.int64), np.array([r[1] for r in rows], np.int64),
+                       np.array([r[2] for r in rows]), np.array([r[3] for r in rows]), matrix)
+
+    def times(self, items: list[int]) -> dict[int, float]:
+        """When each item is from, as a timestamp: a chat message's or mail's own time, else the file's
+        modification time. Items with neither are left out."""
+        found: dict[int, float] = {}
+        for start in range(0, len(items), 500):
+            part = items[start:start + 500]
+            for item, mtime, info in self.db.execute(
+                    f"SELECT id, mtime, info FROM items WHERE id IN ({','.join('?' * len(part))})", part):
+                when = item_time(json.loads(info or "{}").get("time"), mtime)
+                if when:
+                    found[item] = when
+        return found
 
     def match_words(self, pattern: str, scope: Scope, limit: int = 2000) -> list[tuple[int, int]]:
         """Items whose segments match an FTS5 `pattern`, best first, each with its best segment."""
@@ -760,6 +808,17 @@ def _migrate_single_model(db: sqlite3.Connection) -> None:
         db.execute("UPDATE meta SET key = ? WHERE key = 'reference'", (f"reference:{version}",))
     db.execute("DELETE FROM meta WHERE key = 'vector_version'")
     db.commit()
+
+
+def _fill_scripts(db: sqlite3.Connection) -> None:
+    """Sets the script of every segment of an index made before segments had one."""
+    last = -1
+    while rows := db.execute("SELECT id, kind, text, input FROM segments WHERE id > ? ORDER BY id LIMIT 5000",
+                             (last,)).fetchall():
+        db.executemany("UPDATE segments SET script = ? WHERE id = ?",
+                       [(segment_script(kind, text, tuple(json.loads(raw)) if raw else None), seg)
+                        for seg, kind, text, raw in rows])
+        last = rows[-1][0]
 
 
 def _stitch(text: str, piece: str, longest: int = 400) -> str:

@@ -95,6 +95,8 @@ VARIANTS = {
     "cosine-only": {"words": False, "zscore": False, "gate": False},
     "words-only": {"meaning": False},
     "no-cjk-pairs": {"cjk_pairs": False},
+    "no-scripts": {"scripts": False},
+    "no-recency": {"recency": 0.0},
 }
 
 
