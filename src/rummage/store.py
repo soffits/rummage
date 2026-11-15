@@ -138,18 +138,80 @@ def item_id(source: str, key: str) -> str:
     return hashlib.sha1(f"{source}\0{key}".encode("utf-8")).hexdigest()[:10]
 
 
+def _starts(expr: str, prefix: str, sep: str) -> tuple[str, list]:
+    """`expr` is `prefix` or lies under it (case-sensitive, unlike LIKE)."""
+    return f"({expr} = ? OR substr({expr}, 1, ?) = ?)", [prefix, len(prefix) + 1, prefix + sep]
+
+
+@dataclass
+class Within:
+    """The part of the index a scope sees: whole `sources`, `parts` of folder sources (source, folder relative to
+    its root; "" for all of it), and items recorded in one of the `folders` (a chat's project folder, absolute and
+    normalised as `folder_key` makes them). `everything` sees all of it. `hidden` sources are never seen."""
+    everything: bool = False
+    sources: list[str] = field(default_factory=list)
+    parts: list[tuple[str, str]] = field(default_factory=list)
+    folders: list[str] = field(default_factory=list)
+    hidden: list[str] = field(default_factory=list)
+
+    def where(self, alias: str) -> tuple[list[str], list]:
+        clauses, args = [], []
+        if not self.everything:
+            seen, more = [], []
+            if self.sources:
+                seen.append(f"{alias}.source IN ({','.join('?' * len(self.sources))})")
+                more += self.sources
+            for source, rel in self.parts:
+                if not rel:
+                    seen.append(f"{alias}.source = ?")
+                    more.append(source)
+                    continue
+                inside, inside_args = _starts(f"{alias}.ref", rel, "/")
+                seen.append(f"({alias}.source = ? AND {inside})")
+                more += [source, *inside_args]
+            project = folder_expr(f"json_extract({alias}.info, '$.project')")
+            for folder in self.folders:
+                inside, inside_args = _starts(project, folder, os.sep)
+                seen.append(inside)
+                more += inside_args
+            clauses.append("(" + (" OR ".join(seen) or "0") + ")")
+            args += more
+        if self.hidden:
+            clauses.append(f"{alias}.source NOT IN ({','.join('?' * len(self.hidden))})")
+            args += self.hidden
+        return clauses, args
+
+
+def folder_key(path: str | os.PathLike) -> str:
+    """A folder as scopes compare it: absolute, links resolved, in the platform's case and separators."""
+    return os.path.normcase(str(Path(os.path.expanduser(str(path))).resolve()))
+
+
+def folder_expr(expr: str) -> str:
+    """SQL that normalises a recorded folder the way `folder_key` does (case and separators on Windows)."""
+    return f"lower(replace({expr}, '/', '\\'))" if os.name == "nt" else expr
+
+
 @dataclass
 class Scope:
     """Which items a search looks at: `sources`, refs starting with one of `paths` (a folder or file), refs
-    matching one of `globs` (`*` crosses folders, as in SQLite's GLOB). Empty means no limit."""
+    matching one of `globs` (`*` crosses folders, as in SQLite's GLOB), and the part `within` a scope sees. Empty
+    means no limit."""
     sources: list[str] | None = None
     paths: list[str] | None = None
     globs: list[str] | None = None
     since: float | None = None     # item time (a chat message's time, a mail's date, a file's change, or the
     until: float | None = None     # period a dated note's path names) from `since` and before `until`
+    within: Within | None = None
+    session: str | None = None     # only this chat session's turns
 
     def where(self, alias: str = "i") -> tuple[str, list]:
         clauses, args = [], []
+        if self.within is not None:
+            clauses, args = self.within.where(alias)
+        if self.session is not None:
+            clauses.append(f"json_extract({alias}.info, '$.session') = ?")
+            args.append(self.session)
         if self.sources:
             clauses.append(f"{alias}.source IN ({','.join('?' * len(self.sources))})")
             args += self.sources
@@ -247,6 +309,17 @@ class Store:
         self.db.execute("DELETE FROM source_state WHERE source = ?", (source,))
         self.db.commit()
         return len(keys)
+
+    def drop_where(self, scope: Scope) -> dict[str, int]:
+        """Removes the items `scope` selects; how many per source."""
+        where, args = scope.where("i")
+        found = self.db.execute(f"SELECT i.source, i.key FROM items i WHERE 1{where}", args).fetchall()
+        counts: dict[str, int] = {}
+        for source, key in found:
+            self.remove(source, key)
+            counts[source] = counts.get(source, 0) + 1
+        self.db.commit()
+        return counts
 
     def fingerprints(self, source: str) -> dict[str, str | None]:
         return dict(self.db.execute("SELECT key, fingerprint FROM items WHERE source = ?", (source,)))
@@ -541,17 +614,16 @@ class Store:
                 "ref": ref, "mtime": mtime, "info": json.loads(info or "{}"), "loc": loc,
                 "lines": segments[0][3] if loc is not None and segments else None, "text": text}
 
-    def recent(self, since: float, sources: list[str] | None = None, exclude_sessions: list[str] | None = None,
+    def recent(self, since: float, scope: Scope | None = None, exclude_sessions: list[str] | None = None,
                limit: int = 50) -> list[dict]:
         """Items from `since` (epoch seconds) on, newest first: chat turns and changed files alike."""
-        where, args = "", [since]
-        if sources:
-            where += f" AND source IN ({','.join('?' * len(sources))})"
-            args += list(sources)
+        where, args = (scope or Scope()).where("i")
+        args = [since, *args]
         out = []
         for row, source, key, kind, title, ref, mtime, info in self.db.execute(
-                f"SELECT id, source, key, kind, title, ref, mtime, info FROM items WHERE mtime >= ?{where} "
-                f"ORDER BY mtime DESC LIMIT ?", [*args, limit * 4]):
+                f"SELECT i.id, i.source, i.key, i.kind, i.title, i.ref, i.mtime, i.info FROM items i "
+                f"WHERE i.mtime >= ?{where} "
+                f"ORDER BY i.mtime DESC LIMIT ?", [*args, limit * 4]):
             info = json.loads(info or "{}")
             if exclude_sessions and info.get("session") in exclude_sessions:
                 continue

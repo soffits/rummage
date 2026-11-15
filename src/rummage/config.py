@@ -21,10 +21,18 @@
     idle_minutes = 20                         # a query daemon a search starts exits after this long unused;
                                               # 0: searches don't start one
 
+    # default_scope = "all"                   # what a query from a folder no scope covers sees (or a scope name)
+    # project_scopes = true                   # a git repo a query runs in is a scope of its own
+
     [sources.notes]
     type = "files"
     root = "~/Documents"
     # enabled = false                         # keep the settings but don't index it
+    # local = true                            # seen only by queries from inside its root (a project's own files)
+
+    # [scopes.home]                           # queries from these folders see these whole sources, plus whatever
+    # dirs = ["~/assistant"]                  # lies under the folders (files there, chats held there)
+    # sources = ["*"]
 
 Sources of another program's history (agent sessions) are never indexed unless a section for them is present and
 not disabled; `rummage sources enable <name>` writes one.
@@ -53,6 +61,9 @@ class Config:
     model: str = DEFAULT_MODEL
     models: dict[str, dict] = field(default_factory=dict)
     sources: dict[str, dict] = field(default_factory=dict)
+    scopes: dict[str, dict] = field(default_factory=dict)
+    default_scope: str = "all"
+    project_scopes: bool = True
 
     @property
     def index_path(self) -> Path:
@@ -104,6 +115,9 @@ def load(path: Path | None = None) -> Config:
         model=(data.get("embedder") or {}).get("model") or DEFAULT_MODEL,
         models=dict(data.get("models", {})),
         sources=dict(data.get("sources", {})),
+        scopes=dict(data.get("scopes", {})),
+        default_scope=str(data.get("default_scope", "all")),
+        project_scopes=data.get("project_scopes", True) is not False,
     )
 
 
