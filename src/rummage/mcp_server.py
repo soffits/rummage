@@ -64,7 +64,7 @@ def build(cfg: C.Config):
             store.check_version()
             index_empty = store.item_count() == 0
             vector = None if words_only or index_empty else query_vector(query)
-            hits = Searcher(store.db, sources, paths, globs).search(query, vector, limit=limit)
+            hits = Searcher(store, sources, paths, globs).search(query, vector, limit=limit)
         finally:
             store.close()
         args = SimpleNamespace(query=query, limit=limit, source=sources, kind=None, words_only=words_only,

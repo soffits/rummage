@@ -138,7 +138,7 @@ def recall(cfg: C.Config, query: str, sources: list[str] | None, paths: list[str
     try:
         if store.vector_version != R.VECTOR_VERSION:
             return [], "none", 0
-        searcher = Searcher(store.db, sources, paths)
+        searcher = Searcher(store, sources, paths)
         hits = searcher.search(query, vector, limit=limit)
         count = searcher.vector_count()
     finally:

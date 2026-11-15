@@ -123,7 +123,7 @@ def index_source(store: Store, source: Source, embedders: Embedders, log, warn, 
             store.commit()
             counts["updated" if item.key in known else "added"] += 1
         except Exception as error:  # one unreadable item must not sink the run
-            store.db.rollback()
+            store.rollback()
             counts["failed"] += 1
             warn(f"{source.name}: {item.key}: {type(error).__name__}: {error}")
             if counts["failed"] <= 3:

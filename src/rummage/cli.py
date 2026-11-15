@@ -9,6 +9,7 @@
     rummage sources                list the installed source types (core and plugins)
     rummage recall [PROMPT]        cited context for an agent's prompt hook, silent when nothing matches
     rummage watch                  keep the index current as files change
+    rummage service install        run watch at login under systemd, launchd or Task Scheduler
     rummage recent --minutes 30    the latest chat turns and changed files, newest first
     rummage sources enable codex   switch on a source found on this machine (agent histories are off by default)
     rummage mcp                    a stdio MCP server (search, get, status) for MCP-only agents
@@ -130,7 +131,7 @@ def _read_sources(cfg, store, names, embedders, args, deadline, log, report, fai
             counts = index_source(store, source, embedders, log, _eprint, limit=args.limit, deadline=deadline,
                                   reload=args.reload)
         except Exception as error:
-            store.db.rollback()
+            store.rollback()
             store.finish_run(run, False, {}, f"{type(error).__name__}: {error}")
             failures.append(f"{name}: {type(error).__name__}: {error}")
             _eprint(f"{name}: failed: {type(error).__name__}: {error}")
@@ -201,7 +202,7 @@ def cmd_search(cfg: C.Config, args) -> int:
                 if vector is None:
                     with R.embedder(_runtime(cfg), media=False, threads=cfg.threads, nice=0) as e:
                         vector = e.query(args.query)
-            searcher = Searcher(store.db, local_sources, args.path, args.glob)
+            searcher = Searcher(store, local_sources, args.path, args.glob)
             hits += [_show(cfg, args, h.as_dict()) for h in searcher.search(
                 args.query, vector, limit=args.limit, kinds=set(args.kind) if args.kind else None)]
             pending = store.pending_count(local_sources)
@@ -428,6 +429,48 @@ def cmd_recent(cfg: C.Config, args) -> int:
     return 0
 
 
+def cmd_service(cfg: C.Config, args) -> int:
+    from . import service
+
+    config = cfg.path.resolve()
+    if args.action == "show":
+        print(service.show(config, cfg.log_dir))
+    elif args.action == "install":
+        service.install(config, cfg.log_dir)
+        print("rummage watch now runs at login and restarts if it stops (`rummage service show` prints the unit)")
+    else:
+        service.uninstall(cfg.log_dir)
+        print("removed")
+    return 0
+
+
+def cmd_export(cfg: C.Config, args) -> int:
+    from .exchange import export
+
+    store = Store(cfg.index_path)
+    try:
+        manifest = export(store, Path(args.folder))
+    finally:
+        store.close()
+    print(f"exported {manifest['items']} items, {manifest['vectors']} vectors to {args.folder}")
+    return 0
+
+
+def cmd_import(cfg: C.Config, args) -> int:
+    from .exchange import load
+
+    store = Store(cfg.index_path)
+    try:
+        manifest = load(store, Path(args.folder))
+    except ValueError as error:
+        _eprint(error)
+        return 1
+    finally:
+        store.close()
+    print(f"imported {manifest['items']} items, {manifest['vectors']} vectors")
+    return 0
+
+
 def cmd_recall(cfg: C.Config, args) -> int:
     from .recall import run
 
@@ -633,9 +676,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_recall)
 
+    p = sub.add_parser("service", help="run `rummage watch` under the OS supervisor (systemd, launchd, Task Scheduler)")
+    p.add_argument("action", choices=["show", "install", "uninstall"])
+    p.set_defaults(func=cmd_service)
+
+    p = sub.add_parser("export", help="write the index as plain files (rummage.export.v1), vectors included")
+    p.add_argument("folder", help="a new folder to write")
+    p.set_defaults(func=cmd_export)
+
+    p = sub.add_parser("import", help="fill an empty index from an export, without embedding again")
+    p.add_argument("folder")
+    p.set_defaults(func=cmd_import)
+
     p = sub.add_parser("watch", help="keep the index current as files change")
     p.add_argument("-s", "--source", action="append", help="only this source (repeatable)")
-    p.add_argument("--poll-minutes", type=float, default=10, help="how often to re-plan sources that aren't folders")
+    p.add_argument("--poll-minutes", type=float, default=10, help="how often to re-plan every source (those without watched folders only get this)")
     p.add_argument("--settle-seconds", type=float, default=3, help="wait for changes to settle before indexing")
     p.set_defaults(func=cmd_watch)
 

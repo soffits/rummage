@@ -49,5 +49,20 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
   model, say), the same messages land in both sources. Collapse hits whose person text is nearly the same and whose
   times are minutes apart into one hit with the other refs as aliases; `get` shows both.
 - **OpenCode 1.x databases** (`session`, `message`, `part` tables) and its older JSON `storage/` folder.
-- **Storage seam** (planned next): one storage interface with SQLite as the only backend, `rummage export` /
-  `import` in a versioned engine-neutral format, and `docs/backends.md` on what a Postgres/pgvector backend needs.
+
+## Next ideas, in this order unless benchmarks say otherwise
+
+Same rules as everything else: general, any language family, sources opt-in where they read someone's private
+data, tests.
+
+1. **Mail source:** IMAP and local Maildir/mbox, opt-in per account; attachments' text through the `files`
+   extractors.
+2. **`rummage dupes` / `rummage conflicts`:** near-duplicate passages across notes, and likely contradictions (same
+   subject, different facts, dates or numbers), as a report an upkeep job can work through.
+3. **Time-aware queries:** read "last Wednesday", "in October" and their equivalents in other languages into a
+   date filter and a recency boost.
+4. **Person view:** `rummage about <name or alias>`, everything that mentions a person across sources as a
+   timeline.
+5. **Audio and video:** a source that transcribes with a local whisper.cpp and indexes the transcript with times.
+6. **Per-token scopes in `serve`:** each API token sees only its own sources, so two homes can share one server.
+7. Small: implicit feedback (a `get` right after a `search` counts for that result) to tune ranking.

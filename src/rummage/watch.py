@@ -5,7 +5,8 @@ folder, a database's folder); those are watched for file events (with the `watch
 seconds), and other sources are re-planned on an interval. A batch of changes is read into keyword search at once
 (`rummage index --no-embed`, which waits for a run already reading and is retried if it still can't get in), so it
 is searchable by its words within seconds; vectors are made by one background `rummage index --embed-only` that
-runs while any are missing.
+runs while any are missing. Every `--poll-minutes` all sources are re-planned, the watched ones too, in case an
+event was missed.
 """
 
 from __future__ import annotations
@@ -118,9 +119,9 @@ def run(cfg: C.Config, names: list[str], poll_minutes: float, settle_seconds: fl
     def batch(touched: set[str]) -> None:
         nonlocal next_poll
         due = time.monotonic() >= next_poll
-        if due:
+        if due:  # every source, watched ones too, in case an event was missed
             next_poll = time.monotonic() + poll_minutes * 60
-        runner.read(touched | (set(others) if due else set()))
+        runner.read(touched | (set(names) if due else set()))
         runner.tick()
 
     def owner(path: str) -> str | None:

@@ -85,6 +85,8 @@ rummage recent --minutes 30          # the latest chat turns and changed files, 
 rummage status --json      # counts, last run per source, failures
 rummage doctor             # runtime files, vector version, freshness; exit 1 on a problem
 rummage watch              # index changes as they happen (install the `watch` extra for file events)
+rummage service install    # run watch at login: systemd user unit, launchd agent or Windows scheduled task
+rummage export DIR         # the index as plain files; `rummage import DIR` fills an empty index from them
 rummage daemon --idle-minutes 30   # keep the query model loaded; searches use it automatically
 rummage serve --token-file F --reindex-minutes 60   # HTTP search API for an index kept on a server
 ```

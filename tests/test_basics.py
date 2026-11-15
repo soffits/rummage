@@ -89,7 +89,7 @@ def test_hybrid_search_meaning_and_words(tmp_path):
                   [Segment("text", f"filler text number {n}" + (" invoice K7Q2LM" if n == 33 else ""), loc="0",
                            vector=vec)])
     store.commit()
-    searcher = Searcher(store.db)
+    searcher = Searcher(store)
     hits = searcher.search("anything", target, limit=3)
     assert hits[0].ref == "ref7" and hits[0].z > 2
     hits = searcher.search("K7Q2LM", _vec(999), limit=3)
@@ -169,7 +169,7 @@ def test_path_and_glob_scoping(tmp_path):
     for key in ("housing/lease.pdf", "housing/notes.md", "health/lease-of-life.md", "housing_old/lease.pdf"):
         store.put(Item("docs", key, "file", key, key), [Segment("text", "the lease says cats are fine", loc="0")])
     store.commit()
-    refs = lambda **kw: sorted(h.ref for h in Searcher(store.db, **kw).search("lease cats", None, limit=10))
+    refs = lambda **kw: sorted(h.ref for h in Searcher(store, **kw).search("lease cats", None, limit=10))
     assert refs(paths=["housing"]) == ["housing/lease.pdf", "housing/notes.md"]
     assert refs(globs=["*.pdf"]) == ["housing/lease.pdf", "housing_old/lease.pdf"]
     assert refs(paths=["housing/"], globs=["*.md"]) == ["housing/notes.md"]
@@ -182,6 +182,6 @@ def test_tiny_index_still_finds_by_meaning(tmp_path):
     for n, vec in enumerate([target, _vec(6), _vec(7)]):
         store.put(Item("s", f"k{n}", "note", f"n{n}", f"r{n}"), [Segment("text", f"words {n}", loc="0", vector=vec)])
     store.commit()
-    hits = Searcher(store.db).search("query with no shared words", target, limit=3)
+    hits = Searcher(store).search("query with no shared words", target, limit=3)
     assert hits and hits[0].ref == "r0"
     store.close()
