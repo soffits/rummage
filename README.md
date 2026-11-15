@@ -233,7 +233,9 @@ folder.
 
 What a query sees depends on where it runs. Inside a git repository it sees that project: its own files and the
 chats held in it, not your notes on another drive. A hook that passes its working folder adds a new repository to
-memory by itself (the files git keeps, minus anything that holds keys) and reads it in the background. A
+memory by itself (the files git keeps, minus anything that holds keys) and reads it in the background. A repository
+nothing reads yet is not a scope: a search there sees the default scope and says that `rummage project ensure` adds
+the repository. A
 `[scopes.<name>]` table gives a folder, such as an assistant's home, a wider view:
 
 ```toml

@@ -162,7 +162,7 @@ def test_git_worktrees_share_one_project_scope(tmp_path):
     (linked / ".git").write_text(f"gitdir: {main_repo / '.git' / 'worktrees' / 'feature'}\n")
     (main_repo / ".git" / "worktrees" / "feature" / "commondir").write_text("../..\n")
     (main_repo / ".git" / "worktrees" / "feature" / "gitdir").write_text(str(linked / ".git") + "\n")
-    cfg = C.load(_config(tmp_path))
+    cfg = C.load(_config(tmp_path, f"[sources.repo]\ntype = 'files'\nroot = '{main_repo}'\n"))
     scope = S.resolve(cfg, linked)
     assert scope.kind == "project" and scope.folder == folder_key(main_repo)
     assert scope.folders == [folder_key(main_repo), folder_key(linked)]
@@ -301,3 +301,24 @@ def test_dsh_turns_record_the_session_folder(tmp_path):
 
 def test_folder_keys_compare_in_the_platform_form(tmp_path):
     assert folder_key(tmp_path / "a" / ".." / "b") == os.path.normcase(str((tmp_path / "b").resolve()))
+
+
+@needs_git
+def test_search_from_a_repo_nothing_reads_sees_the_default_scope_and_says_so(tmp_path, capsys):
+    repo = _repo(tmp_path / "app")
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes" / "lease.md").write_text("The lease allows one dog with written consent.\n")
+    cfg = _config(tmp_path, f"[sources.notes]\ntype = 'files'\nroot = '{tmp_path / 'notes'}'\n")
+    assert main(["--config", str(cfg), "index", "--no-embed", "-q"]) == 0
+    capsys.readouterr()
+    assert main(["--config", str(cfg), "search", "lease cat", "--words-only", "--json", "--cwd", str(repo)]) == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert [r["ref"] for r in doc["results"]] == ["lease.md"]
+    assert doc["scope"]["kind"] == "all" and "isn't indexed" in doc["scope"]["note"]
+    assert {"intent": "add_project", "command": ["rummage", "project", "ensure"]}.items() <= \
+        next(a for a in doc["next_actions"] if a["intent"] == "add_project").items()
+    main(["--config", str(cfg), "search", "lease cat", "--words-only", "--cwd", str(repo)])
+    assert "rummage project ensure" in capsys.readouterr().out
+
+    ensure(C.load(cfg), repo, start=False)    # once something reads the repo, it is a scope of its own
+    assert S.resolve(C.load(cfg), repo).kind == "project"

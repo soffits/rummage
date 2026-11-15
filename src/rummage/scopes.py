@@ -6,8 +6,9 @@ source whose root covers them, chat turns recorded in them) and, for a configure
 From a query's folder (an agent's working directory), the deepest of these wins:
 
 - a configured scope (`[scopes.<name>]` with `dirs` and `sources`) whose folder holds it;
-- a project: the git repository holding it (one scope for the repo and its worktrees), or the root of a `local`
-  source holding it; a configured scope at the same depth wins over a project;
+- a project: the git repository holding it (one scope for the repo and its worktrees) when a source reads files in
+  it, or the root of a `local` source holding it; a configured scope at the same depth wins over a project. A
+  repository nothing reads yet is no scope: the query falls through to the default and says how to add it;
 - otherwise `default_scope`: `"all"` (everything) or a configured scope's name.
 
 `local = true` sources (a project's own files) are seen only by queries from inside their root, whatever the scope;
@@ -34,6 +35,7 @@ class Resolved:
     folder: str | None           # the folder that decided it
     within: Within | None        # None: no filter at all
     folders: list[str]
+    note: str | None = None      # something the person should know about how the scope was picked
 
     def describe(self) -> dict:
         out: dict = {"name": self.name, "kind": self.kind, "folder": self.folder}
@@ -41,16 +43,23 @@ class Resolved:
             out["sources"] = self.within.sources
             out["folders"] = self.folders
             out["hidden_sources"] = self.within.hidden
+        if self.note:
+            out["note"] = self.note
         return out
 
     def limited(self) -> bool:
         """Whether the query saw only part of the index."""
         return self.within is not None and not (self.within.everything and not self.within.hidden)
 
+    def worth_saying(self) -> bool:
+        """Whether text output should say what this query saw: it saw part of the index, or the scope has a note."""
+        return self.limited() or bool(self.note)
+
     def line(self) -> str:
         """One sentence for text output: what this query saw and how to see more."""
+        note = f" ({self.note})" if self.note else ""
         if self.kind == "everything":
-            return "scope: everything (--all)"
+            return "scope: everything (--all)" + note
         label = {"all": "all", "scope": f"scope {self.name}", "project": f"project {self.name}"}[self.kind]
         within = self.within
         if within.everything:
@@ -60,7 +69,8 @@ class Resolved:
             if within.sources:
                 what += " and the sources " + ", ".join(within.sources)
         hidden = f"; other folders' own files left out ({', '.join(within.hidden)})" if within.hidden else ""
-        return f"scope: {label}: {what}{hidden}; --all for everything"
+        widen = "; --all for everything" if self.limited() else ""
+        return f"scope: {label}: {what}{hidden}{widen}{note}"
 
 
 def _under(path: str, folder: str) -> bool:
@@ -112,6 +122,11 @@ def local_sources(cfg: C.Config) -> dict[str, str]:
     return {name: roots[name] for name, spec in cfg.sources.items() if spec.get("local") and name in roots}
 
 
+def read_by_a_source(cfg: C.Config, folders: list[str]) -> bool:
+    """Whether some source reads files in any of `folders` (its root holds one of them or lies inside one)."""
+    return any(_under(folder, root) or _under(root, folder) for root in source_roots(cfg).values() for folder in folders)
+
+
 def within(cfg: C.Config, folders: list[str], patterns: list[str], here: str | None) -> Within:
     """What a scope over `folders` (normalised) that also sees the sources matching `patterns` sees from `here`."""
     hidden = [name for name, root in local_sources(cfg).items() if here is None or not _under(here, root)]
@@ -136,6 +151,7 @@ def resolve(cfg: C.Config, cwd: str | os.PathLike | None, everything: bool = Fal
     if everything:
         return Resolved(ALL, "everything", None, None, [])
     here = folder_key(cwd) if cwd else None
+    unindexed: str | None = None
     best: tuple[int, int, str, str, str, list[str], list[str]] | None = None   # depth, rank, kind, name, folder...
 
     def consider(kind: str, name: str, folder: str, folders: list[str], patterns: list[str], rank: int) -> None:
@@ -152,17 +168,21 @@ def resolve(cfg: C.Config, cwd: str | os.PathLike | None, everything: bool = Fal
                     consider("scope", name, folder, dirs, list(spec.get("sources") or []), 1)
         if cfg.project_scopes:
             repo = [folder_key(f) for f in repo_folders(Path(here))]
-            if repo:
+            if repo and read_by_a_source(cfg, repo):
                 consider("project", Path(repo[0]).name, repo[0], repo, [], 0)
+            elif repo:
+                unindexed = repo[0]
         for name, root in local_sources(cfg).items():
             if _under(here, root):
                 consider("project", Path(root).name, root, [root], [], 0)
     if best is None:
+        note = (f"{unindexed} isn't indexed, so this searched the default scope; `rummage project ensure` adds it"
+                if unindexed else None)
         spec = cfg.scopes.get(cfg.default_scope)
         if spec is None:
-            return Resolved(ALL, "all", None, within(cfg, [], ["*"], here), [])
+            return Resolved(ALL, "all", None, within(cfg, [], ["*"], here), [], note)
         dirs = [folder_key(d) for d in spec.get("dirs") or []]
         return Resolved(cfg.default_scope, "scope", None, within(cfg, dirs, list(spec.get("sources") or []), here),
-                        dirs)
+                        dirs, note)
     _, _, kind, name, folder, folders, patterns = best
     return Resolved(name, kind, folder, within(cfg, folders, patterns, here), folders)
