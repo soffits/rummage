@@ -47,6 +47,10 @@ def show_secrets_command(argv: list[str]) -> list[str]:
 def note_scope(doc: dict, scope: dict, line: str, limited: bool, argv: list[str]) -> dict:
     """Says which scope the query saw and, when it saw only part of the index, the command that sees all of it."""
     doc["scope"] = scope
+    if scope.get("note"):
+        doc.setdefault("next_actions", []).append(
+            {"intent": "add_project", "reason": scope["note"][0].upper() + scope["note"][1:] + ".",
+             "command": ["rummage", "project", "ensure"]})
     if limited:
         doc.setdefault("next_actions", []).append(
             {"intent": "widen_scope", "reason": line[0].upper() + line[1:] + ".", "command": ["rummage", *argv, "--all"]})
