@@ -32,6 +32,7 @@ from pathlib import Path
 from . import config as C
 from . import daemon as D
 from . import envelope as E
+from . import net
 from . import runtime as R
 from . import text as T
 from .indexer import Busy, Embedders, embed_pending, index_source, lock

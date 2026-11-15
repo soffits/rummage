@@ -15,6 +15,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path, PurePosixPath
 
+from rummage import net
 from rummage import extract as X
 from rummage import text as T
 from rummage.runtime import document_text
@@ -48,7 +49,7 @@ class HTTPRangeFile(io.RawIOBase):
             start = index * self.block
             end = min(self.size, start + self.block) - 1
             request = urllib.request.Request(self.url, headers={**self.headers, "Range": f"bytes={start}-{end}"})
-            with urllib.request.urlopen(request, timeout=120) as r:
+            with net.urlopen(request, timeout=120) as r:
                 if r.status != 206:
                     raise OSError("the server ignored the Range header")
                 self._cache[index] = r.read()
@@ -90,7 +91,7 @@ class SeafileSource(Source):
     def _api(self, path: str, **params) -> object:
         query = ("?" + urllib.parse.urlencode(params)) if params else ""
         request = urllib.request.Request(self.url + path + query, headers=self.headers)
-        with urllib.request.urlopen(request, timeout=120) as r:
+        with net.urlopen(request, timeout=120) as r:
             return json.load(r)
 
     def _internal(self, url: str) -> str:
@@ -165,7 +166,7 @@ class SeafileSource(Source):
             segments.append(Segment("text", X.names_text(names), loc="names"))
             item.info["entries"] = len(names)
             return segments
-        with urllib.request.urlopen(urllib.request.Request(url), timeout=300) as r:
+        with net.urlopen(urllib.request.Request(url), timeout=300) as r:
             data = r.read(limit + 1)
         if kind == "text":
             body = X.decode(data)
