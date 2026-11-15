@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0
 
 - `rummage watch` waits for a folder to be quiet for `--settle-seconds` before reading it (at most four times that while it keeps changing), instead of reading a constantly written chat log every few seconds.
 - `rummage sources` no longer offers a found agent history whose type is already configured under another name.
