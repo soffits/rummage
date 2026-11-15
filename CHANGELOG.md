@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `mail` source: a Maildir, an mbox or an IMAP account, read-only (IMAP folders opened with EXAMINE, bodies fetched with BODY.PEEK, so nothing is marked read). One item per message with subject, sender, recipients and date; the plain-text body (or the HTML's text) and the text of attached documents are searchable. IMAP resumes by UID; `since` limits how far back it reads.
 - One chat message recorded by two sources (a harness that runs another agent as its model, say) is one search hit: messages with the same text, notices in front aside, within 10 minutes of each other collapse, and the hit lists the other records in `also`; `get` shows them too. Chat items index this as `info.said`; run `rummage index --reload` once for chat sources indexed before (vectors are reused).
 - `[embedder] url`: index with a `llama-server` on another machine (a GPU box running the same pinned model) while it answers and its reference vectors agree with the index's (cosine ≥ 0.999); otherwise this machine's runtime does it. `doctor` reports whether the remote one agrees.
 - `[runtime] max_threads` (a number, or `"auto"` for cores − 1): while indexing, use more llama.cpp threads while the machine's other work leaves cores idle, and drop back to `threads` when it doesn't; checked every minute (POSIX load average; elsewhere `threads` is kept).
