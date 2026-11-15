@@ -75,6 +75,8 @@ against itself reproduces the original thresholds within 0.004 on a real index.
 
 `rummage models compare <name>` runs the same probe search on a sample of the index (1000 passages, 150 probes, by
 meaning alone) before any switch, and with `--public` also BEIR SciFact's test queries (nDCG@10, recall@10, MRR@10).
+The candidate's vectors made for the sample stay in the index, so a switch right after doesn't make them again; the
+next run drops them if no switch follows.
 
 ## Data
 

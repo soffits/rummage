@@ -346,3 +346,19 @@ def test_an_openai_compatible_endpoint(tmp_path):
         assert not e.media
     finally:
         server.shutdown()
+
+
+def test_compare_on_own_data_keeps_the_candidates_vectors_for_a_switch(tmp_path):
+    from rummage import compare
+
+    store, source, old, _ = _setup(tmp_path)
+    new = _new()
+    out = compare.own_data(store, {"current": PROFILE, "candidate": new.profile},
+                           {"current": old.model, "candidate": new.model}, probes=20, passages=40, log=print)
+    assert out["probes"] == 20 and out["candidate"]["hit@10"] > 0.5 and out["current"]["hit@10"] > 0.5
+    kept = store.models()[new.version]
+    assert kept >= 20
+    switch.reconcile(store, SMALL, "small")
+    passages = store.db.execute("SELECT count(*) FROM segments WHERE input IS NOT NULL").fetchone()[0]
+    assert store.pending_count(new.version) == passages - kept
+    store.close()

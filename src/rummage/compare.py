@@ -22,7 +22,7 @@ import numpy as np
 from . import calibrate as K
 from . import net
 from .models import Profile
-from .store import Store
+from .store import Store, text_hash
 
 SCIFACT = ("https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip", 2_816_079,
            "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165")
@@ -76,9 +76,14 @@ def own_data(store: Store, profiles: dict[str, Profile], embedders: dict[str, ob
         missing = [seg for seg in segments if seg not in stored]
         if missing:
             texts = {seg: text for seg, _, text in corpus}
-            made = _embed(embedders[name], [profile.document_text(*(inputs.get(seg) or (None, texts[seg])))
-                                            for seg in missing], log, f"{name} passages")
+            written = [profile.document_text(*(inputs.get(seg) or (None, texts[seg]))) for seg in missing]
+            made = _embed(embedders[name], written, log, f"{name} passages")
             stored |= dict(zip(missing, made))
+            # Kept, so a switch to this model right after doesn't embed them again (dropped by the next run if not).
+            for seg, text, vector in zip(missing, written, made):
+                if seg in inputs:
+                    store.set_vector(seg, profile.version, vector, inputs[seg], text_hash(text))
+            store.commit()
         matrix = np.asarray([stored[seg] for seg in segments], np.float32)
         queries = np.asarray(embedders[name].texts([profile.query_text(t) for t in probe_texts]), np.float32)
         out[name] = known_item(matrix, items, queries, [item for _, item, _ in own])
