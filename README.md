@@ -69,6 +69,7 @@ rummage search "lease" --path housing --glob '*.pdf'   # only part of a source
 rummage get "#3f2a9c"     # a result's text by its id (or ref); --loc for one passage, --head N
 rummage status --json      # counts, last run per source, failures
 rummage doctor             # runtime files, vector version, freshness; exit 1 on a problem
+rummage watch              # index changes as they happen (install the `watch` extra for file events)
 rummage daemon --idle-minutes 30   # keep the query model loaded; searches use it automatically
 rummage serve --token-file F --reindex-minutes 60   # HTTP search API for an index kept on a server
 ```
