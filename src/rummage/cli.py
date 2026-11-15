@@ -7,6 +7,7 @@
     rummage status [--json]        what's indexed, and how the last runs went
     rummage doctor [--json]        check runtime, vectors and source freshness; exit 1 on a problem
     rummage sources                list the installed source types (core and plugins)
+    rummage daemon                 keep the query model loaded (searches use it when it runs)
     rummage serve                  answer searches over HTTP (for an index kept on another machine)
 """
 
@@ -21,6 +22,7 @@ import time
 import numpy as np
 
 from . import config as C
+from . import daemon as D
 from . import envelope as E
 from . import runtime as R
 from .indexer import Busy, Embedders, index_source, lock
@@ -162,8 +164,10 @@ def cmd_search(cfg: C.Config, args) -> int:
             index_empty = store.db.execute("SELECT count(*) FROM items").fetchone()[0] == 0
             vector = None
             if not args.words_only and not index_empty:
-                with R.embedder(_runtime(cfg), media=False, threads=cfg.threads, nice=0) as e:
-                    vector = e.query(args.query)
+                vector = None if args.no_daemon else D.query_vector(cfg.data_dir, args.query)
+                if vector is None:
+                    with R.embedder(_runtime(cfg), media=False, threads=cfg.threads, nice=0) as e:
+                        vector = e.query(args.query)
             searcher = Searcher(store.db, local_sources)
             hits += [h.as_dict() for h in searcher.search(
                 args.query, vector, limit=args.limit, kinds=set(args.kind) if args.kind else None)]
@@ -263,6 +267,10 @@ def cmd_get(cfg: C.Config, args) -> int:
         print(f"{doc['id']}  [{doc['source']}] {doc['title']}  ({doc['ref']})\n")
         print(doc["text"])
     return 0
+
+
+def cmd_daemon(cfg: C.Config, args) -> int:
+    return D.run(_runtime(cfg), cfg.data_dir, cfg.threads, args.idle_minutes)
 
 
 def cmd_serve(cfg: C.Config, args) -> int:
@@ -373,6 +381,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-n", "--limit", type=int, default=10)
     p.add_argument("--words-only", action="store_true", help="keyword search only (no model start, ~instant)")
     p.add_argument("--no-remote", action="store_true", help="only the local index")
+    p.add_argument("--no-daemon", action="store_true", help="load the model even when a query daemon is running")
     p.add_argument("--truncate", choices=["off", "knee", "strong"], default="off",
                    help="drop the weak tail: at the score curve's elbow (knee) or below half the top score (strong)")
     p.add_argument("--files", action="store_true", help="only the refs of matching items, one per line")
@@ -390,6 +399,10 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("sources", help="list the installed source types")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_sources)
+
+    p = sub.add_parser("daemon", help="keep the query model loaded so searches take milliseconds")
+    p.add_argument("--idle-minutes", type=float, help="exit after this long without a query")
+    p.set_defaults(func=cmd_daemon)
 
     p = sub.add_parser("serve", help="answer searches over HTTP and keep the index current")
     p.add_argument("--host", default="127.0.0.1")
