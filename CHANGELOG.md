@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
 - Agent session histories as sources: `claude-code`, `codex`, `gemini-cli` and `opencode`, plus `jsonl-chat` for any other JSONL chat log mapped by settings. One item per message a person wrote with the visible reply after it, the session, project folder, model and time; tool calls, tool output, thinking and subagents are left out. Logs are read as append-only, from where the last read stopped.
 - Histories of other programs are off until switched on: `rummage sources` lists what it finds on the machine, `rummage sources enable|disable <name>` switches a source (disabling offers to drop its items), and any source can be kept configured but off with `enabled = false`. `dsh-sessions` reads every project when `projects` is left out; `hermes` defaults to Hermes's own home.
