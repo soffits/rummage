@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -159,20 +160,21 @@ def _average_hash(gray: bytes) -> int:
 
 def keyframes(path: str, ffmpeg: str, duration: float) -> list[Moment]:
     """A moment every `FRAME_INTERVAL` seconds (fewer in long videos), keeping one per shot: a frame that looks like
-    the last kept one only extends it."""
+    the last kept one only extends it. Each sampled frame comes as an 8x8 grey thumbnail with its time (showinfo)."""
     if duration <= 0:
         return []
     step = max(FRAME_INTERVAL, duration / MAX_FRAMES)
-    first = min(0.5, duration / 2)
-    raw = _run([ffmpeg, "-v", "error", "-nostdin", "-i", path, "-an", "-vf",
-                f"fps=fps=1/{step}:start_time={first}:round=up,scale=8:8,format=gray", "-f", "rawvideo", "-"])
+    done = subprocess.run([ffmpeg, "-nostdin", "-loglevel", "info", "-i", path, "-an", "-vf",
+                           f"select='isnan(prev_selected_t)+gte(t-prev_selected_t\\,{step:g})',"
+                           "scale=8:8,format=gray,showinfo", "-fps_mode", "vfr", "-f", "rawvideo", "-"],
+                          stdin=subprocess.DEVNULL, capture_output=True, timeout=3600)
+    if done.returncode != 0:
+        raise MediaError(f"ffmpeg could not sample frames: {done.stderr[-300:].decode(errors='replace')}")
+    times = [float(t) for t in re.findall(rb"pts_time:\s*([0-9.]+)", done.stderr)]
     kept: list[Moment] = []
     last = None
-    for n in range(len(raw) // 64):
-        start = first + n * step
-        if start >= duration:
-            break
-        h = _average_hash(raw[n * 64:(n + 1) * 64])
+    for n, start in enumerate(times[: len(done.stdout) // 64]):
+        h = _average_hash(done.stdout[n * 64:(n + 1) * 64])
         if last is not None and bin(h ^ last).count("1") <= SAME_SHOT_BITS:
             continue
         last = h
