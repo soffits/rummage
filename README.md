@@ -23,6 +23,7 @@ $ rummage search "INV-20931" --words-only --json
   the model hears 30-second windows and sees a frame per shot. Needs ffmpeg. It doesn't transcribe: an agent that
   needs the words can transcribe that window itself.
 - PDFs page by page; a scanned page is matched as a picture of the page (`rummage[pdf-scans]`).
+- JSON, JSON Lines, CSV and TSV files of records (an array of objects, or a table with a header row): one result per record, so an order or a row is found by what it holds.
 - Names, IDs and numbers exactly as written, through a keyword index that also handles CJK text (Chinese, Japanese, Korean).
 - Each result points back to where it is: a file and character offset, or whatever a plugin uses (a chat message,
   a library path).

@@ -11,6 +11,7 @@ import os
 import re
 from pathlib import Path
 
+from .. import records as R
 from ..limits import UNLIMITED, Cut, Limits, record
 from ..store import Item, Segment
 from . import Plan, Source
@@ -72,6 +73,7 @@ class FolderSource(Source):
     default_extensions: tuple[str, ...] | None = None   # None: every file
     default_max_bytes = 0                                # files above this keep only their name; 0: no limit
     hash_bytes = 64 << 20                                # bigger files are fingerprinted by size and mtime
+    structured = False                                   # read JSON/JSONL/CSV/TSV files of records as one item per record
 
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
@@ -149,6 +151,31 @@ class FolderSource(Source):
         return sorted(p for p in run.stdout.decode("utf-8", "replace").split("\0")
                       if p and (self.root / p).is_file())
 
+    def _records(self, rel: str, st, known: dict, upserts: list, records_now: dict, live: set) -> bool:
+        """Plan file `rel` as one item per record when it is a record-shaped structured file; False when it is an
+        ordinary file. Records already indexed unchanged are left alone."""
+        if not R.is_candidate(rel) or (self.max_bytes and st.st_size > self.max_bytes) or \
+                self.limits.too_big("text", st.st_size):
+            return False
+        try:
+            found = R.parse(rel, (self.root / rel).read_bytes())
+        except OSError:
+            return False
+        if found is None:
+            return False
+        records_now[rel] = [r.key for r in found]
+        live.update(records_now[rel])
+        for rec in found:
+            fingerprint = hashlib.sha256(rec.text.encode()).hexdigest()
+            if known.get(rec.key) == fingerprint:
+                continue
+            info = {"path": rel, "size": st.st_size, "record": True, **path_dates(rel)}
+            if rec.when is not None:
+                info.update(when=rec.when, when_end=rec.when_end)
+            upserts.append(Item(self.name, rec.key, self.kind, rec.title, rel, rec.when or st.st_mtime,
+                                fingerprint, info))
+        return True
+
     def not_indexed(self, rel: str) -> str:
         """Why file `rel` under the root has no item."""
         if self._skip(rel):
@@ -187,6 +214,9 @@ class FolderSource(Source):
 
     def plan(self, known: dict[str, str | None], state: dict) -> Plan:
         stats = state.get("stats", {})
+        record_keys: dict[str, list[str]] = state.get("records", {})
+        records_now: dict[str, list[str]] = {}
+        live: set[str] = set()
         upserts: list[Item] = []
         seen: dict[str, list] = {}
         excluded: list[str] = []
@@ -201,7 +231,16 @@ class FolderSource(Source):
                 continue
             stamp = [st.st_mtime_ns, st.st_size]
             seen[rel] = stamp
-            if rel in known and stats.get(rel) == stamp:
+            unchanged = stats.get(rel) == stamp
+            if unchanged and rel in record_keys:
+                records_now[rel] = record_keys[rel]
+                live.update(record_keys[rel])
+                continue
+            if self.structured and not (unchanged and rel in known) and self._records(rel, st, known, upserts,
+                                                                                       records_now, live):
+                continue
+            live.add(rel)
+            if rel in known and unchanged:
                 continue
             if st.st_size > self.hash_bytes or (self.max_bytes and st.st_size > self.max_bytes):
                 fingerprint = f"stat:{st.st_size}:{st.st_mtime_ns}"
@@ -211,17 +250,18 @@ class FolderSource(Source):
                 except OSError:
                     unreadable.append(rel)
                     seen.pop(rel)
+                    live.discard(rel)
                     continue
             if known.get(rel) == fingerprint:
                 continue
             info = path_dates(rel)
             upserts.append(Item(self.name, rel, self.kind, Path(rel).stem, rel, st.st_mtime, fingerprint,
                                 {"path": rel, "size": st.st_size, **info}))
-        removed = [key for key in known if key not in seen]
+        removed = [key for key in known if key not in live]
         left_out = {"excluded": _left_out(excluded, f"sources.{self.name}.exclude", self.exclude),
                     "unreadable": _left_out(unreadable),
                     "skipped as keys or passwords": _left_out(secret, f"sources.{self.name}.read_secret_files")}
-        return Plan(upserts, removed, {"stats": seen, "left_out": left_out}, len(upserts))
+        return Plan(upserts, removed, {"stats": seen, "records": records_now, "left_out": left_out}, len(upserts))
 
 
 EXAMPLES = 5
