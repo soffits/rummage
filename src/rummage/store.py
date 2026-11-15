@@ -1,5 +1,5 @@
 """The index: one SQLite file with items, their segments (passages, a sticker's picture, a file's name), each
-segment's vector and a keyword index over their text.
+segment's model input, its vectors (one per embedding model the index holds) and a keyword index over their text.
 
 Nothing here is the source of truth; the index can be deleted and built again from the sources.
 """
@@ -17,7 +17,6 @@ from pathlib import Path
 import numpy as np
 
 from . import text as T
-from .runtime import DIM, VECTOR_VERSION
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -40,9 +39,19 @@ CREATE TABLE IF NOT EXISTS segments (
     kind TEXT NOT NULL,
     loc TEXT,
     text TEXT,
-    vector BLOB
+    lines TEXT,
+    input TEXT
 );
 CREATE INDEX IF NOT EXISTS segments_item ON segments(item);
+CREATE TABLE IF NOT EXISTS vectors (
+    segment INTEGER NOT NULL REFERENCES segments(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    vector BLOB NOT NULL,
+    hash TEXT,
+    PRIMARY KEY (model, segment)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS vectors_hash ON vectors(model, hash);
+CREATE INDEX IF NOT EXISTS vectors_segment ON vectors(segment);
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(title, body, content='', contentless_delete=1,
     tokenize='unicode61 remove_diacritics 2');
 CREATE TABLE IF NOT EXISTS opened (terms TEXT NOT NULL, source TEXT NOT NULL, key TEXT NOT NULL, at REAL NOT NULL);
@@ -69,21 +78,23 @@ class Segment:
     text: str = ""            # what keyword search reads and results quote
     loc: str | None = None    # where in the item: a character offset, a message id...
     lines: str | None = None  # "first-last" lines of a passage in a text file
-    vector: np.ndarray | None = None
-    embed_text: str | None = None   # what the model reads, when it differs from `text`
+    embed: tuple[str | None, str] | None = None   # what the model reads: (title, text), before the model's prompt
     image: bytes | None = None      # PNG/JPEG bytes for an image segment (not stored)
-    known_hash: str | None = None   # the hash of a vector brought in whole (an import), when neither input is here
+    vectors: dict[str, np.ndarray] = field(default_factory=dict)   # model version -> vector
+    hashes: dict[str, str] = field(default_factory=dict)            # model version -> what its vector depends on
 
-    @property
-    def embed_hash(self) -> str | None:
-        """What the vector depends on: the model's input text, or the picture's bytes."""
-        if self.known_hash:
-            return self.known_hash
-        if self.image:
-            return "i:" + hashlib.sha256(self.image).hexdigest()
-        if self.embed_text:
-            return "t:" + hashlib.sha256(self.embed_text.encode("utf-8")).hexdigest()
-        return None
+
+def input_json(embed: tuple[str | None, str] | None) -> str | None:
+    return json.dumps(list(embed), ensure_ascii=False) if embed else None
+
+
+def text_hash(model_text: str) -> str:
+    """What a text vector depends on: the model's input as written with its prompt."""
+    return "t:" + hashlib.sha256(model_text.encode("utf-8")).hexdigest()
+
+
+def image_hash(data: bytes) -> str:
+    return "i:" + hashlib.sha256(data).hexdigest()
 
 
 @dataclass
@@ -160,10 +171,6 @@ class Ambiguous(LookupError):
         self.candidates = candidates
 
 
-class VersionMismatch(RuntimeError):
-    pass
-
-
 class Store:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -175,29 +182,21 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA synchronous=NORMAL")
-        self.db.executescript(SCHEMA)
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(segments)")}
-        if "embed_hash" not in columns:
-            self.db.execute("ALTER TABLE segments ADD COLUMN embed_hash TEXT")
-        if "lines" not in columns:
-            self.db.execute("ALTER TABLE segments ADD COLUMN lines TEXT")
-        if "pending" not in columns:
-            self.db.execute("ALTER TABLE segments ADD COLUMN pending TEXT")
-        self.db.execute("CREATE INDEX IF NOT EXISTS segments_embed_hash ON segments(embed_hash)")
-        self.db.execute("CREATE INDEX IF NOT EXISTS segments_pending ON segments(id) WHERE pending IS NOT NULL")
+        self.db.executescript(SCHEMA)
+        for column in ("lines", "input"):
+            if columns and column not in columns:
+                self.db.execute(f"ALTER TABLE segments ADD COLUMN {column} TEXT")
+        if "vector" in columns:
+            _migrate_single_model(self.db)
+        self.db.execute("CREATE INDEX IF NOT EXISTS segments_input ON segments(id) WHERE input IS NOT NULL")
         self.db.execute("CREATE INDEX IF NOT EXISTS items_mtime ON items(mtime)")
-        version = self.meta("vector_version")
-        if version is None:
-            self.set_meta("vector_version", VECTOR_VERSION)
-            self.db.commit()
-        self.vector_version = self.meta("vector_version")
+        self.db.commit()
 
-    def check_version(self) -> None:
-        if self.vector_version != VECTOR_VERSION:
-            raise VersionMismatch(
-                f"the index was made with vectors {self.vector_version}, this rummage makes {VECTOR_VERSION}: "
-                "run `rummage index --rebuild`"
-            )
+    @property
+    def model(self) -> str | None:
+        """The version of the model whose vectors searches use (None before the first run)."""
+        return self.meta("model")
 
     def close(self) -> None:
         self.db.close()
@@ -268,29 +267,29 @@ class Store:
                 "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)", (item.source, item.key, *values)).lastrowid
         title = T.for_index(item.title or "")
         for seg in segments:
-            blob = None
-            if seg.vector is not None:
-                blob = np.asarray(seg.vector[:DIM], np.float16).tobytes()
-            pending = seg.embed_text if blob is None and seg.embed_text and not seg.image else None
             seg_id = self.db.execute(
-                "INSERT INTO segments(item, kind, loc, text, vector, embed_hash, lines, pending) "
-                "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-                (item_id, seg.kind, seg.loc, seg.text, blob, seg.embed_hash if blob else None, seg.lines,
-                 pending)).lastrowid
+                "INSERT INTO segments(item, kind, loc, text, lines, input) VALUES(?, ?, ?, ?, ?, ?)",
+                (item_id, seg.kind, seg.loc, seg.text, seg.lines, input_json(seg.embed))).lastrowid
+            for model, vector in seg.vectors.items():
+                self.db.execute("INSERT INTO vectors(segment, model, vector, hash) VALUES(?, ?, ?, ?)",
+                                (seg_id, model, np.asarray(vector, np.float16).tobytes(), seg.hashes.get(model)))
             if seg.text or seg.kind == "name":
                 self.db.execute("INSERT INTO fts(rowid, title, body) VALUES(?, ?, ?)",
                                 (seg_id, title, T.for_index(seg.text or "")))
 
     # what search reads
 
-    def vectors(self, scope: Scope) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Every stored vector in scope: segment ids, their items, their kinds, and the vectors (float16 rows)."""
+    def vectors(self, scope: Scope, model: str | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Every vector of `model` (default: the active one) in scope: segment ids, their items, their kinds, and the
+        vectors (float16 rows)."""
         where, args = scope.where()
         rows = self.db.execute(
-            f"SELECT s.id, s.item, s.kind, s.vector FROM segments s JOIN items i ON i.id = s.item "
-            f"WHERE s.vector IS NOT NULL{where}", args).fetchall()
-        matrix = (np.frombuffer(b"".join(r[3] for r in rows), np.float16).reshape(len(rows), DIM) if rows
-                  else np.zeros((0, DIM), np.float16))
+            f"SELECT s.id, s.item, s.kind, v.vector FROM vectors v JOIN segments s ON s.id = v.segment "
+            f"JOIN items i ON i.id = s.item WHERE v.model = ?{where} ORDER BY s.id",
+            [model or self.model, *args]).fetchall()
+        dim = len(rows[0][3]) // 2 if rows else 0
+        matrix = (np.frombuffer(b"".join(r[3] for r in rows), np.float16).reshape(len(rows), dim) if rows
+                  else np.zeros((0, 0), np.float16))
         return (np.array([r[0] for r in rows], np.int64), np.array([r[1] for r in rows], np.int64),
                 np.array([r[2] for r in rows]), matrix)
 
@@ -393,53 +392,107 @@ class Store:
                                 (row,)).fetchone()
         return found[0] if found else ""
 
-    # vectors that wait for the model: keyword search has the segment already
+    # vectors that wait for a model: keyword search has the segment already
 
-    def pending(self, sources: list[str] | None = None, limit: int = 64) -> list[tuple[int, str]]:
-        """Segments whose text is in keyword search but whose vector isn't made yet, oldest first."""
-        where, args = "", []
+    def _missing(self, model: str, sources: list[str] | None) -> tuple[str, list]:
+        where = ("FROM segments s JOIN items i ON i.id = s.item WHERE s.input IS NOT NULL AND NOT EXISTS "
+                 "(SELECT 1 FROM vectors v WHERE v.model = ? AND v.segment = s.id)")
+        args: list = [model]
         if sources:
-            where = f" AND i.source IN ({','.join('?' * len(sources))})"
-            args = list(sources)
-        return self.db.execute(
-            f"SELECT s.id, s.pending FROM segments s JOIN items i ON i.id = s.item WHERE s.pending IS NOT NULL{where} "
-            f"ORDER BY s.id LIMIT ?", [*args, limit]).fetchall()
+            where += f" AND i.source IN ({','.join('?' * len(sources))})"
+            args += list(sources)
+        return where, args
 
-    def pending_count(self, sources: list[str] | None = None) -> int:
-        where, args = "", []
-        if sources:
-            where = f" AND i.source IN ({','.join('?' * len(sources))})"
-            args = list(sources)
-        return self.db.execute(f"SELECT count(*) FROM segments s JOIN items i ON i.id = s.item "
-                               f"WHERE s.pending IS NOT NULL{where}", args).fetchone()[0]
+    def pending(self, model: str | None = None, sources: list[str] | None = None,
+                limit: int = 64) -> list[tuple[int, tuple[str | None, str]]]:
+        """Segments whose text is in keyword search but that have no vector of `model` (default: the active one)
+        yet, oldest first, with what the model reads: (title, text)."""
+        where, args = self._missing(model or self.model or "", sources)
+        return [(seg, tuple(json.loads(raw))) for seg, raw in self.db.execute(
+            f"SELECT s.id, s.input {where} ORDER BY s.id LIMIT ?", [*args, limit])]
 
-    def set_vector(self, segment: int, vector, embed_text: str) -> None:
-        """Fills a pending segment's vector, unless the segment was replaced meanwhile (then nothing happens)."""
-        blob = np.asarray(vector[:DIM], np.float16).tobytes()
-        embed_hash = "t:" + hashlib.sha256(embed_text.encode("utf-8")).hexdigest()
-        self.db.execute("UPDATE segments SET vector = ?, embed_hash = ?, pending = NULL WHERE id = ? AND pending = ?",
-                        (blob, embed_hash, segment, embed_text))
+    def pending_count(self, model: str | None = None, sources: list[str] | None = None) -> int:
+        where, args = self._missing(model or self.model or "", sources)
+        return self.db.execute(f"SELECT count(*) {where}", args).fetchone()[0]
 
-    def known_vectors(self, hashes: list[str]) -> dict[str, np.ndarray]:
-        """Stored vectors for these embedding inputs, from any item: unchanged passages of an edited note, or a file
-        that moved, keep their vectors instead of being embedded again."""
+    def pending_by_source(self, model: str) -> dict[str, tuple[int, int]]:
+        """For each source: (passages without a vector of `model`, passages a text model reads)."""
+        out: dict[str, tuple[int, int]] = {}
+        for source, total, done in self.db.execute(
+                "SELECT i.source, count(*), count(v.segment) FROM segments s JOIN items i ON i.id = s.item "
+                "LEFT JOIN vectors v ON v.segment = s.id AND v.model = ? WHERE s.input IS NOT NULL "
+                "GROUP BY i.source", (model,)):
+            out[source] = (total - done, total)
+        return out
+
+    def set_vector(self, segment: int, model: str, vector, embed: tuple[str | None, str], embed_hash: str) -> None:
+        """Stores a segment's vector of `model`, unless the segment was replaced meanwhile (then nothing happens)."""
+        self.db.execute(
+            "INSERT OR REPLACE INTO vectors(segment, model, vector, hash) SELECT ?, ?, ?, ? "
+            "WHERE EXISTS (SELECT 1 FROM segments WHERE id = ? AND input = ?)",
+            (segment, model, np.asarray(vector, np.float16).tobytes(), embed_hash, segment, input_json(embed)))
+
+    def known_vectors(self, model: str, hashes: list[str]) -> dict[str, np.ndarray]:
+        """Stored vectors of `model` for these inputs, from any item: unchanged passages of an edited note, or a
+        file that moved, keep their vectors instead of being embedded again."""
         found: dict[str, np.ndarray] = {}
         for start in range(0, len(hashes), 500):
             part = hashes[start:start + 500]
             for h, blob in self.db.execute(
-                    f"SELECT embed_hash, vector FROM segments WHERE vector IS NOT NULL AND embed_hash IN "
-                    f"({','.join('?' * len(part))})", part):
+                    f"SELECT hash, vector FROM vectors WHERE model = ? AND hash IN ({','.join('?' * len(part))})",
+                    [model, *part]):
                 found.setdefault(h, np.frombuffer(blob, np.float16).astype(np.float32))
         return found
 
-    def unhashed_vectors(self, source: str, key: str) -> dict[tuple, np.ndarray]:
-        """Vectors stored before passages were hashed, by (kind, loc, text), so re-reading an item from an older
-        index keeps them."""
-        return {(kind, loc, text): np.frombuffer(blob, np.float16).astype(np.float32)
-                for kind, loc, text, blob in self.db.execute(
-                    "SELECT s.kind, s.loc, s.text, s.vector FROM segments s JOIN items i ON i.id = s.item "
-                    "WHERE i.source = ? AND i.key = ? AND s.vector IS NOT NULL AND s.embed_hash IS NULL",
-                    (source, key))}
+    def models(self) -> dict[str, int]:
+        """Each model version the index holds vectors of, with how many."""
+        return dict(self.db.execute("SELECT model, count(*) FROM vectors GROUP BY model"))
+
+    def drop_vectors(self, model: str) -> int:
+        n = self.db.execute("DELETE FROM vectors WHERE model = ?", (model,)).rowcount
+        self.db.execute("DELETE FROM meta WHERE key IN (?, ?)", (f"reference:{model}", f"calibration:{model}"))
+        return n
+
+    def unreadable(self, model: str, active: str | None, media: bool) -> dict[str, list[str]]:
+        """Items whose vectors of `model` can't be made from what the index keeps, by source: pictures (their bytes
+        aren't kept; only when `media`), and passages with a vector of the active model but no stored input. Reading
+        them again gives the model their input."""
+        out: dict[str, set[str]] = {}
+        query = ("SELECT DISTINCT i.source, i.key FROM segments s JOIN items i ON i.id = s.item "
+                 "WHERE s.input IS NULL AND NOT EXISTS (SELECT 1 FROM vectors v WHERE v.model = ? AND v.segment = s.id) "
+                 "AND ((s.kind = 'image' AND ?) OR (s.kind != 'image' AND EXISTS "
+                 "(SELECT 1 FROM vectors a WHERE a.model = ? AND a.segment = s.id)))")
+        for source, key in self.db.execute(query, (model, int(media), active or "")):
+            out.setdefault(source, set()).add(key)
+        return {k: sorted(v) for k, v in out.items()}
+
+    def inputs(self, segments: list[int]) -> dict[int, tuple[str | None, str]]:
+        out = {}
+        for start in range(0, len(segments), 500):
+            part = segments[start:start + 500]
+            out |= {seg: tuple(json.loads(raw)) for seg, raw in self.db.execute(
+                f"SELECT id, input FROM segments WHERE input IS NOT NULL AND id IN ({','.join('?' * len(part))})", part)}
+        return out
+
+    def vectors_of(self, segments: list[int], model: str) -> dict[int, np.ndarray]:
+        out = {}
+        for start in range(0, len(segments), 500):
+            part = segments[start:start + 500]
+            out |= {seg: np.frombuffer(blob, np.float16).astype(np.float32) for seg, blob in self.db.execute(
+                f"SELECT segment, vector FROM vectors WHERE model = ? AND segment IN ({','.join('?' * len(part))})",
+                [model, *part])}
+        return out
+
+    def sample_texts(self, count: int, model: str, seed: int = 0) -> list[tuple[int, int, str]]:
+        """Up to `count` text passages with a vector of `model`, the same ones on every call with the same index and
+        seed: (segment, item, text)."""
+        rows = self.db.execute("SELECT s.id, s.item, s.text FROM segments s JOIN vectors v ON v.segment = s.id "
+                               "AND v.model = ? WHERE s.kind = 'text' AND length(s.text) >= 80 ORDER BY s.id",
+                               (model,)).fetchall()
+        if len(rows) <= count:
+            return rows
+        picks = np.random.default_rng(seed).choice(len(rows), count, replace=False)
+        return [rows[i] for i in sorted(picks)]
 
     def rollback(self) -> None:
         self.db.rollback()
@@ -514,8 +567,9 @@ class Store:
                 continue
             text = self.db.execute("SELECT text FROM segments WHERE item = ? AND kind = 'text' ORDER BY id LIMIT 1",
                                    (row,)).fetchone()
-            pending = self.db.execute("SELECT count(*) FROM segments WHERE item = ? AND pending IS NOT NULL",
-                                      (row,)).fetchone()[0]
+            pending = self.db.execute(
+                "SELECT count(*) FROM segments s WHERE s.item = ? AND s.input IS NOT NULL AND NOT EXISTS "
+                "(SELECT 1 FROM vectors v WHERE v.model = ? AND v.segment = s.id)", (row, self.model or "")).fetchone()[0]
             out.append({"id": "#" + item_id(source, key), "row": row, "source": source, "kind": kind, "title": title,
                         "ref": ref, "mtime": mtime, "info": info, "text": text[0] if text else "",
                         "pending_vectors": pending})
@@ -547,15 +601,16 @@ class Store:
         at = ids.index(row)
         return [self.item(r) for r in ids[max(0, at - around): at + around + 1]]
 
-    def dump(self):
-        """Every item with its segments, for export: `(item dict, [segment dicts with the vector as bytes])`."""
+    def dump(self, model: str | None):
+        """Every item with its segments, for export: `(item dict, [segment dicts with `model`'s vector as bytes])`."""
         for row, source, key, kind, title, ref, mtime, fingerprint, info in self.db.execute(
                 "SELECT id, source, key, kind, title, ref, mtime, fingerprint, info FROM items ORDER BY id").fetchall():
-            segments = [{"kind": k, "loc": loc, "text": text, "lines": lines, "embed_hash": h, "pending": pending,
-                         "vector": vector}
-                        for k, loc, text, lines, h, pending, vector in self.db.execute(
-                            "SELECT kind, loc, text, lines, embed_hash, pending, vector FROM segments WHERE item = ? "
-                            "ORDER BY id", (row,))]
+            segments = [{"kind": k, "loc": loc, "text": text, "lines": lines,
+                         "input": json.loads(raw) if raw else None, "hash": h, "vector": vector}
+                        for k, loc, text, lines, raw, h, vector in self.db.execute(
+                            "SELECT s.kind, s.loc, s.text, s.lines, s.input, v.hash, v.vector FROM segments s "
+                            "LEFT JOIN vectors v ON v.segment = s.id AND v.model = ? WHERE s.item = ? ORDER BY s.id",
+                            (model or "", row))]
             yield ({"source": source, "key": key, "kind": kind, "title": title, "ref": ref, "mtime": mtime,
                     "fingerprint": fingerprint, "info": json.loads(info or "{}")}, segments)
 
@@ -570,16 +625,17 @@ class Store:
         return {source: json.loads(value) for source, value in self.db.execute("SELECT source, value FROM source_state")}
 
     def summary(self) -> dict:
-        out: dict = {"path": str(self.path), "vector_version": self.vector_version,
+        model = self.model or ""
+        out: dict = {"path": str(self.path), "model": self.model,
                      "bytes": self.path.stat().st_size if self.path.exists() else 0, "sources": {}}
         for source, items in self.db.execute("SELECT source, count(*) FROM items GROUP BY source"):
             out["sources"].setdefault(source, {})["items"] = items
-        for source, n in self.db.execute("SELECT i.source, count(*) FROM segments s JOIN items i ON i.id = s.item "
-                                         "WHERE s.pending IS NOT NULL GROUP BY i.source"):
-            out["sources"].setdefault(source, {})["pending_vectors"] = n
+        for source, (n, _) in self.pending_by_source(model).items():
+            if n:
+                out["sources"].setdefault(source, {})["pending_vectors"] = n
         for source, kind, n, vectors in self.db.execute(
-                "SELECT i.source, s.kind, count(*), count(s.vector) FROM segments s JOIN items i ON i.id = s.item "
-                "GROUP BY i.source, s.kind"):
+                "SELECT i.source, s.kind, count(*), count(v.segment) FROM segments s JOIN items i ON i.id = s.item "
+                "LEFT JOIN vectors v ON v.segment = s.id AND v.model = ? GROUP BY i.source, s.kind", (model,)):
             out["sources"].setdefault(source, {}).setdefault("segments", {})[kind] = {"count": n, "vectors": vectors}
         for source, partial, name_only in self.db.execute(
                 "SELECT source, count(*), sum(EXISTS (SELECT 1 FROM json_each(info, '$.partial') "
@@ -605,6 +661,33 @@ class Store:
             entry["last_run"] = dict(zip(keys, last))
             entry["last_ok"] = good
         return out
+
+
+def _migrate_single_model(db: sqlite3.Connection) -> None:
+    """An index from before model profiles kept one vector per segment (`segments.vector`, `embed_hash`) and the
+    model's input only while the vector was pending. Moves the vectors to `vectors` under the index's version, keeps
+    pending inputs as (title, text), and drops the old columns. Inputs of passages that had a vector weren't kept:
+    a switch to another model reads those items again."""
+    import re
+
+    (version,) = db.execute("SELECT value FROM meta WHERE key = 'vector_version'").fetchone() or ("",)
+    db.execute("INSERT OR IGNORE INTO vectors(segment, model, vector, hash) "
+               "SELECT id, ?, vector, embed_hash FROM segments WHERE vector IS NOT NULL", (version,))
+    written = re.compile(r"title: (.*?) \| text: (.*)", re.S)
+    for seg, pending in db.execute("SELECT id, pending FROM segments WHERE pending IS NOT NULL").fetchall():
+        found = written.fullmatch(pending)
+        title, text = (found.group(1), found.group(2)) if found else (None, pending)
+        db.execute("UPDATE segments SET input = ? WHERE id = ?",
+                   (json.dumps([None if title == "none" else title, text], ensure_ascii=False), seg))
+    for index in ("segments_embed_hash", "segments_pending"):
+        db.execute(f"DROP INDEX IF EXISTS {index}")
+    for column in ("vector", "embed_hash", "pending"):
+        db.execute(f"ALTER TABLE segments DROP COLUMN {column}")
+    if version:
+        db.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('model', ?)", (version,))
+        db.execute("UPDATE meta SET key = ? WHERE key = 'reference'", (f"reference:{version}",))
+    db.execute("DELETE FROM meta WHERE key = 'vector_version'")
+    db.commit()
 
 
 def _stitch(text: str, piece: str, longest: int = 400) -> str:

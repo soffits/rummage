@@ -10,7 +10,19 @@
 - A search with no query daemon running starts one in the background (`[daemon] idle_minutes`, default 20; 0 turns this off) and uses it as soon as the model is loaded instead of loading a second copy; later searches are fast, and the daemon exits when unused. `recall` starts one for the next prompt without waiting. Only one daemon runs per data directory. `rummage status` shows whether it runs.
 - Copies of one mail in several folders or accounts (same Message-ID) are one search result, with the other copies under `also`; `get` lists them too.
 - Chat turns: a client's notices and the quoted message before a person's words ("[Replying to ...]" and its `> ` lines) are kept as `context` in the item's info, not as the person's words, and a session title cut inside such a notice loses it. Affected turns are read and embedded again on the next index run.
-
+- Embedding models are profiles you can switch at any time. A profile names a pinned GGUF (run by the bundled
+  llama.cpp), a GGUF on disk, or an OpenAI-compatible endpoint, with its query and document prompts and how many
+  dimensions to keep; EmbeddingGemma 2 is built in and stays the default, with results unchanged. `rummage models use
+  NAME` switches: the new vectors are built in the background next to the old ones, which keep answering, then swapped
+  in at once. The new model's ranking thresholds are calibrated against the old model on your own index, and the
+  switch checks that it finds sampled passages at least as well. Switches show in `rummage status`, survive restarts,
+  and can be cancelled, swapped by hand, rolled back and pruned (`rummage models`). `rummage models compare NAME`
+  compares the current and a candidate model on your data and, with `--public`, on BEIR SciFact.
+- The index keeps each passage's model input and one vector per model (`vectors` table); an index from before is
+  migrated when first opened, keeping its vectors. `rummage export` writes `rummage.export.v2`.
+- `[embedder] url` (an accelerator running the same model) is checked against the model's published reference
+  vectors; `rummage doctor` checks the model in use and the configured one, and only enabled sources for freshness.
+- `bench` scripts take the model from the config's profile.
 - A passage with more tokens than the server takes in one micro-batch (invisible padding in a newsletter, rare symbols; 1,800 characters can be 2,800 tokens) is embedded in pieces and its vector is their mean, instead of failing the whole index run with HTTP 500.
 - Benchmarks: `bench/run.py` adds `rummage-ablations` (ranking variants over one index), qmd's `vsearch` and `query` modes with an optional same-model run, fidx profiles, MIRACL with MTEB's hard negatives, recall@100 and a bootstrap interval for nDCG@10, and resumes finished runs; `bench/memory.py` measures recall on LoCoMo and LongMemEval-S. Search's signals can be switched off one by one for this (`search.Ranking`); the defaults are unchanged.
 

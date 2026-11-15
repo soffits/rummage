@@ -21,7 +21,6 @@ import sys
 import time
 
 from . import config as C
-from . import runtime as R
 from . import text as T
 from .query import meaning_vector
 from .when import understand
@@ -133,22 +132,21 @@ def recent_turns(cfg: C.Config, prompt: str, exclude: list[str], minutes: float,
 
 
 def recall(cfg: C.Config, query: str, sources: list[str] | None, paths: list[str] | None, limit: int,
-           allow_model_load: bool) -> tuple[list[Hit], str, int, str | None]:
-    """Hits for `query`, how it was matched (`meaning` or `words`), how many vectors were searched, and why it went
-    by words when it did."""
+           allow_model_load: bool) -> tuple[list[Hit], str, int, str | None, float]:
+    """Hits for `query`, how it was matched (`meaning` or `words`), how many vectors were searched, why it went by
+    words when it did, and the model's calibrated recall gate."""
     if not cfg.index_path.exists():
-        return [], "none", 0, None
-    vector, degraded = meaning_vector(cfg, query, load=allow_model_load)
+        return [], "none", 0, None, 0.0
     store = Store(cfg.index_path)
     try:
-        if store.vector_version != R.VECTOR_VERSION:
-            return [], "none", 0, None
-        searcher = Searcher(store, sources, paths)
+        version = store.model
+        vector, degraded = meaning_vector(cfg, version, query, load=allow_model_load)
+        searcher = Searcher(store, sources, paths, model=version)
         hits = searcher.search(query, vector, limit=limit, when=understand(query))
         count = searcher.vector_count()
     finally:
         store.close()
-    return hits, "meaning" if vector is not None else "words", count, degraded
+    return hits, "meaning" if vector is not None else "words", count, degraded, searcher.calibration.recall_gate
 
 
 def _masked(cfg: C.Config, args, value: dict) -> dict:
@@ -174,10 +172,12 @@ def run(cfg: C.Config, args) -> int:
     if not prompt or (args.hook and not worth_recalling(prompt)):
         return 0
     try:
-        hits, mode, count, degraded = recall(cfg, prompt, args.source, args.path, 20, args.allow_model_load)
+        hits, mode, count, degraded, recall_gate = recall(cfg, prompt, args.source, args.path, 20,
+                                                          args.allow_model_load)
         # Exact words alone are weaker evidence than a meaning match: ask for more of them.
         min_words = args.min_words if mode == "meaning" else max(args.min_words, 0.75)
-        chosen = pick(hits, gate_for(args.min_z, count), min_words, args.max_items, args.max_chars, mode == "words")
+        min_z = recall_gate if args.min_z is None else args.min_z
+        chosen = pick(hits, gate_for(min_z, count), min_words, args.max_items, args.max_chars, mode == "words")
         results = [_masked(cfg, args, {**h.as_dict(), "why": why(h)}) for h in chosen]
         recent = [_masked(cfg, args, r) for r in recent_turns(
             cfg, prompt, [session] if session else [], args.recent_minutes, args.recent_items,

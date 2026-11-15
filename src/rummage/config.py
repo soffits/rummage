@@ -9,9 +9,13 @@
     nice = 10
     # llama_server = "/usr/bin/llama-server"  # instead of the pinned build
 
-    # [embedder]
-    # url = "http://gpu-box:8080"             # a llama-server with the same pinned model, used for indexing when
-    #                                         # it answers and agrees with the index's reference vectors
+    [embedder]
+    model = "embeddinggemma-2"                # the model profile to use (`rummage models`); changing it switches
+    #                                         # the index over in the background
+    # url = "http://gpu-box:8080"             # a llama-server running the same model, used for indexing when it
+    #                                         # answers and agrees with the model's reference vectors
+
+    # [models.<name>]                         # more model profiles: see `rummage/models.py`
 
     [daemon]
     idle_minutes = 20                         # a query daemon a search starts exits after this long unused;
@@ -33,6 +37,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .models import DEFAULT as DEFAULT_MODEL
+
 
 @dataclass
 class Config:
@@ -44,6 +50,8 @@ class Config:
     llama_server: str | None = None
     embedder_url: str | None = None
     daemon_idle_minutes: float = 20
+    model: str = DEFAULT_MODEL
+    models: dict[str, dict] = field(default_factory=dict)
     people: dict[str, dict] = field(default_factory=dict)
     serve: dict = field(default_factory=dict)
     sources: dict[str, dict] = field(default_factory=dict)
@@ -96,6 +104,8 @@ def load(path: Path | None = None) -> Config:
         llama_server=os.environ.get("RUMMAGE_LLAMA_SERVER") or runtime.get("llama_server"),
         embedder_url=(data.get("embedder") or {}).get("url"),
         daemon_idle_minutes=float((data.get("daemon") or {}).get("idle_minutes", 20)),
+        model=(data.get("embedder") or {}).get("model") or DEFAULT_MODEL,
+        models=dict(data.get("models", {})),
         people=dict(data.get("people", {})),
         serve=dict(data.get("serve", {})),
         sources=dict(data.get("sources", {})),
@@ -134,6 +144,26 @@ def set_enabled(path: Path, name: str, spec: dict, on: bool) -> None:
             section = flag.sub(line, section, count=1)
         else:
             section = "\n" + line + section if not section.startswith("\n") else "\n" + line + section
+        text = text[:found.end()] + section + text[end:]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def set_model(path: Path, name: str) -> None:
+    """Writes `model = name` into the config's `[embedder]` section, keeping everything else as written."""
+    import re
+
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    line = f"model = {_toml(name)}"
+    found = re.compile(r"^\[embedder\]\s*$", re.M).search(text)
+    if not found:
+        text = text.rstrip("\n") + ("\n\n" if text.strip() else "") + f"[embedder]\n{line}\n"
+    else:
+        nxt = re.compile(r"^\[", re.M).search(text, found.end())
+        end = nxt.start() if nxt else len(text)
+        section = text[found.end():end]
+        setting = re.compile(r"^model\s*=.*$", re.M)
+        section = setting.sub(line, section, count=1) if setting.search(section) else "\n" + line + section
         text = text[:found.end()] + section + text[end:]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")

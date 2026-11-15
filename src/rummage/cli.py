@@ -1,6 +1,6 @@
 """rummage: local search by meaning and exact words over your files.
 
-    rummage setup                  fetch the pinned llama.cpp build and EmbeddingGemma 2 files
+    rummage setup                  fetch the pinned llama.cpp build and the configured model's files
     rummage index [-s SOURCE]      bring the index up to date (incremental)
     rummage search QUERY [--json]  search by meaning and exact words
     rummage get REF                print a result's text (by #id, ref or source:key)
@@ -15,6 +15,7 @@
     rummage mcp                    a stdio MCP server (search, get, status) for MCP-only agents
     rummage daemon                 keep the query model loaded (searches use it when it runs)
     rummage serve                  answer searches over HTTP (for an index kept on another machine)
+    rummage models                 embedding models: list, `use` one (switches in the background), compare
 """
 
 from __future__ import annotations
@@ -34,16 +35,19 @@ from . import config as C
 from . import daemon as D
 from . import envelope as E
 from . import net
+from . import models as M
+from . import models_cli
 from . import runtime as R
+from . import switch
 from . import text as T
-from .indexer import Busy, Embedders, embed_pending, index_source, lock
+from .indexer import Busy, Embedders, embed_models, index_source, lock
 from .search import Searcher
 from .query import meaning_vector
 from .when import understand
 from .limits import describe
 from .secrets import masked_total, shown
 from .sources import available, build, load_type
-from .store import Ambiguous, NotFound, Store, VersionMismatch
+from .store import Ambiguous, NotFound, Store
 
 
 
@@ -55,11 +59,25 @@ def _runtime(cfg: C.Config) -> R.Runtime:
     return R.Runtime(cfg.data_dir, cfg.llama_server)
 
 
+def _media(cfg: C.Config) -> bool:
+    return any(build(n, s, cfg.data_dir).media for n, s in cfg.sources.items())
+
+
 def cmd_setup(cfg: C.Config, args) -> int:
-    media = any(build(n, s, cfg.data_dir).media for n, s in cfg.sources.items()) or args.media
-    _runtime(cfg).setup(media=media, log=_eprint)
-    _eprint("runtime ready:", _runtime(cfg).root)
+    profile = M.by_name(cfg.models, args.model or cfg.model)
+    _runtime(cfg).setup(profile, media=_media(cfg) or args.media, log=_eprint)
+    _eprint(f"runtime ready for {profile.name}:", _runtime(cfg).root)
     return 0
+
+
+def _embedders(cfg: C.Config, store: Store, profile: M.Profile | None, log) -> Embedders | None:
+    if profile is None:
+        return None
+    e = Embedders(_runtime(cfg), profile, cfg.threads, cfg.nice, cfg.log_dir / "llama-server.log", cfg.max_threads,
+                  accelerator=cfg.embedder_url, warn=log)
+    if e.reference is None and store.meta(f"reference:{profile.version}"):
+        e.reference = json.loads(store.meta(f"reference:{profile.version}"))
+    return e
 
 
 def cmd_index(cfg: C.Config, args) -> int:
@@ -73,8 +91,7 @@ def cmd_index(cfg: C.Config, args) -> int:
     report: dict = {}
     deadline = time.monotonic() + args.max_minutes * 60 if args.max_minutes else None
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
-    embedders = Embedders(_runtime(cfg), cfg.threads, cfg.nice, cfg.log_dir / "llama-server.log", cfg.max_threads,
-                          remote=cfg.embedder_url, warn=log)
+    opened: list[Embedders] = []
     try:
         if not args.embed_only:
             try:
@@ -84,9 +101,12 @@ def cmd_index(cfg: C.Config, args) -> int:
                             cfg.index_path.with_name(cfg.index_path.name + suffix).unlink(missing_ok=True)
                     store = Store(cfg.index_path)
                     try:
-                        store.check_version()
-                        embedders.reference = _reference(store)
-                        _read_sources(cfg, store, names, embedders, args, deadline, log, report, failures)
+                        active, building = switch.reconcile(store, cfg.models, cfg.model)
+                        live = [e for e in (_embedders(cfg, store, active, log), _embedders(cfg, store, building, log))
+                                if e is not None]
+                        opened += live
+                        again = store.unreadable(building.version, store.model, building.media) if building else {}
+                        _read_sources(cfg, store, names, live, again, args, deadline, log, report, failures)
                     finally:
                         store.close()
             except Busy as busy:
@@ -98,26 +118,27 @@ def cmd_index(cfg: C.Config, args) -> int:
                 with lock(cfg.data_dir, "embed"):
                     store = Store(cfg.index_path)
                     try:
-                        store.check_version()
-                        embedders.reference = _reference(store)
-                        made = embed_pending(store, embedders, log, names if args.source else None, deadline)
-                        report["vectors"] = made
-                        if embedders.current and store.meta("reference") is None:
-                            store.set_meta("reference", json.dumps(
-                                embedders.current.texts(R.REFERENCE_TEXTS).round(5).tolist()))
-                            store.commit()
+                        active, building = switch.reconcile(store, cfg.models, cfg.model)
+                        pair = (_embedders(cfg, store, active, log), _embedders(cfg, store, building, log))
+                        opened += [e for e in pair if e is not None]
+                        try:
+                            report["vectors"] = embed_models(store, *pair, cfg.models, log,
+                                                             names if args.source else None, deadline,
+                                                             readable=C.enabled(cfg))
+                        except (R.EmbedError, OSError) as error:
+                            if building is None:
+                                raise
+                            failures.append(f"model switch to {building.name} paused: {error}")
                     finally:
                         store.close()
             except Busy:
                 log("vectors: another run is making them")
-    except VersionMismatch as error:
-        _eprint(error)
-        return 1
-    except R.RuntimeMissing as error:
+    except (M.UnknownModel, R.RuntimeMissing) as error:
         _eprint(error)
         return 1
     finally:
-        embedders.close()
+        for e in opened:
+            e.close()
     if args.json:
         print(json.dumps({"sources": report, "failures": failures}, ensure_ascii=False))
     if failures:
@@ -126,18 +147,13 @@ def cmd_index(cfg: C.Config, args) -> int:
     return 0
 
 
-def _reference(store: Store) -> list | None:
-    stored = store.meta("reference")
-    return json.loads(stored) if stored else None
-
-
-def _read_sources(cfg, store, names, embedders, args, deadline, log, report, failures) -> None:
+def _read_sources(cfg, store, names, embedders, again, args, deadline, log, report, failures) -> None:
     for name in names:
         source = build(name, cfg.sources[name], cfg.data_dir)
         run = store.start_run(name)
         try:
             counts = index_source(store, source, embedders, log, _eprint, limit=args.limit, deadline=deadline,
-                                  reload=args.reload)
+                                  reload=args.reload, again=set(again.get(name, ())))
         except Exception as error:
             store.rollback()
             store.finish_run(run, False, {}, f"{type(error).__name__}: {error}")
@@ -229,6 +245,7 @@ def cmd_search(cfg: C.Config, args) -> int:
     index_empty = True
     pending = 0
     degraded = None
+    gate = M.ANCHOR.gate
     when = None if args.no_dates or args.since or args.until else understand(args.query)
     if not cfg.index_path.exists() and not cfg.remotes:
         return _fail(args, "index_missing", E.INDEX_MISSING, "no index yet: run `rummage index`",
@@ -236,19 +253,17 @@ def cmd_search(cfg: C.Config, args) -> int:
     if cfg.index_path.exists() and (local_sources is None or local_sources):
         store = Store(cfg.index_path)
         try:
-            store.check_version()
+            version = store.model
             index_empty = store.item_count() == 0
             vector = None
             if not args.words_only and not index_empty:
-                vector, degraded = meaning_vector(cfg, args.query, use_daemon=not args.no_daemon)
-            searcher = Searcher(store, local_sources, args.path, args.glob, _day(args.since), _day(args.until, 1))
+                vector, degraded = meaning_vector(cfg, version, args.query, use_daemon=not args.no_daemon)
+            searcher = Searcher(store, local_sources, args.path, args.glob, _day(args.since), _day(args.until, 1),
+                                model=version)
             hits += [h.as_dict() for h in searcher.search(
                 args.query, vector, limit=args.limit, kinds=set(args.kind) if args.kind else None, when=when)]
-            pending = store.pending_count(local_sources)
-        except VersionMismatch as error:
-            return _fail(args, "index_invalid", E.INDEX_MISSING, str(error),
-                         [{"intent": "rebuild_index", "reason": "The index was made with other vectors.",
-                           "command": ["rummage", "index", "--rebuild"]}])
+            pending = store.pending_count(sources=local_sources)
+            gate = searcher.calibration.gate
         finally:
             store.close()
     for name, spec in cfg.remotes.items():
@@ -291,7 +306,7 @@ def cmd_search(cfg: C.Config, args) -> int:
         if n == cut:
             print("-- weaker matches --")
         how = []
-        if h["z"] is not None and h["z"] >= 2:
+        if h["z"] is not None and h["z"] >= gate:
             how.append(f"meaning z={h['z']:.1f}")
         if h["words"]:
             how.append(f"words {h['words']:.0%}")
@@ -612,9 +627,9 @@ def cmd_report(cfg: C.Config, args) -> int:
     try:
         scope = Scope(args.source, args.path)
         if args.report == "dupes":
-            found = upkeep.dupes(store, scope, args.min_cosine or upkeep.DUPE_COSINE, args.limit)
+            found = upkeep.dupes(store, scope, args.min_cosine, args.limit)
         else:
-            found = upkeep.conflicts(store, scope, args.min_cosine or upkeep.TOPIC_COSINE, limit=args.limit)
+            found = upkeep.conflicts(store, scope, args.min_cosine, limit=args.limit)
     finally:
         store.close()
     found = [_show(cfg, args, {"source": f["a"]["source"], **f}) for f in found]
@@ -706,7 +721,7 @@ def cmd_mcp(cfg: C.Config, args) -> int:
 
 
 def cmd_daemon(cfg: C.Config, args) -> int:
-    return D.run(_runtime(cfg), cfg.data_dir, cfg.threads, args.idle_minutes)
+    return D.run(cfg, args.idle_minutes)
 
 
 def cmd_serve(cfg: C.Config, args) -> int:
@@ -716,18 +731,37 @@ def cmd_serve(cfg: C.Config, args) -> int:
 
 
 def cmd_status(cfg: C.Config, args) -> int:
+    lines: list[str] = []
     if not cfg.index_path.exists():
         out = {"index": None, "config": str(cfg.path)}
     else:
         store = Store(cfg.index_path)
-        out = store.summary()
-        store.close()
+        try:
+            out = store.summary()
+            active = M.by_version(cfg.models, store.model)
+            out["model_name"] = active.name if active else None
+            rec = switch.record(store)
+            building = M.by_version(cfg.models, rec["to"]) if rec and rec["phase"] != "swapped" else None
+            again = store.unreadable(building.version, store.model, building.media) if building else {}
+            out["switch"] = switch.status(store, {k: v for k, v in again.items() if k in C.enabled(cfg)})
+            out["models"] = store.models()
+        finally:
+            store.close()
         out["config"] = str(cfg.path)
+        lines.append(f"model: {out['model_name'] or 'not configured'} ({out['model']})")
+        if cfg.model != out["model_name"] and not out["switch"]:
+            lines.append(f"  the config asks for {cfg.model}: the next index run starts the switch")
+        lines += switch.describe(out["switch"])
     out["configured_sources"] = list(cfg.sources)
     out["daemon"] = {"running": D.running(cfg.data_dir), "socket": str(D.socket_path(cfg.data_dir)),
                      "idle_minutes": cfg.daemon_idle_minutes}
     out["notes"] = limit_notes(out.get("sources") or {})
-    print(json.dumps(out, ensure_ascii=False, indent=None if args.json else 2))
+    if args.json:
+        print(json.dumps(out, ensure_ascii=False))
+        return 0
+    print("\n".join(lines))
+    print(json.dumps({k: v for k, v in out.items() if k not in ("switch", "model", "model_name")}, ensure_ascii=False,
+                     indent=2))
     return 0
 
 
@@ -746,28 +780,78 @@ def limit_notes(sources: dict) -> list[str]:
     return notes
 
 
+def _check_model(cfg: C.Config, store: Store, profile: M.Profile, media: bool, problems: list[str],
+                 notes: list[str]) -> None:
+    """Whether this machine (and the accelerator, when set) makes `profile`'s vectors, by its reference vectors."""
+    stored = store.meta(f"reference:{profile.version}")
+    expected = list(profile.reference) or (json.loads(stored) if stored else None)
+    rt = _runtime(cfg)
+    missing = rt.missing(profile, media)
+    if missing:
+        problems.append(f"{profile.name}: files missing (run `rummage setup`): " + ", ".join(missing))
+        return
+    if expected is None:
+        return
+    try:
+        with R.embedder(rt, profile, threads=cfg.threads, nice=cfg.nice) as e:
+            agreement = R.reference_agreement(e, expected)
+    except R.EmbedError as error:
+        problems.append(f"{profile.name}: the model doesn't answer: {error}")
+        return
+    if agreement < M.REFERENCE_COSINE:
+        problems.append(f"{profile.name}: this runtime's vectors differ from the expected ones (cosine "
+                        f"{agreement:.4f}): go back to the pinned llama.cpp build, or switch to a model profile "
+                        "with a new version")
+    else:
+        notes.append(f"{profile.name}: reference vectors match (min cosine {agreement:.5f})")
+    if cfg.embedder_url and profile.local:
+        try:
+            remote = R.RemoteEmbedder(cfg.embedder_url, profile)
+            remote.start()
+            agreement = R.reference_agreement(remote, expected)
+            if agreement < M.REFERENCE_COSINE:
+                problems.append(f"embedder {cfg.embedder_url} makes other vectors than {profile.name} (cosine "
+                                f"{agreement:.4f}): indexing won't use it; run the same model there")
+            else:
+                notes.append(f"embedder {cfg.embedder_url} agrees with {profile.name} (min cosine {agreement:.5f})")
+        except R.EmbedError as error:
+            notes.append(f"embedder {cfg.embedder_url} not reachable, indexing uses this machine: {error}")
+
+
 def cmd_doctor(cfg: C.Config, args) -> int:
     problems: list[str] = []
     notes: list[str] = []
-    rt = _runtime(cfg)
     try:
-        media = any(build(n, s, cfg.data_dir).media for n, s in cfg.sources.items())
+        media = _media(cfg)
     except ValueError as error:
         problems.append(str(error))
         media = False
-    missing = rt.missing(media)
-    if missing:
-        problems.append("runtime files missing (run `rummage setup`): " + ", ".join(missing))
+    try:
+        wanted = M.by_name(cfg.models, cfg.model)
+    except (M.UnknownModel, ValueError) as error:
+        problems.append(str(error))
+        wanted = None
     if not cfg.index_path.exists():
         problems.append("no index yet (run `rummage index`)")
+        if wanted:
+            missing = _runtime(cfg).missing(wanted, media)
+            if missing:
+                problems.append("runtime files missing (run `rummage setup`): " + ", ".join(missing))
     else:
         store = Store(cfg.index_path)
         try:
-            if store.vector_version != R.VECTOR_VERSION:
-                problems.append(f"index vectors {store.vector_version} != {R.VECTOR_VERSION}: rebuild needed")
+            active = M.by_version(cfg.models, store.model)
+            if store.model and active is None:
+                problems.append(f"the index's model {store.model} isn't configured: searches go by words only")
+            rec = switch.record(store)
+            if rec and rec["phase"] != "swapped":
+                if rec.get("error"):
+                    problems.append(f"model switch to {rec['to_name']}: {rec['error']}")
+                elif rec.get("waiting"):
+                    notes.append(f"model switch to {rec['to_name']}: {rec['waiting']}")
             summary = store.summary()
             now = time.time()
-            for name in cfg.sources:
+            for name in C.enabled(cfg):
                 entry = summary["sources"].get(name, {})
                 last = entry.get("last_run")
                 if not last:
@@ -780,27 +864,8 @@ def cmd_doctor(cfg: C.Config, args) -> int:
                 good = entry.get("last_ok")
                 if good is None or now - good > args.stale_hours * 3600:
                     problems.append(f"{name}: no successful run in {args.stale_hours} h")
-            reference = store.meta("reference")
-            if reference and not missing:
-                with R.embedder(rt, media=False, threads=cfg.threads, nice=cfg.nice) as e:
-                    agreement = R.reference_agreement(e, json.loads(reference))
-                if agreement < R.REFERENCE_COSINE:
-                    problems.append(f"this runtime's vectors differ from the index's (cosine {agreement:.4f}): "
-                                    "rebuild with `rummage index --rebuild` or go back to the old llama.cpp build")
-                else:
-                    notes.append(f"reference vectors match (min cosine {agreement:.5f})")
-            if reference and cfg.embedder_url:
-                try:
-                    remote = R.RemoteEmbedder(cfg.embedder_url)
-                    remote.start()
-                    agreement = R.reference_agreement(remote, json.loads(reference))
-                    if agreement < R.REFERENCE_COSINE:
-                        problems.append(f"remote embedder {cfg.embedder_url} makes other vectors (cosine "
-                                        f"{agreement:.4f}): indexing won't use it; run the same pinned model there")
-                    else:
-                        notes.append(f"remote embedder {cfg.embedder_url} agrees (min cosine {agreement:.5f})")
-                except R.EmbedError as error:
-                    notes.append(f"remote embedder not reachable, indexing uses this machine: {error}")
+            for profile in {p.version: p for p in (active, wanted) if p}.values():
+                _check_model(cfg, store, profile, media, problems, notes)
         finally:
             store.close()
     out = {"ok": not problems, "problems": problems, "notes": notes}
@@ -818,13 +883,16 @@ def cmd_doctor(cfg: C.Config, args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="rummage", description="Local hybrid search with EmbeddingGemma 2.")
+    parser = argparse.ArgumentParser(prog="rummage", description="Local search by meaning and exact words.")
     parser.add_argument("--config", help="config file (default $RUMMAGE_CONFIG or ~/.config/rummage/config.toml)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("setup", help="fetch the pinned runtime and model files")
     p.add_argument("--media", action="store_true", help="also fetch the image/audio encoders")
+    p.add_argument("--model", help="this model profile instead of the configured one")
     p.set_defaults(func=cmd_setup)
+
+    models_cli.add_parser(sub)
 
     p = sub.add_parser("index", help="bring the index up to date")
     p.add_argument("-s", "--source", action="append", help="only this source (repeatable)")
@@ -905,7 +973,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--path", action="append", help="only items under this ref prefix (repeatable)")
     p.add_argument("--max-items", type=int, default=4)
     p.add_argument("--max-chars", type=int, default=1500, help="size budget of the block")
-    p.add_argument("--min-z", type=float, default=3.0, help="how far a passage must stand out by meaning")
+    p.add_argument("--min-z", type=float, help="how far a passage must stand out by meaning (default: the model's "
+                                               "calibrated recall gate, 3 for EmbeddingGemma 2)")
     p.add_argument("--min-words", type=float, default=0.67, help="share of the prompt's words an item must contain")
     p.add_argument("--max-query-chars", type=int, default=2000)
     p.add_argument("--session", help="the current chat session's id, left out of the recent part "
@@ -945,7 +1014,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("action", choices=["show", "install", "uninstall"])
     p.set_defaults(func=cmd_service)
 
-    p = sub.add_parser("export", help="write the index as plain files (rummage.export.v1), vectors included")
+    p = sub.add_parser("export", help="write the index as plain files (rummage.export.v2), vectors included")
     p.add_argument("folder", help="a new folder to write")
     p.set_defaults(func=cmd_export)
 

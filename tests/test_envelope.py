@@ -49,7 +49,7 @@ class _NoModel:
 
     def texts(self, texts):
         import numpy as np
-        from rummage.runtime import DIM
+        from conftest import DIM
         rows = np.zeros((len(texts), DIM), np.float32)
         rows[:, 0] = 1
         return rows

@@ -5,7 +5,9 @@ model is loaded, so only the first search of a while pays for the load and memor
 
 One daemon per data directory: it holds the `daemon` lock while it runs, so a second one started meanwhile exits.
 
-Protocol: one JSON line per request, `{"embed": "<query>"}`, answered by `{"vector": [...]}` or `{"error": "..."}`.
+Protocol: one JSON line per request, `{"embed": "<query>", "model": "<version>"}`, answered by `{"vector": [...]}`
+or `{"error": "..."}`. The daemon embeds with the model the request names (the index's), loading another when a
+model switch changes it.
 The socket is created with owner-only permissions, in the data directory (or /tmp when that path is too long).
 """
 
@@ -26,7 +28,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import runtime as R
+from . import config as C
 from .indexer import Busy, lock
 
 SOCKET_NAME = "query.sock"
@@ -43,8 +45,8 @@ def socket_path(data_dir: Path) -> Path:
     return base / f"rummage-{os.getuid() if hasattr(os, 'getuid') else 0}-{key}.sock"
 
 
-def query_vector(data_dir: Path, text: str, timeout: float = 10.0) -> np.ndarray | None:
-    """The query vector from a running daemon, or None when there is none (or it fails)."""
+def query_vector(data_dir: Path, text: str, version: str | None, timeout: float = 10.0) -> np.ndarray | None:
+    """The query vector of model `version` from a running daemon, or None when there is none (or it fails)."""
     path = socket_path(data_dir)
     if not hasattr(socket, "AF_UNIX") or not path.exists():
         return None
@@ -52,7 +54,7 @@ def query_vector(data_dir: Path, text: str, timeout: float = 10.0) -> np.ndarray
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
             conn.settimeout(timeout)
             conn.connect(str(path))
-            conn.sendall(json.dumps({"embed": text}).encode() + b"\n")
+            conn.sendall(json.dumps({"embed": text, "model": version}).encode() + b"\n")
             data = b""
             while not data.endswith(b"\n"):
                 chunk = conn.recv(65536)
@@ -88,13 +90,14 @@ def ensure(config: Path, data_dir: Path, idle_minutes: float, log: Path) -> subp
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err, start_new_session=True)
 
 
-def wait_vector(data_dir: Path, text: str, seconds: float, process: subprocess.Popen | None = None):
+def wait_vector(data_dir: Path, text: str, version: str | None, seconds: float,
+                process: subprocess.Popen | None = None):
     """The query vector from a daemon that is starting, once it answers; None after `seconds`, or as soon as the
     process we started has exited."""
     give_up = time.monotonic() + seconds
     while time.monotonic() < give_up:
         if socket_path(data_dir).exists():
-            vector = query_vector(data_dir, text, timeout=max(1.0, give_up - time.monotonic()))
+            vector = query_vector(data_dir, text, version, timeout=max(1.0, give_up - time.monotonic()))
             if vector is not None:
                 return vector
         if process is not None and process.poll() is not None:
@@ -103,38 +106,44 @@ def wait_vector(data_dir: Path, text: str, seconds: float, process: subprocess.P
     return None
 
 
-def run(runtime: R.Runtime, data_dir: Path, threads: int, idle_minutes: float | None) -> int:
+def run(cfg: C.Config, idle_minutes: float | None) -> int:
+    data_dir = cfg.data_dir
     if not hasattr(socket, "AF_UNIX"):
         print("this system has no Unix sockets; searches load the model themselves", file=sys.stderr)
         return 1
     try:
         with lock(data_dir, "daemon"):
-            return _serve(runtime, data_dir, threads, idle_minutes)
+            return _serve(cfg, idle_minutes)
     except Busy:
         print(f"a daemon already runs for {data_dir}", file=sys.stderr)
         return 0
 
 
-def _serve(runtime: R.Runtime, data_dir: Path, threads: int, idle_minutes: float | None) -> int:
+def _serve(cfg: C.Config, idle_minutes: float | None) -> int:
+    from .query import QueryModel
+    from .store import Store
+
+    data_dir = cfg.data_dir
     path = socket_path(data_dir)
-    if query_vector(data_dir, "ping") is not None:
+    if path.exists() and _answers(path):
         print(f"a daemon already answers on {path}", file=sys.stderr)
         return 0
     path.unlink(missing_ok=True)
     data_dir.mkdir(parents=True, exist_ok=True)
-    embedder = R.Embedder(runtime, media=False, threads=threads, nice=0, die_with_parent=False)
-    embedder.start()
-    lock = threading.Lock()
+    model = QueryModel(cfg)
+    if cfg.index_path.exists():
+        store = Store(cfg.index_path)
+        try:
+            model.vector(store.model, "ping")
+        finally:
+            store.close()
     last_used = [time.monotonic()]
 
     class Handler(socketserver.StreamRequestHandler):
         def handle(self):
             try:
                 request = json.loads(self.rfile.readline())
-                with lock:
-                    if embedder.process is None or embedder.process.poll() is not None:
-                        embedder.start()
-                    vector = embedder.query(str(request["embed"]))
+                vector = model.vector(request.get("model"), str(request["embed"]))
                 last_used[0] = time.monotonic()
                 reply = {"vector": [round(float(x), 6) for x in vector]}
             except Exception as error:
@@ -164,5 +173,15 @@ def _serve(runtime: R.Runtime, data_dir: Path, threads: int, idle_minutes: float
     finally:
         server.server_close()
         path.unlink(missing_ok=True)
-        embedder.stop()
+        model.close()
     return 0
+
+
+def _answers(path: Path) -> bool:
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.settimeout(2)
+            conn.connect(str(path))
+        return True
+    except OSError:
+        return False

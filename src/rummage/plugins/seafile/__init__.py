@@ -19,7 +19,6 @@ from rummage import net
 from rummage import extract as X
 from rummage import text as T
 from rummage.limits import Limits, record
-from rummage.runtime import document_text
 from rummage.store import Item, Segment
 from rummage.sources import Plan, Source
 
@@ -178,6 +177,6 @@ class SeafileSource(Source):
             seg = Segment("text", piece, loc=str(start),
                           lines=T.line_span(body, start, piece) if kind == "text" else None)
             if T.has_prose(piece):
-                seg.embed_text = document_text(title, piece)
+                seg.embed = (title, piece)
             segments.append(seg)
         return segments

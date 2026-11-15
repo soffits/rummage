@@ -2,15 +2,21 @@
 
 ## Model and runtime
 
-- EmbeddingGemma 2, first 512 of 768 dimensions, float16 storage: near-lossless on MTEB, a third less storage and compute.
+- EmbeddingGemma 2, first 512 of 768 dimensions, float16 storage, as the default: near-lossless on MTEB, a third less storage and compute.
+- Models are profiles (files or endpoint, prompts, dimensions, thresholds), not constants: benchmarks put most of the quality in the model, so a better one has to drop in with a config line. Sources store the model-independent input `(title, text)` and each profile writes its own prompt around it, so a switch re-embeds without reading sources again.
+- A switch builds the new vectors beside the old ones in the same index (a `vectors` table keyed by model) and swaps in one transaction, as Qdrant's blue-green migration does with two collections and Smart Connections v3 with per-model embeddings; a second index file would need its own reading of every source and a merge of what changed meanwhile. Old vectors stay until pruned, so a rollback is instant. Khoj re-embeds in place and Continue keeps a table per provider without a swap step; both leave search on a half-built index meanwhile.
+- The switch is a record in the index moved along by ordinary embedding runs, not a separate job: `watch`, the hourly run and a manual `rummage index` all advance it, and it resumes from committed batches after a kill.
+- Thresholds are calibrated per model by quantile matching against the model being replaced, on the user's own index (probe queries cut from sampled passages, scored against other items): no labelled data needed, and a model compared with itself gets its own thresholds back. Khoj keeps a hand-set threshold per model instead. The share-based target for an index with no previous model was measured with EmbeddingGemma 2 on BEIR SciFact, because the live index and SciFact agreed on the gates (2.3% vs 2.6% at z 2) but not on near-duplicates.
+- The comparison before a swap is known-item search with the same probes: it needs no judgements, runs on any index, and catches a model that can't find what the old one found; the public set (SciFact) is on request because it takes minutes of embedding.
+- A remote endpoint is either a profile's own model (`url`) or an accelerator for a local profile (`[embedder] url`), trusted only when its reference vectors agree; an OpenAI-compatible request (`input`, optional `model`, bearer key) covers llama-server, vLLM, TEI and hosted APIs. Without `/tokenize`, long inputs are split by size (two bytes per token at least).
 - llama.cpp `llama-server` with ggml-org's Q8_0 GGUF: one runtime for text and images, official prebuilt CPU builds, the same files DigUp checked against the reference. ONNX int8 was ~25% faster on text but needs our own image preprocessing.
 - The server runs as a child for one run on 127.0.0.1 and a free port; no resident daemon except under `rummage serve`.
 - Passages are cut by characters (~1800), but the server's limit is tokens, which no character count bounds (a byte-fallback tokenizer spends a token per byte on invisible and rare characters). So the embedder owns the limit: it measures any text that could exceed a micro-batch with the server's tokenizer, embeds it in halves until each fits, and averages the vectors by token count. One passage stays one vector, and no source has to know the tokenizer.
 
 ## Index and ranking
 
-- One SQLite file: items, segments with optional vectors, contentless FTS5, per-source cursors, run history.
-- Ranking adapted from DigUp: z-scored cosine per modality, z ≥ 2 counts as a meaning match, word coverage bonus, ID and number queries weigh words double.
+- One SQLite file: items, segments with their model input, vectors per model, contentless FTS5, per-source cursors, run history. An index from before profiles is migrated in place when opened (vectors move to the new table under the old version); its passages' inputs weren't kept, so a later switch reads those items again.
+- Ranking adapted from DigUp: z-scored cosine per modality, z ≥ the model's gate (2 for EmbeddingGemma 2) counts as a meaning match, word coverage bonus, ID and number queries weigh words double.
 - CJK characters (Han, kana, Hangul) are single FTS tokens and CJK query runs become overlapping character pairs, so two-character words match in any CJK language and Korean particles don't block a match; trigram tokenizers can't match two-character words.
 - Brute-force numpy scoring instead of an ANN index or sqlite-vec: fast enough for a few hundred thousand vectors, no alpha dependency.
 
@@ -45,7 +51,7 @@
 
 ## Storage
 
-- SQLite stays the only backend: one file, no server, exact vector scans are fast at personal scale. The seam is `Store` (no SQL anywhere else), and `rummage.export.v1` is the way between engines, so a second backend can come without a migration tool of its own.
+- SQLite stays the only backend: one file, no server, exact vector scans are fast at personal scale. The seam is `Store` (no SQL anywhere else), and `rummage.export.v2` is the way between engines, so a second backend can come without a migration tool of its own.
 - The export keeps vectors as raw little-endian float16 rows next to JSONL text, rather than one JSON or a database dump: any language reads it, vectors stay exact, and the vector version in the manifest stops mixing models.
 - `rummage service` writes the OS's own supervisor config (systemd user unit, launchd agent, logon task) instead of shipping a supervisor: restarts and login start come from the system people already use.
 
@@ -53,7 +59,7 @@
 
 - A search with no daemon starts one (`daemon.ensure`) and waits for its answer rather than also loading the model itself: one model load instead of two in memory, about the same wait. The daemon holds a per-data-directory lock for its life, so searches racing to start it end up with one; it exits after `[daemon] idle_minutes` unused so memory comes back. A prompt hook starts it without waiting, since hooks must stay fast.
 - Threads follow the load by restarting `llama-server` (about a second) when the wanted count changes, checked at most once a minute: llama.cpp fixes the thread count at start, and a minute-scale check matches the 1-minute load average it reads.
-- A remote embedder is trusted by result, not by name: it is used only when its vectors for three fixed reference texts agree with the ones stored at the index's first run (cosine ≥ 0.999, the same bar `doctor` applies to a llama.cpp upgrade). Queries keep using the local model or daemon, so search never depends on another machine.
+- An accelerator is trusted by result, not by name: it is used only when its vectors for three fixed reference texts agree with the profile's published ones or those stored at the first run (cosine ≥ 0.999, the same bar `doctor` applies to a llama.cpp upgrade). Queries keep using the local model or daemon, so search never depends on another machine unless the model itself is remote.
 
 ## Feedback
 
@@ -67,4 +73,4 @@
 
 ## Upkeep reports
 
-- Conflicts are found without a language model: close passages (cosine 0.80-0.97) whose dates, times, amounts or numbers differ, a few at most on each side. Refs that differ only in digits (a dated log, numbered runs) and number-heavy passages (tables) are left out, since their numbers are meant to differ. The report is a list to judge, not a verdict.
+- Conflicts are found without a language model: close passages (cosine 0.80-0.97 for EmbeddingGemma 2, calibrated for other models) whose dates, times, amounts or numbers differ, a few at most on each side. Refs that differ only in digits (a dated log, numbered runs) and number-heavy passages (tables) are left out, since their numbers are meant to differ. The report is a list to judge, not a verdict.

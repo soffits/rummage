@@ -12,9 +12,8 @@ import numpy as np
 
 from . import text as T
 from .store import Scope, Store
+from .switch import calibration
 
-DUPE_COSINE = 0.95
-TOPIC_COSINE = 0.80
 # A contradiction is a few facts that disagree; passages that differ in many numbers are tables or logs.
 MAX_DIFFERING = 6
 BLOCK = 1024
@@ -65,7 +64,9 @@ def _side(row: dict) -> dict:
     return {k: row[k] for k in ("id", "source", "ref", "title", "loc", "lines")} | {"text": T.snippet_head(row["text"], 300)}
 
 
-def dupes(store: Store, scope: Scope, threshold: float = DUPE_COSINE, limit: int = 100) -> list[dict]:
+def dupes(store: Store, scope: Scope, threshold: float | None = None, limit: int = 100) -> list[dict]:
+    """`threshold`: how alike two passages must be (default: the model's calibrated `dupe_cosine`)."""
+    threshold = calibration(store, store.model).dupe_cosine if threshold is None else threshold
     pairs = similar_pairs(store, scope, threshold, limit=limit)
     rows = store.segment_rows([s for _, a, b in pairs for s in (a, b)])
     return [{"cosine": round(c, 4), "a": _side(rows[a]), "b": _side(rows[b])} for c, a, b in pairs]
@@ -77,10 +78,14 @@ def series_key(ref: str) -> str:
     return re.sub(r"\d+", "#", ref)
 
 
-def conflicts(store: Store, scope: Scope, low: float = TOPIC_COSINE, high: float = 0.97,
-              limit: int = 100) -> list[dict]:
+def conflicts(store: Store, scope: Scope, low: float | None = None, limit: int = 100) -> list[dict]:
     """Close passages whose facts differ: each has a fact the other lacks, a few at most. Records of one series
-    (refs that differ only in their digits) and passages that differ in many numbers (tables, logs) are left out."""
+    (refs that differ only in their digits) and passages that differ in many numbers (tables, logs) are left out.
+    Passages count as about the same thing from `low` (default: the model's `topic_cosine`) up to the model's
+    `same_cosine`, above which they are copies."""
+    cal = calibration(store, store.model)
+    low = cal.topic_cosine if low is None else low
+    high = cal.same_cosine
     pairs = similar_pairs(store, scope, low, high, limit=limit * 5)
     rows = store.segment_rows([s for _, a, b in pairs for s in (a, b)])
     out = []

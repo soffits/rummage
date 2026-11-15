@@ -97,7 +97,7 @@ def test_seafile_plan_and_load():
         assert plan.state == {"heads": {"r1": "c1"}}
 
         lease = src.load(items["r1:/notes/lease.md"])
-        assert "one cat" in lease[1].text and lease[1].embed_text.startswith("title: lease")
+        assert "one cat" in lease[1].text and lease[1].embed[0].startswith("lease")
 
         FakeSeafile.requests.clear()
         archive = src.load(items["r1:/backup/old.zip"])

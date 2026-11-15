@@ -13,12 +13,12 @@ import numpy as np
 
 from . import text as T
 from .store import Scope, Store, same_message_key
+from .switch import calibration
 from .when import TimeRange, without
 
 WORD_WEIGHT = 2.0
 TIME_WEIGHT = 1.5      # bonus for an item from the time range the query names
 OPENED_WEIGHT = 0.4    # bonus per time an item was opened after a search with mostly the same words (max 2)
-Z_GATE = 2.0
 
 
 def gate_for(base: float, count: int) -> float:
@@ -73,16 +73,19 @@ class Hit:
 class Searcher:
     def __init__(self, store: Store, sources: list[str] | None = None, paths: list[str] | None = None,
                  globs: list[str] | None = None, since: float | None = None, until: float | None = None,
-                 ranking: Ranking = Ranking()):
+                 ranking: Ranking = Ranking(), model: str | None = None):
         """`sources`: only these sources. `paths`: only items whose ref starts with one of these prefixes. `globs`:
-        only items whose ref matches one of these patterns (`*` crosses folders, as in SQLite's GLOB)."""
+        only items whose ref matches one of these patterns (`*` crosses folders, as in SQLite's GLOB). `model`: the
+        model the query vector was made with (default: the index's)."""
         self.store = store
         self.scope = Scope(sources, paths, globs, since, until)
         self.ranking = ranking
+        self.model = model or store.model
+        self.calibration = calibration(store, self.model)
         self._loaded = False
 
     def _load(self) -> None:
-        self.seg_ids, self.seg_items, self.seg_kinds, self.matrix = self.store.vectors(self.scope)
+        self.seg_ids, self.seg_items, self.seg_kinds, self.matrix = self.store.vectors(self.scope, self.model)
         self._loaded = True
 
     def vector_count(self) -> int:
@@ -112,10 +115,11 @@ class Searcher:
         return scores, z
 
     def search(self, query: str, vector: np.ndarray | None, limit: int = 10, kinds: set[str] | None = None,
-               z_gate: float = Z_GATE, when: TimeRange | None = None) -> list[Hit]:
+               z_gate: float | None = None, when: TimeRange | None = None) -> list[Hit]:
         """`when`: the time range the query names; items from it rank higher, and its phrase isn't matched as
-        words."""
+        words. `z_gate`: how far a meaning match must stand out (default: the model's calibrated gate)."""
         r = self.ranking
+        z_gate = self.calibration.gate if z_gate is None else z_gate
         words = T.terms(without(query, when), cjk_pairs=r.cjk_pairs) if r.words else []
         vector = vector if r.meaning else None
         best: dict[int, tuple[float, float, int]] = {}

@@ -43,7 +43,6 @@ from pathlib import Path
 from rummage import extract as X
 from rummage import text as T
 from rummage.limits import Cut, Limits, record
-from rummage.runtime import document_text
 from rummage.sources import Plan, Source
 from rummage.store import Item, Segment
 
@@ -114,14 +113,14 @@ def message_segments(item: Item, limits: Limits) -> list[Segment]:
     for start, piece in T.chunks(text):
         seg = Segment("text", piece, loc=str(start))
         if T.has_prose(piece):
-            seg.embed_text = document_text(item.title, piece)
+            seg.embed = (item.title, piece)
         segments.append(seg)
     for name, text in attached:
         item.info.setdefault("attachments", []).append(name)
         for start, piece in T.chunks(text):
             seg = Segment("text", piece, loc=f"{name}@{start}")
             if T.has_prose(piece):
-                seg.embed_text = document_text(f"{item.title} / {name}", piece)
+                seg.embed = (f"{item.title} / {name}", piece)
             segments.append(seg)
     return segments
 

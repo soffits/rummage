@@ -13,7 +13,7 @@ class _NoModel:
 
     def texts(self, texts):
         import numpy as np
-        from rummage.runtime import DIM
+        from conftest import DIM
         rows = np.zeros((len(texts), DIM), np.float32)
         rows[:, 0] = 1
         return rows
@@ -60,7 +60,7 @@ class _TopicModel:
 
     def __init__(self):
         import numpy as np
-        from rummage.runtime import DIM
+        from conftest import DIM
         self.np, self.dim = np, DIM
 
     def get(self, media):
@@ -96,7 +96,7 @@ def test_recall_finds_what_search_finds_and_says_where(tmp_path, capsys, monkeyp
     index_all(store, build("notes", {"type": "markdown", "root": str(notes)}, tmp_path), model,
                  lambda *a: None, print)
     store.close()
-    monkeypatch.setattr("rummage.daemon.query_vector", lambda data_dir, text, timeout=10.0: model.vector(text))
+    monkeypatch.setattr("rummage.daemon.query_vector", lambda data_dir, text, version=None, timeout=10.0: model.vector(text))
     for prompt in ("which mattress did we buy", "mattress"):
         assert main(["--config", str(cfg), "recall", prompt]) == 0
         block = capsys.readouterr().out

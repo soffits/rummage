@@ -25,7 +25,6 @@ import tempfile
 from pathlib import Path
 
 from rummage import text as T
-from rummage.runtime import document_text
 from rummage.sources.folder import FolderSource
 from rummage.store import Item, Segment
 
@@ -90,7 +89,7 @@ class MediaSource(FolderSource):
                 text = " ".join(passage)
                 seg = Segment("text", text, loc=clock(start))
                 if T.has_prose(text):
-                    seg.embed_text = document_text(f"{item.title} at {clock(start)}", text)
+                    seg.embed = (f"{item.title} at {clock(start)}", text)
                 segments.append(seg)
                 passage, start = [], None
         return segments
