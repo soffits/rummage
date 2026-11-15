@@ -20,7 +20,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 QUERY = "task: search result | query: "
-DOCUMENT = re.compile(r"title: (.*?) \| text: (.*)", re.S)
+DOCUMENT = re.compile(r"title: (.*?) \| text: (.*)", re.DOTALL)
 TASK = "Given a web search query, retrieve relevant passages that answer the query"
 
 
