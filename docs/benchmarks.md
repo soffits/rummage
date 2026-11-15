@@ -72,6 +72,52 @@ the ranking differs. nDCG@10:
 - Matching CJK queries by character pairs is worth 1.4 points on Korean and 2.2 on Chinese; words alone are weak on
   Chinese (0.082) because a question shares few exact runs with its passage.
 
+### Does the method carry over to other models?
+
+The same runs with three more embedding models (`--model`, each model card's prompts through `bench/model_proxy.py`):
+EmbeddingGemma 1 (qmd's default), and Microsoft's harrier-oss-v1 at 270M and 0.6B, two of the strongest small
+multilingual models on MTEB in November 2026. "rummage" is its full ranking over that model's vectors; "cosine" is
+the same index ranked by cosine alone; "dense" is plain retrieval with one vector per document, at rummage's 512
+dimensions and at the model's full width. nDCG@10:
+
+| Set | Model | dense, 512 | dense, full width | cosine (rummage's index) | rummage |
+|---|---|---|---|---|---|
+| SciFact | EmbeddingGemma 2 | 0.853 | 0.850 | 0.843 | **0.864** |
+| SciFact | EmbeddingGemma 1 | 0.786 | 0.793 | 0.779 | 0.790 |
+| SciFact | harrier-oss-v1-270m | 0.728 | 0.745 | 0.725 | 0.738 |
+| SciFact | harrier-oss-v1-0.6b | 0.683 | 0.755 | 0.675 | 0.702 |
+| NFCorpus | EmbeddingGemma 2 | | | 0.368 | 0.378 |
+| NFCorpus | EmbeddingGemma 1 | 0.389 | 0.388 | 0.390 | **0.396** |
+| NFCorpus | harrier-oss-v1-270m | 0.353 | 0.365 | 0.351 | 0.362 |
+| NFCorpus | harrier-oss-v1-0.6b | 0.349 | 0.380 | 0.348 | 0.366 |
+
+CPU embedding time per passage on this machine (200 SciFact passages of up to 1,800 characters, 2 threads, other
+runs sharing it): EmbeddingGemma 2 0.79 s, EmbeddingGemma 1 0.61 s, harrier-270m 0.44 s, harrier-0.6b 2.10 s.
+
+- rummage's ranking beats cosine over the same vectors with every model, by 0.7 to 2.7 points. The gain is real and
+  consistent, and small: the model sets the level.
+- rummage cuts every vector to 512 dimensions. That suits the EmbeddingGemma models, which are trained for it, and
+  costs the harrier models up to 7 points (harrier-0.6b on SciFact: 0.755 at full width, 0.683 at 512), enough
+  that plain full-width retrieval beats rummage with that model. The width belongs with the model, not in a
+  constant (`docs/queue.md`, item 8).
+- The full-width harrier scores match MTEB's published ones (SciFact 0.763 and 0.754, NFCorpus 0.372 and 0.361), so
+  the harness reproduces them. EmbeddingGemma 2 is far ahead of the others on SciFact and EmbeddingGemma 1 is best on
+  NFCorpus; MIRACL Korean and Chinese for these models are running.
+
+## Agent and retriever together
+
+Kept apart from the retriever tables: here a language model takes part, with its own knowledge. `bench/agentic.py`,
+on a fixed random 100 queries of each set (seed 7, the same for every arm), over the EmbeddingGemma 2 index:
+
+| | NFCorpus nDCG@10 | FiQA nDCG@10 | cost per query |
+|---|---|---|---|
+| rummage, the query as given | 0.375 | 0.335 | — |
+| Claude Haiku writes 2-3 queries and a short hypothetical passage; results fused | 0.386 | 0.355 | $0.004 |
+| the same, then Claude Sonnet reranks the top 30 | **0.450** | **0.494** | $0.030–0.037 |
+
+Rewriting adds 1 to 2 points, inside the noise of 100 queries; reranking by a strong model adds 7 points on NFCorpus
+and 16 on FiQA. Costs are what the `claude` CLI reports at API prices, with a one-line system prompt and no tools.
+
 ### Is 0.864 on SciFact right?
 
 It is well above the published scores of EmbeddingGemma's first version on SciFact (0.787 on the
@@ -135,6 +181,46 @@ the same fact but isn't the annotated one), and LoCoMo's unanswerable questions 
 event and puts it on the other speaker, so a matching turn does exist (39% of the injections on them are exactly
 that turn). LongMemEval's abstention questions, which ask about things never mentioned, are the cleaner test of
 staying silent; they follow.
+
+### LongMemEval-S (500 questions, each over its own ~50 chat sessions)
+
+At recall's defaults, counting an injected item as right when it comes from a session that holds the answer:
+
+| | |
+|---|---|
+| answerable questions where an injected item is from an answer session (hit rate) | 0.930 |
+| answerable questions where recall injected nothing | 0.028 |
+| injected items, on answerable questions, from an answer session | 0.888 |
+| abstention questions (30) where recall injected something | 0.900 |
+| answer session in the top 10 of plain `rummage search` | 0.987 |
+
+Hit rates by question type: 0.99 knowledge updates, 0.94 multi-session, 1.00 single-session (assistant), 0.97
+single-session (user), 0.87 temporal reasoning, 0.77 preferences. Raising the meaning threshold trades hits for
+silence here too (min z 4 with words off: hit rate 0.687, abstention questions injected 0.533; min z 5: 0.319 and
+0.100). On the abstention questions, 89% of the injections come from the session the question was built from (it
+asks about a hamster when the user only mentioned a cat), which is the context a reader needs to say so. Whether it
+does is the next measure.
+
+### Answers on LongMemEval-S: no memory, one recall injection, an agent with rummage
+
+`bench/memory_qa.py`: the same reader (Claude Sonnet, through the `claude` CLI) answers every question three ways,
+and a judge (Claude Haiku) grades the answers with LongMemEval's own judge prompts; an abstention answer is right
+when it says the history doesn't hold the answer. The reader's skill takes part here, and the judge isn't the GPT-4o
+LongMemEval's paper used, so these numbers aren't comparable with published leaderboards.
+
+| | accuracy | abstention (30) | multi-session | temporal | knowledge update | cost per question | input tokens |
+|---|---|---|---|---|---|---|---|
+| no memory | 0.032 | 0.30 | 0.00 | 0.00 | 0.00 | $0.004 | 630 |
+| one recall injection | 0.550 | 0.60 | 0.32 | 0.47 | 0.69 | $0.010 | 2,150 |
+| agent searching rummage (1.5 searches on average, at most 4) | **0.800** | **0.87** | **0.73** | **0.80** | **0.88** | $0.032 | 7,530 |
+
+- One injection of at most four turns (given here as the full turns with their dates) is a weak memory on its own:
+  it holds an answer session for 93% of the questions, yet the reader answers 55% right. It does worst on
+  multi-session and temporal questions, which need several turns or dates at once.
+- Letting the agent search is worth 25 points over the injection, for about three times the tokens. The two weren't
+  combined in this run (the agent started without the injection).
+- With the history in reach, the reader declines the abstention questions far more often (0.87) than with nothing
+  (0.30, where it mostly guesses).
 
 ## First slices
 
