@@ -6,6 +6,7 @@ read-only, one item per memory, embedded again with rummage's own model.
     format = "mem0"              # mem0, letta, zep or lines (see formats.py)
     path = "~/exports/mem0"      # one export file, or a folder of them
     user = "alex"                # who the memories are about, when the file doesn't say
+    origin = "ChatGPT"           # where they come from, for a `lines` file (the other formats know)
 
 Each memory keeps its text, its time, the user and agent it belongs to and the system it came from (`origin`);
 ids, labels, categories and validity dates the file has go in the item's info. Vectors in the file are not used.
@@ -37,7 +38,8 @@ class MemoryExportSource(Source):
             raise ValueError(f"source {name}: `format` must be one of {', '.join(FORMATS)} (got {fmt!r})")
         if not spec.get("path"):
             raise ValueError(f"source {name}: `path` (an export file or a folder of them) is required")
-        self.read, self.origin, self.extensions = FORMATS[fmt]
+        self.read, origin, self.extensions = FORMATS[fmt]
+        self.origin = spec.get("origin") or origin
         self.format = fmt
         self.path = Path(os.path.expanduser(spec["path"]))
         self.user = spec.get("user", "")
@@ -86,7 +88,9 @@ class MemoryExportSource(Source):
     def _item(self, key: str, memory: Memory, path: Path, mtime: float) -> Item:
         user = memory.user or self.user
         agent = memory.agent or self.agent
-        info = {"origin": self.origin, "format": self.format, "file": str(path), "memory_id": memory.id}
+        info = {"format": self.format, "file": str(path), "memory_id": memory.id}
+        if self.origin:
+            info["origin"] = self.origin
         when = None
         if memory.time:
             when = dt.datetime.fromtimestamp(memory.time, dt.timezone.utc).astimezone()
@@ -99,12 +103,12 @@ class MemoryExportSource(Source):
         fingerprint = hashlib.sha256(json.dumps([memory.text, info], ensure_ascii=False, sort_keys=True,
                                                 default=str).encode("utf-8")).hexdigest()
         label = memory.extra.get("label") or user
-        title = f"{self.origin} memory" + (f" · {label}" if label else "") + (f", {when:%Y-%m-%d}" if when else "")
+        title = f"{self.origin} memory".strip() + (f" · {label}" if label else "") + (f", {when:%Y-%m-%d}" if when else "")
         return Item(self.name, key, "memory", title, f"{path}#{memory.id}", memory.time or mtime, fingerprint, info)
 
     def load(self, item: Item) -> list[Segment]:
         memory, _ = self._memories[item.key]
-        context = " ".join(filter(None, [f"{self.origin} memory", item.info.get("label"),
+        context = " ".join(filter(None, [f"{self.origin} memory".strip(), item.info.get("label"),
                                           f"about {item.info['user']}" if item.info.get("user") else "",
                                           f"from {item.info['agent']}" if item.info.get("agent") else "",
                                           item.info.get("time", "")[:10]]))

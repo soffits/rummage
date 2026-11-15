@@ -48,7 +48,9 @@ def _json(raw: bytes, path: Path):
     text = raw.decode("utf-8-sig")
     if path.suffix == ".jsonl":
         return [json.loads(line) for line in text.splitlines() if line.strip()]
-    return json.loads(text)
+    data = json.loads(text)
+    # Some exporters write the document as one JSON string (encoded twice); unwrap it.
+    return json.loads(data) if isinstance(data, str) else data
 
 
 def _entries(data, *keys: str) -> list:
@@ -170,10 +172,11 @@ def lines(raw: bytes, path: Path) -> Iterator[Memory]:
 
 Reader = Callable[[bytes, Path], Iterator[Memory]]
 
-# Each format: its reader, the system it comes from, and the file endings read when a folder is given.
+# Each format: its reader, the system it comes from (unknown for a plain list: the `origin` setting names it), and
+# the file endings read when a folder is given.
 FORMATS: dict[str, tuple[Reader, str, tuple[str, ...]]] = {
     "mem0": (mem0, "mem0", (".json", ".jsonl")),
     "letta": (letta, "Letta", (".af", ".json")),
     "zep": (zep, "Zep", (".json", ".jsonl")),
-    "lines": (lines, "exported memory", (".txt", ".md")),
+    "lines": (lines, "", (".txt", ".md")),
 }
