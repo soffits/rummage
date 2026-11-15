@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keyword search treats CJK as one family: Han, kana (half-width included, folded by NFKC) and Hangul syllables and jamo are single tokens, and a CJK query run is matched by overlapping character pairs, so Korean particles and Japanese inflection don't stop a match. Tests cover Chinese, Japanese and Korean.
 - Runs on macOS (Apple silicon and Intel), Windows (x64 and arm64) and Linux arm64 as well as Linux x64: `rummage setup` fetches the pinned llama.cpp build for each, the index lock works on Windows, and config and data default to `%APPDATA%` and `%LOCALAPPDATA%` there. Tests run on Linux, macOS and Windows; a weekly install check indexes and searches with the real model on each system.
 
 ## 0.5.0

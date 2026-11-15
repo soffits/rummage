@@ -26,9 +26,8 @@ HOOK_EVENT = "UserPromptSubmit"
 
 def worth_recalling(prompt: str) -> bool:
     """Skip greetings and one-word messages: they have nothing to look up."""
-    words = T.terms(prompt)
-    cjk = sum(len(w) for w in words if not w.isascii())
-    return len(words) >= 3 or cjk >= 4
+    latin = [w for w in T.terms(prompt) if not T.cjk_count(w)]
+    return len(latin) >= 3 or T.cjk_count(prompt) >= 4 or (len(latin) >= 1 and T.cjk_count(prompt) >= 2)
 
 
 def pick(hits: list[Hit], min_z: float, min_words: float, max_items: int, max_chars: int) -> list[Hit]:
