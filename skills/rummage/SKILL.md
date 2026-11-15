@@ -45,3 +45,13 @@ Credentials in results print as `[secret]`. Add `--show-secrets` only when the u
 
 Quote the file and lines you relied on. A miss doesn't prove the thing isn't there: try other words, exact
 names, or the folder directly before saying so.
+
+While the index is still being built, output carries an `index` note saying how much is in; treat a miss then as
+"maybe not indexed yet", and `rummage status --line` tells the user how far along it is.
+
+## When rummage itself is broken
+
+If you've confirmed a problem is rummage's own (reproduced it, checked `rummage doctor` and the version, ruled out
+the user's config), tell the user and offer a ready issue draft: steps to reproduce, rummage version, OS, the exact
+error, with private content (file names, paths, text from their files) removed. Link
+https://github.com/soffits/rummage/issues and let them decide whether to file it; never open issues or PRs yourself.

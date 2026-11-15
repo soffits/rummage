@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Claude Code: `/rummage:pause` and `/rummage:resume`, answered by a hook without a model turn; the plugin's hooks
+  name their harness (`--harness claude-code`, and `--harness codex` through Codex's own `.codex-plugin/plugin.json`).
+- The first prompt that makes rummage remember something new (a project, a harness's chat history) says so once,
+  with how to pause or remove it (`rummage.notice` in the hook reply, shown as `systemMessage`).
+- `status --line` puts a pause covering the folder first; `--json` has it as `paused_memory`.
+- OpenCode: `/rummage-pause` and `/rummage-resume`, the pause in the footer, and a one-time note on what the plugin
+  does.
+- The skill says how to read an incomplete index and how to offer the user a bug report for rummage itself.
+
 ## 0.15.1
 
 - A search, recall or `recent` run inside a git repository that no source reads saw an empty scope and found nothing (0.14.0). It now sees the default scope and says that `rummage project ensure` adds the repository (`scope.note`, and an `add_project` next action in JSON). Agents' hooks still add the repository by themselves.

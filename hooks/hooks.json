@@ -1,7 +1,11 @@
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "rummage recall --hook", "timeout": 5 } ] }
+      { "hooks": [ { "type": "command", "command": "rummage recall --hook --harness claude-code", "timeout": 5 } ] }
+    ],
+    "UserPromptExpansion": [
+      { "matcher": "^rummage:pause$", "hooks": [ { "type": "command", "command": "rummage pause --hook", "timeout": 10 } ] },
+      { "matcher": "^rummage:resume$", "hooks": [ { "type": "command", "command": "rummage resume --hook", "timeout": 10 } ] }
     ]
   }
 }
