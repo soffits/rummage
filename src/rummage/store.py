@@ -316,6 +316,25 @@ class Store:
                 [*part, start, end])}
         return out
 
+    def known_names(self, name: str) -> set[str]:
+        """Other names for `name` from indexed notes: the title and aliases of a note titled `name` or listing it
+        among its aliases."""
+        low = name.lower()
+        names = set()
+        for title, info in self.db.execute("SELECT title, info FROM items WHERE info LIKE '%\"aliases\"%'"):
+            aliases = json.loads(info or "{}").get("aliases") or []
+            group = [title or "", *aliases]
+            if low in (g.lower() for g in group):
+                names |= {g for g in group if g}
+        return names
+
+    def items_by_speaker(self, names: list[str], scope: Scope) -> list[int]:
+        where, args = scope.where()
+        marks = ",".join("?" * len(names))
+        return [r for (r,) in self.db.execute(
+            f"SELECT i.id FROM items i WHERE json_extract(i.info, '$.speaker') IN ({marks}){where}",
+            [*names, *args])]
+
     def item_row(self, row: int) -> dict | None:
         found = self.db.execute("SELECT source, kind, title, ref, info, key, mtime FROM items WHERE id = ?",
                                 (row,)).fetchone()
