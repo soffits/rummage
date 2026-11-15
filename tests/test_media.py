@@ -35,7 +35,7 @@ def test_media_is_transcribed_once_and_searchable_by_what_is_said(tmp_path):
     segments = src.load(items[0])
     text = [s for s in segments if s.kind == "text"]
     assert "second week of March" in text[0].text and text[0].loc == "0:00:00"
-    assert items[0].info["duration"] == "0:01:05" and text[0].embed_text
+    assert items[0].info["duration"] == "0:01:05" and text[0].embed
     src.load(items[0])   # again: from the transcript cache
     assert (tools / "whisper.py.calls").read_text() == "x"
 

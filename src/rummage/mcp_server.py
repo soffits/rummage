@@ -7,15 +7,13 @@ and kept for the life of the server.
 
 from __future__ import annotations
 
-import threading
 import time
 from types import SimpleNamespace
 
 from . import config as C
 from . import daemon as D
 from . import envelope as E
-from . import runtime as R
-from .query import FALLBACK_ERRORS, reason_for
+from .query import FALLBACK_ERRORS, QueryModel, reason_for
 from .search import Searcher
 from .when import understand
 from .secrets import mask_value
@@ -29,8 +27,7 @@ def build(cfg: C.Config):
     server = MCPServer(name="rummage", instructions=(
         "Search the user's local files by meaning and exact words. Call search first, then get with a result's id "
         "to read it. Results carry next_actions with follow-up calls."))
-    lock = threading.Lock()
-    embedder: dict = {}
+    model = QueryModel(cfg)
     read_only = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 
     def shown(value: dict, show_secrets: bool) -> dict:
@@ -38,17 +35,9 @@ def build(cfg: C.Config):
             return value
         return mask_value(value)
 
-    def query_vector(text: str):
-        vector = D.query_vector(cfg.data_dir, text)
-        if vector is not None:
-            return vector
-        with lock:
-            e = embedder.get("e")
-            if e is None or e.process is None or e.process.poll() is not None:
-                e = embedder["e"] = R.Embedder(R.Runtime(cfg.data_dir, cfg.llama_server), media=False,
-                                               threads=cfg.threads, nice=0, die_with_parent=False)
-                e.start()
-            return e.query(text)
+    def query_vector(version: str | None, text: str):
+        vector = D.query_vector(cfg.data_dir, text, version)
+        return vector if vector is not None else model.vector(version, text)
 
     @server.tool(annotations=read_only)
     def search(query: str, limit: int = 10, sources: list[str] | None = None, paths: list[str] | None = None,
@@ -63,15 +52,16 @@ def build(cfg: C.Config):
                 {"intent": "build_index", "reason": "Nothing is indexed yet.", "command": ["rummage", "index"]}])
         store = Store(cfg.index_path)
         try:
-            store.check_version()
+            version = store.model
             index_empty = store.item_count() == 0
             vector, degraded = None, None
             if not (words_only or index_empty):
                 try:
-                    vector = query_vector(query)
+                    vector = query_vector(version, query)
                 except FALLBACK_ERRORS as error:
                     degraded = reason_for(error)
-            hits = Searcher(store, sources, paths, globs).search(query, vector, limit=limit, when=understand(query))
+            hits = Searcher(store, sources, paths, globs, model=version).search(query, vector, limit=limit,
+                                                                                when=understand(query))
         finally:
             store.close()
         args = SimpleNamespace(query=query, limit=limit, source=sources, kind=None, words_only=words_only,
@@ -112,8 +102,7 @@ def build(cfg: C.Config):
             store.close()
 
     def stop():
-        if embedder.get("e"):
-            embedder["e"].stop()
+        model.close()
 
     return server, stop
 

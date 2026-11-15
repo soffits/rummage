@@ -11,7 +11,6 @@ import re
 from pathlib import Path
 
 from .. import text as T
-from ..runtime import document_text
 from ..store import Item, Segment
 from .folder import FolderSource
 
@@ -85,7 +84,7 @@ def note_segments(item: Item, raw: str) -> list[Segment]:
         embed_title = label + (" > " + " > ".join(path) if path else "")
         seg = Segment("text", piece, loc=str(start), lines=T.line_span(body, start, piece, base, raw))
         if T.has_prose(piece):
-            seg.embed_text = document_text(embed_title, piece)
+            seg.embed = (embed_title, piece)
         segments.append(seg)
     return segments
 

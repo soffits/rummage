@@ -1,8 +1,8 @@
 import numpy as np
 
-from conftest import index_all
+from conftest import as_embedders, index_all
 from rummage.cli import main
-from rummage.runtime import DIM
+from conftest import DIM
 from rummage.search import Searcher
 from rummage.sources.markdown import MarkdownSource
 from rummage.store import Store
@@ -30,7 +30,8 @@ def test_export_import_round_trip_gives_identical_results(tmp_path, capsys):
     index_all(store, MarkdownSource("notes", {"root": str(notes)}, tmp_path), model, lambda *a: None, print)
     (notes / "late.md").write_text("A late note about apples that has no vector yet.", encoding="utf-8")
     from rummage.indexer import index_source
-    index_source(store, MarkdownSource("notes", {"root": str(notes)}, tmp_path), model, lambda *a: None, print)
+    index_source(store, MarkdownSource("notes", {"root": str(notes)}, tmp_path), [as_embedders(model)],
+                 lambda *a: None, print)
     store.record_open(["apple", "invoice"], store.find("notes:n3.md"))
     store.close()
 

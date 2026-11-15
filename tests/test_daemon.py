@@ -24,15 +24,15 @@ def test_query_vector_speaks_the_socket_protocol(tmp_path):
 
     thread = threading.Thread(target=answer)
     thread.start()
-    vector = D.query_vector(tmp_path, "where is the lease")
+    vector = D.query_vector(tmp_path, "where is the lease", "model-v1")
     thread.join()
     server.close()
-    assert seen == {"embed": "where is the lease"}
+    assert seen == {"embed": "where is the lease", "model": "model-v1"}
     assert np.allclose(vector, [0.6, 0.8])
 
 
 def test_no_daemon_means_none(tmp_path):
-    assert D.query_vector(tmp_path, "x") is None
+    assert D.query_vector(tmp_path, "x", "model-v1") is None
 
 
 def test_long_data_dir_gets_a_short_socket(tmp_path):

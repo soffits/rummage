@@ -1,4 +1,5 @@
-"""A remote llama-server is used for indexing only while it answers and agrees with the index's reference vectors."""
+"""An accelerator (a llama-server running the same model elsewhere) is used for indexing only while it answers and
+agrees with the model's reference vectors."""
 
 import json
 import threading
@@ -7,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 
 from rummage import indexer as I
-from rummage.runtime import DIM, REFERENCE_TEXTS
+from conftest import DIM, PROFILE
 
 
 def _vector(text, flip=False):
@@ -42,11 +43,11 @@ def _server(flip):
 
 
 def _reference():
-    return [_vector(t) for t in REFERENCE_TEXTS]
+    return [_vector(t) for t in PROFILE.reference_texts()]
 
 
 class _LocalStandIn:
-    def __init__(self, *a):
+    def __init__(self, *a, **k):
         self.media, self.threads = False, 2
 
     def start(self):
@@ -58,8 +59,8 @@ class _LocalStandIn:
 
 def test_agreeing_remote_is_used(monkeypatch):
     server = _server(flip=False)
-    monkeypatch.setattr(I, "Embedder", _LocalStandIn)
-    embedders = I.Embedders(None, 2, 10, None, remote=f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setattr(I, "open_embedder", _LocalStandIn)
+    embedders = I.Embedders(None, PROFILE, 2, 10, None, accelerator=f"http://127.0.0.1:{server.server_port}")
     embedders.reference = _reference()
     chosen = embedders.get(False)
     assert isinstance(chosen, I.RemoteEmbedder)
@@ -69,13 +70,13 @@ def test_agreeing_remote_is_used(monkeypatch):
 
 def test_disagreeing_or_missing_remote_falls_back_to_this_machine(monkeypatch):
     server = _server(flip=True)
-    monkeypatch.setattr(I, "Embedder", _LocalStandIn)
+    monkeypatch.setattr(I, "open_embedder", _LocalStandIn)
     warnings = []
-    embedders = I.Embedders(None, 2, 10, None, remote=f"http://127.0.0.1:{server.server_port}", warn=warnings.append)
+    embedders = I.Embedders(None, PROFILE, 2, 10, None, accelerator=f"http://127.0.0.1:{server.server_port}", warn=warnings.append)
     embedders.reference = _reference()
     assert isinstance(embedders.get(False), _LocalStandIn)
     assert "differ" in warnings[0]
     server.shutdown()
 
-    gone = I.Embedders(None, 2, 10, None, remote="http://127.0.0.1:9", warn=warnings.append)
+    gone = I.Embedders(None, PROFILE, 2, 10, None, accelerator="http://127.0.0.1:9", warn=warnings.append)
     assert isinstance(gone.get(False), _LocalStandIn) and "not used" in warnings[-1]

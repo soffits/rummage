@@ -32,7 +32,6 @@ def test_a_scoped_token_sees_only_its_sources(tmp_path, monkeypatch):
     cfg_path.write_text(f"data_dir = '{tmp_path / 'data'}'\n[serve.tokens.b]\ntoken_env = 'TOKEN_B'\n"
                         f"sources = ['home-b']\n", encoding="utf-8")
     monkeypatch.setenv("TOKEN_B", HOME_B)
-    monkeypatch.setattr(S.R, "Embedder", lambda *a, **k: None)
     cfg = C.load(cfg_path)
     service = S.Service(cfg, MAIN, S.scoped_tokens(cfg))
     server = ThreadingHTTPServer(("127.0.0.1", 0), S.handler(service))

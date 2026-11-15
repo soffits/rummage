@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Callable, Iterable, Iterator
 
 from . import text as T
-from .runtime import document_text
 from .sources import Plan
 from .store import Item, Segment
 
@@ -104,7 +103,7 @@ def turn_segments(item: Item) -> list[Segment]:
     if reply:
         model_text += f"\n{assistant}: {reply[:REPLY_EMBED_CHARS]}"
     if T.has_prose(model_text):
-        seg.embed_text = document_text(f"chat with {turn.speaker}, {when}", model_text)
+        seg.embed = (f"chat with {turn.speaker}, {when}", model_text)
     return [Segment("name", " ".join(filter(None, [turn.speaker, turn.session_title, turn.session]))), seg]
 
 

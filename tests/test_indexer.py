@@ -1,7 +1,7 @@
 import numpy as np
 
-from conftest import index_all
-from rummage.runtime import DIM
+from conftest import PROFILE, index_all
+from conftest import DIM
 from rummage.sources.markdown import MarkdownSource
 from rummage.store import Store
 
@@ -65,14 +65,12 @@ def test_line_spans_and_reload_keeps_old_vectors(tmp_path):
     first = store.db.execute("SELECT lines FROM segments WHERE kind = 'text' ORDER BY id").fetchone()[0]
     assert first.startswith("4-")
 
-    # An index from before passages were hashed: vectors are kept by (kind, loc, text) on reload.
-    store.db.execute("UPDATE segments SET embed_hash = NULL, lines = NULL")
+    # Reading every item again keeps their vectors (found by what the model read) and fills what's new.
+    store.db.execute("UPDATE segments SET lines = NULL")
     store.commit()
     embedders.current.texts_seen.clear()
     counts = index_all(store, src, embedders, lambda *a: None, print, reload=True)
     assert counts["updated"] == 1 and embedders.current.texts_seen == []
-    assert store.db.execute("SELECT count(*) FROM segments WHERE vector IS NOT NULL AND embed_hash IS NULL"
-                            ).fetchone()[0] == 0
     assert store.db.execute("SELECT count(*) FROM segments WHERE kind = 'text' AND lines IS NULL").fetchone()[0] == 0
     store.close()
 
@@ -88,7 +86,7 @@ def test_threads_follow_the_machines_load(monkeypatch):
     started = []
 
     class Fake:
-        def __init__(self, runtime, media, threads, nice, log):
+        def __init__(self, runtime, profile, media, threads, nice, log_path):
             self.media, self.threads = media, threads
 
         def start(self):
@@ -98,11 +96,11 @@ def test_threads_follow_the_machines_load(monkeypatch):
             pass
 
     loads = iter([0.0, 3.0, 6.0])
-    monkeypatch.setattr(I, "Embedder", Fake)
+    monkeypatch.setattr(I, "open_embedder", Fake)
     monkeypatch.setattr(I, "_load", lambda: next(loads))
     monkeypatch.setattr(I.os, "cpu_count", lambda: 4)
     monkeypatch.setattr(I.Embedders, "RECHECK_SECONDS", 0)
-    embedders = I.Embedders(None, 2, 10, None, max_threads=3)
+    embedders = I.Embedders(None, PROFILE, 2, 10, None, max_threads=3)
     embedders.get(False)       # idle machine: 3 threads
     embedders.get(False)       # load 3.0 is mostly our own 3 threads: keep 3
     embedders.get(False)       # load 6.0: others are busy, back to 2
