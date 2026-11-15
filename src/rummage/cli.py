@@ -321,7 +321,9 @@ def cmd_sources(cfg: C.Config, args) -> int:
     detected = _detected()
     on = set(C.enabled(cfg))
     configured = {n: {"type": s.get("type"), "enabled": n in on} for n, s in cfg.sources.items()}
-    found = {k: {"type": k, "enabled": False, "detected": True} for k in detected if k not in cfg.sources}
+    configured_types = {s.get("type") for s in cfg.sources.values()}
+    found = {k: {"type": k, "enabled": False, "detected": True} for k in detected
+             if k not in cfg.sources and k not in configured_types}
     if args.json:
         print(json.dumps({"types": types, "configured": configured, "detected": found}))
         return 0
