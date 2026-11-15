@@ -7,8 +7,9 @@ same way.
     uv run --with pyarrow python bench/run.py --dataset miracl-hn:ko --engine qmd-vsearch --qmd-model <gguf>
 
 Datasets: a BEIR name, `miracl:<lang>` (dev queries among their judged passages), `miracl-hn:<lang>` (MTEB's
-hard-negative corpus). Engines: `rummage`, `rummage-ablations` (ranking variants over the index `rummage` built),
-`fidx`, `qmd-search`, `qmd-vsearch`, `qmd-query`. Each document becomes one Markdown file in
+hard-negative corpus). Engines: `rummage`, `rummage-ablations` (ranking variants over one index),
+`fidx`, `qmd-search`, `qmd-vsearch`, `qmd-query`. `--model` runs the ablations over another embedding model's
+vectors (see `bench/model_proxy.py` for its prompts). Each document becomes one Markdown file in
 `<work>/<dataset>/corpus/`. A finished run's result file (`<work>/<dataset>/results/<engine>.json`) is kept and the
 run skipped next time unless `--force`, so a long series of runs resumes where it stopped.
 
@@ -78,7 +79,10 @@ def main() -> int:
                                                               "qmd-search", "qmd-vsearch", "qmd-query"])
     parser.add_argument("--work", type=Path, default=Path("bench/work"))
     parser.add_argument("--runtime-dir", type=Path, help="an existing rummage runtime/ folder to reuse")
-    parser.add_argument("--embedder-url", help="rummage: embed with this llama-server (same pinned model)")
+    parser.add_argument("--embedder-url", help="rummage: embed with this llama-server (the pinned model, or the "
+                                                 "one --model names)")
+    parser.add_argument("--model", help="rummage-ablations: the name of the model --embedder-url serves, when it "
+                                        "is not the pinned one (its own index and result file)")
     parser.add_argument("--fidx-profile", help="fidx: embedding profile (its allowlist)")
     parser.add_argument("--qmd-model", help="qmd: embedding GGUF for QMD_EMBED_MODEL")
     parser.add_argument("--label", help="name of this run's result file (default: the engine and its options)")
@@ -87,7 +91,10 @@ def main() -> int:
     parser.add_argument("--limit-docs", type=int, help="about this many documents (judged ones first)")
     parser.add_argument("--force", action="store_true", help="run again even when a result file exists")
     args = parser.parse_args()
-    label = args.label or "-".join(filter(None, [args.engine, args.fidx_profile,
+    if args.model and (args.engine != "rummage-ablations" or not args.embedder_url):
+        parser.error("--model needs --engine rummage-ablations and --embedder-url: `rummage search` embeds queries "
+                     "with the pinned local model")
+    label = args.label or "-".join(filter(None, [args.engine, args.fidx_profile, args.model,
                                                  "model-" + Path(args.qmd_model).stem if args.qmd_model else None]))
     corpus, queries, qrels = prepare(args.dataset, args.work, args.limit_queries, args.limit_docs)
     results = corpus.parent / "results"
@@ -97,11 +104,12 @@ def main() -> int:
         return 0
     # One index per tool and model: qmd's search modes share theirs, the ablations reuse rummage's.
     family = args.engine.split("-")[0]
-    home = corpus.parent / "-".join(filter(None, [family, args.fidx_profile,
+    home = corpus.parent / "-".join(filter(None, [family, args.fidx_profile, args.model,
                                                   Path(args.qmd_model).stem if args.qmd_model else None]))
     home.mkdir(parents=True, exist_ok=True)
     meta = {"dataset": args.dataset, "limit_queries": args.limit_queries, "documents": len(list(corpus.glob("*.md"))),
-            "threads": args.threads, "embedder": "remote" if args.embedder_url else "local"}
+            "threads": args.threads, "embedder": "remote" if args.embedder_url else "local",
+            **({"model": args.model or "embeddinggemma-2"} if family == "rummage" else {})}
     if args.engine == "rummage-ablations":
         variants = engines.run_rummage_ablations(corpus, queries, home, args.runtime_dir, args.threads,
                                                  args.embedder_url)

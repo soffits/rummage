@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -32,12 +33,37 @@ def _rummage_config(corpus: Path, home: Path, runtime_dir: Path | None, threads:
     return config
 
 
+def _index_rummage(config: Path, embedder_url: str | None) -> None:
+    """Builds or resumes the index, then refuses to go on with one that is not whole: passages still waiting for a
+    vector, or vectors from a model other than the remote embedder's (the indexer falls back to the local model
+    when the remote one does not answer at the start)."""
+    from rummage import config as C
+    from rummage import runtime as R
+    from rummage.store import Store
+
+    subprocess.run(["rummage", "index", "-q"], check=True, env=dict(os.environ, RUMMAGE_CONFIG=str(config)))
+    store = Store(C.load(config).index_path)
+    try:
+        pending = store.pending_count()
+        reference = store.meta("reference")
+    finally:
+        store.close()
+    if pending:
+        raise RuntimeError(f"index incomplete: {pending} passages have no vector yet")
+    if embedder_url and reference:
+        remote = R.RemoteEmbedder(embedder_url, timeout=30)
+        remote.start()
+        agreement = R.reference_agreement(remote, json.loads(reference))
+        if agreement < R.REFERENCE_COSINE:
+            raise RuntimeError(f"index vectors do not come from {embedder_url} (cosine {agreement:.4f})")
+
+
 def run_rummage(corpus: Path, queries: dict, home: Path, runtime_dir: Path | None, threads: int,
                 embedder_url: str | None = None) -> tuple:
     config = _rummage_config(corpus, home, runtime_dir, threads, embedder_url)
     env = dict(os.environ, RUMMAGE_CONFIG=str(config))
     started = time.monotonic()
-    subprocess.run(["rummage", "index", "-q"], check=True, env=env)
+    _index_rummage(config, embedder_url)
     index_seconds = time.monotonic() - started
     from rummage import config as C
     cfg = C.load(config)
@@ -70,8 +96,9 @@ VARIANTS = {
 
 def run_rummage_ablations(corpus: Path, queries: dict, home: Path, runtime_dir: Path | None, threads: int,
                           embedder_url: str | None = None) -> dict[str, dict]:
-    """Every ranking variant over the index the `rummage` engine built (run that first): the same vectors, so only
-    the ranking differs."""
+    """Every ranking variant over one index (built or resumed here): the same vectors, so only the ranking differs.
+    Queries are embedded by `embedder_url` when given, so this also runs rummage's ranking over another model's
+    vectors, which `rummage search` can't (it embeds queries with the pinned local model)."""
     from rummage import config as C
     from rummage import runtime as R
     from rummage.search import Ranking, Searcher
@@ -79,10 +106,9 @@ def run_rummage_ablations(corpus: Path, queries: dict, home: Path, runtime_dir: 
 
     config = _rummage_config(corpus, home, runtime_dir, threads, embedder_url)
     cfg = C.load(config)
-    if not cfg.index_path.exists():
-        raise SystemExit("run the rummage engine on this dataset first")
+    _index_rummage(config, embedder_url)
     if embedder_url:
-        embedder = R.RemoteEmbedder(embedder_url)
+        embedder = R.RemoteEmbedder(embedder_url, timeout=30)
         embedder.start()
         vectors = {qid: embedder.query(text) for qid, text in queries.items()}
     else:
@@ -137,7 +163,12 @@ def run_qmd(corpus: Path, queries: dict, home: Path, threads: int, mode: str, mo
     started = time.monotonic()
     subprocess.run(qmd + ["collection", "add", str(corpus), "--name", "corpus"], env=env, check=False)
     if mode != "search":
-        subprocess.run(["nice", "-n", "15", *qmd, "embed"], env=env, check=True)
+        # qmd stops embedding after 30 minutes unless told otherwise; a partial index would score far too low.
+        subprocess.run(["nice", "-n", "15", *qmd, "embed", "--timeout", "0"], env=env, check=True)
+        status = subprocess.run(qmd + ["status"], env=env, capture_output=True, text=True).stdout
+        pending = re.search(r"Pending:\s*(\d+)", status)
+        if pending and int(pending.group(1)):
+            raise RuntimeError(f"qmd index incomplete: {pending.group(1)} chunks without vectors")
     index_seconds = time.monotonic() - started
     ranked, latencies = {}, []
     for qid, text in queries.items():
