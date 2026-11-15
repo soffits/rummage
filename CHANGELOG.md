@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.20.1
+
+- Fixed: indexing a slightly malformed PDF printed pypdf's repair notes ("Ignoring wrong pointing object", "incorrect startxref pointer") on stderr, even with `-q`. The recovered text was always kept; the notes are no longer printed.
+- Fixed: PDFs encrypted with AES (common for fillable government forms that open without a password) failed to read and were left out of the index, name included. pypdf's `crypto` extra (`cryptography`) is now a core dependency.
+
 ## 0.20.0
 
 - `seafile` reads libraries with their own API tokens (Seafile's per-library "API token", the `via-repo-token` API), so a library can be indexed without an account it is shared with: `library_tokens = [{ env_file = "...", token_env = "..." }]`, one entry per library, alongside or instead of an account token. Unchanged libraries are skipped by their root folder's id, deleted files are dropped, and rummage only ever reads. Every token setting also takes `env_file`, a KEY=value file to read `token_env` from.
