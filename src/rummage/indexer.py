@@ -65,7 +65,7 @@ class Embedders:
 def index_source(store: Store, source: Source, embedders: Embedders, log, warn, limit: int | None = None,
                  deadline: float | None = None, batch: int = 8) -> dict:
     """`log` gets progress, `warn` gets problems."""
-    counts = {"added": 0, "updated": 0, "removed": 0, "failed": 0, "seconds_embedding": 0.0}
+    counts = {"added": 0, "updated": 0, "removed": 0, "failed": 0, "reused": 0, "seconds_embedding": 0.0}
     known = store.fingerprints(source.name)
     plan = source.plan(known, store.state(source.name))
     for key in plan.removed:
@@ -82,8 +82,13 @@ def index_source(store: Store, source: Source, embedders: Embedders, log, warn, 
             break
         try:
             segments = source.load(item)
-            embed = [s for s in segments if s.embed_text]
-            images = [s for s in segments if s.kind == "image" and s.image]
+            known_vectors = store.known_vectors([h for h in (s.embed_hash for s in segments) if h])
+            for seg in segments:
+                if seg.embed_hash in known_vectors:
+                    seg.vector = known_vectors[seg.embed_hash]
+                    counts["reused"] += 1
+            embed = [s for s in segments if s.embed_text and s.vector is None and not s.image]
+            images = [s for s in segments if s.kind == "image" and s.image and s.vector is None]
             t0 = time.monotonic()
             if embed or images:
                 embedder = embedders.get(source.media and bool(images))
