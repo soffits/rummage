@@ -92,6 +92,13 @@ token_file = "~/.config/rummage/server.token"
 sources = ["library"]                 # source names the remote serves
 ```
 
+## Agents
+
+Agents use the same CLI: `search --json` and `get`. `rummage recall` gives prompt hooks a short block of cited
+passages, or nothing when nothing clearly matches. [docs/integrations.md](docs/integrations.md) has hook snippets
+for Claude Code, Codex, OpenCode, Hermes Agent and DeepSeek Harness, and [skills/rummage](skills/rummage/SKILL.md)
+is an Agent Skill to drop into an agent's skills folder.
+
 ## Available plugins
 
 These ship with rummage and are enabled by naming their type in the config; extras pull in what they need.
