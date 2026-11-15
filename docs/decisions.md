@@ -38,6 +38,8 @@
 - Credentials are masked when printed, not when indexed: masking at index time would lose a value the user may later ask for, and the index is a local file kept mode 600. The patterns are well-known token shapes plus credential-like assignments; scanners such as gitleaks and detect-secrets are built for files and repositories, and a short pattern list is enough for masking result text.
 - Masking is counted where it happens (`mask_count`) and each printed result carries `masked`, rather than counting `[secret]` in the output: a text that contains the marker itself would be miscounted, and per-result counts survive truncation, token budgets and merging remote results.
 - Reading and embedding are separate phases with separate locks, so keyword search covers new items within seconds while vectors follow; pending vectors are stored with their model input, so any later run finishes them.
+- Copies of one mail are recognised by Message-ID with no time window (a copy moved to an archive months later is the same mail) and collapsed at search time like chat messages, so both folders stay indexed.
+- A client's notices before a person's words count as scaffolding only when the message starts with a bracketed notice line; the `> ` lines and blank lines after it go with it. A message the person starts with their own quote stays as written.
 - The same chat message in two sources is recognised by its text with leading bracketed notices removed (sender tags, channel headers that one recorder adds and the other doesn't) and times within 10 minutes, and collapsed at search time rather than dropped at index time: both records stay, so either source can be switched off without losing the message.
 - Refer-back phrases for recall's recent part are one multilingual list, used only to decide whether to add at most two recent turns; shared words with the prompt are the main signal.
 
@@ -49,6 +51,7 @@
 
 ## Runtime
 
+- A search with no daemon starts one (`daemon.ensure`) and waits for its answer rather than also loading the model itself: one model load instead of two in memory, about the same wait. The daemon holds a per-data-directory lock for its life, so searches racing to start it end up with one; it exits after `[daemon] idle_minutes` unused so memory comes back. A prompt hook starts it without waiting, since hooks must stay fast.
 - Threads follow the load by restarting `llama-server` (about a second) when the wanted count changes, checked at most once a minute: llama.cpp fixes the thread count at start, and a minute-scale check matches the 1-minute load average it reads.
 - A remote embedder is trusted by result, not by name: it is used only when its vectors for three fixed reference texts agree with the ones stored at the index's first run (cosine ≥ 0.999, the same bar `doctor` applies to a llama.cpp upgrade). Queries keep using the local model or daemon, so search never depends on another machine.
 

@@ -724,6 +724,8 @@ def cmd_status(cfg: C.Config, args) -> int:
         store.close()
         out["config"] = str(cfg.path)
     out["configured_sources"] = list(cfg.sources)
+    out["daemon"] = {"running": D.running(cfg.data_dir), "socket": str(D.socket_path(cfg.data_dir)),
+                     "idle_minutes": cfg.daemon_idle_minutes}
     out["notes"] = limit_notes(out.get("sources") or {})
     print(json.dumps(out, ensure_ascii=False, indent=None if args.json else 2))
     return 0

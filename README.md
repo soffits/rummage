@@ -201,7 +201,9 @@ SciFact nDCG@10 0.92 (fidx 0.83), Korean MIRACL 0.80 (fidx 0.46). Setup, every n
 
 On a desktop CPU (Intel i5-13400, 2 threads): ~1.35 s per passage of ~500 tokens while indexing, ~2 s per picture,
 and a search takes about 1.5 s when it loads the text model itself, or about 0.25 s with `rummage daemon` running
-(mostly Python starting up). `--words-only` needs no model at all.
+(mostly Python starting up). The first search after a quiet spell starts the daemon itself and waits for it to load;
+the daemon exits after `[daemon] idle_minutes` (default 20) without a query, so the memory comes back.
+`--words-only` needs no model at all.
 After the first index, a run only embeds what changed.
 
 ## How it ranks
