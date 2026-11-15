@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A passage with more tokens than the server takes in one micro-batch (invisible padding in a newsletter, rare symbols; 1,800 characters can be 2,800 tokens) is embedded in pieces and its vector is their mean, instead of failing the whole index run with HTTP 500.
 - Benchmarks: `bench/run.py` adds `rummage-ablations` (ranking variants over one index), qmd's `vsearch` and `query` modes with an optional same-model run, fidx profiles, MIRACL with MTEB's hard negatives, recall@100 and a bootstrap interval for nDCG@10, and resumes finished runs; `bench/memory.py` measures recall on LoCoMo and LongMemEval-S. Search's signals can be switched off one by one for this (`search.Ranking`); the defaults are unchanged.
 
 ## 0.9.1

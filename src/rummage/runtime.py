@@ -193,6 +193,10 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+# The server puts a begin and an end marker around every input; they count against the micro-batch.
+SPECIAL_TOKENS = 2
+
+
 class Embedder:
     """A llama-server child bound to 127.0.0.1 on a free port, started for one run and stopped with it.
 
@@ -215,8 +219,8 @@ class Embedder:
         self.port = 0
         self.process: subprocess.Popen | None = None
         self.marker: str | None = None
-        # A non-causal input must fit one micro-batch: 2048 tokens holds a 1800-character chunk of any script and an
-        # image at the default 280-token budget.
+        # A non-causal input must fit one micro-batch. `texts` measures what could be longer than that and embeds it
+        # in pieces, so no character count has to promise a token count.
         self.max_tokens = 2048
 
     def __enter__(self) -> "Embedder":
@@ -299,13 +303,38 @@ class Embedder:
     def token_count(self, text: str) -> int:
         return len(self._post("/tokenize", {"content": text})["tokens"])
 
+    def _pieces(self, text: str) -> list[tuple[str, int]]:
+        """`text` as pieces that each fit one micro-batch, with their token counts. A token is at least a byte long
+        (unknown characters fall back to bytes), so a text of few enough bytes needs no measuring."""
+        if len(text.encode("utf-8")) + SPECIAL_TOKENS <= self.max_tokens:
+            return [(text, 1)]
+        return self._fit(text)
+
+    def _fit(self, text: str) -> list[tuple[str, int]]:
+        """The server counts the tokens; a text that is too long is halved, at a space near the middle when there
+        is one, until every piece fits."""
+        tokens = self.token_count(text)
+        if tokens + SPECIAL_TOKENS <= self.max_tokens:
+            return [(text, tokens)]
+        middle = len(text) // 2
+        cut = text.find(" ", middle, len(text) * 3 // 4)
+        cut = middle if cut < 0 else cut + 1
+        return self._fit(text[:cut]) + self._fit(text[cut:])
+
     def texts(self, texts: list[str]) -> np.ndarray:
-        """One normalized DIM-wide float32 row per text. Texts past the context are cut by the server."""
+        """One normalized DIM-wide float32 row per text. A text longer than a micro-batch is embedded in pieces and
+        its vector is the token-weighted mean of theirs."""
         if not texts:
             return np.zeros((0, DIM), np.float32)
-        out = self._post("/v1/embeddings", {"input": texts})
-        rows = sorted(out["data"], key=lambda d: d["index"])
-        return _cut(np.array([r["embedding"] for r in rows], np.float32))
+        pieces = [(n, piece, weight) for n, text in enumerate(texts) for piece, weight in self._pieces(text)]
+        out = self._post("/v1/embeddings", {"input": [piece for _, piece, _ in pieces]})
+        rows = _cut(np.array([r["embedding"] for r in sorted(out["data"], key=lambda d: d["index"])], np.float32))
+        if len(pieces) == len(texts):
+            return rows
+        merged = np.zeros((len(texts), rows.shape[1]), np.float32)
+        for (n, _, weight), row in zip(pieces, rows):
+            merged[n] += weight * row
+        return _cut(merged)
 
     def query(self, text: str) -> np.ndarray:
         return self.texts([QUERY_PREFIX + text])[0]
