@@ -8,12 +8,8 @@
     # llama_server = "/usr/bin/llama-server"  # instead of the pinned build
 
     [sources.notes]
-    type = "markdown"
-    root = "~/notes"
-
-    [sources.stickers]
-    type = "telegram-stickers"
-    store = "~/.dsh/telegram/stickers.json"
+    type = "files"
+    root = "~/Documents"
 """
 
 from __future__ import annotations

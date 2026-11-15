@@ -7,18 +7,14 @@ the heading it sits under.
 
 from __future__ import annotations
 
-import fnmatch
-import hashlib
-import os
 import re
 from pathlib import Path
 
 from .. import text as T
 from ..runtime import document_text
 from ..store import Item, Segment
-from . import Plan, Source
+from .folder import FolderSource
 
-DEFAULT_EXCLUDE = [".obsidian", ".trash", ".git", "node_modules", ".stfolder", ".DS_Store"]
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n(?:---|\.\.\.)\s*(?:\n|\Z)", re.S)
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$", re.M)
 
@@ -56,82 +52,41 @@ def _as_list(value) -> list[str]:
     return [value] if value else []
 
 
-class MarkdownSource(Source):
-    def __init__(self, name: str, spec: dict):
-        self.name = name
-        self.root = Path(os.path.expanduser(spec["root"])).resolve()
-        self.exclude = list(spec.get("exclude", DEFAULT_EXCLUDE))
-        self.extensions = tuple(spec.get("extensions", [".md", ".markdown"]))
-        self.max_bytes = int(spec.get("max_bytes", 2_000_000))
-
-    def _skip(self, rel: str) -> bool:
-        parts = rel.split("/")
-        return any(fnmatch.fnmatch(p, pat) for p in parts for pat in self.exclude) or any(
-            fnmatch.fnmatch(rel, pat) for pat in self.exclude)
-
-    def _files(self):
-        for dirpath, dirnames, filenames in os.walk(self.root):
-            rel_dir = os.path.relpath(dirpath, self.root)
-            rel_dir = "" if rel_dir == "." else rel_dir
-            dirnames[:] = sorted(d for d in dirnames if not self._skip(f"{rel_dir}/{d}".lstrip("/")))
-            for f in sorted(filenames):
-                rel = f"{rel_dir}/{f}".lstrip("/")
-                if f.endswith(self.extensions) and not self._skip(rel):
-                    yield rel
-
-    def plan(self, known: dict[str, str | None], state: dict) -> Plan:
-        stats = state.get("stats", {})
-        upserts: list[Item] = []
-        seen: dict[str, list] = {}
-        for rel in self._files():
-            path = self.root / rel
-            try:
-                st = path.stat()
-            except OSError:
-                continue
-            if st.st_size > self.max_bytes:
-                continue
-            stamp = [st.st_mtime_ns, st.st_size]
-            seen[rel] = stamp
-            if rel in known and stats.get(rel, [None])[0] == stamp[0] and stats.get(rel, [None, None])[1] == stamp[1]:
-                continue
-            try:
-                raw = path.read_bytes()
-            except OSError:
-                continue
-            fingerprint = hashlib.sha256(raw).hexdigest()
-            if known.get(rel) == fingerprint:
-                continue
-            upserts.append(Item(self.name, rel, "note", Path(rel).stem, rel, st.st_mtime, fingerprint))
-        removed = [key for key in known if key not in seen]
-        return Plan(upserts, removed, {"stats": seen}, len(upserts))
+class MarkdownSource(FolderSource):
+    kind = "note"
+    default_extensions = (".md", ".markdown")
+    default_max_bytes = 2_000_000
 
     def load(self, item: Item) -> list[Segment]:
         raw = (self.root / item.key).read_text(encoding="utf-8", errors="replace")
-        meta, body = _frontmatter(raw)
-        title = str(meta.get("title") or Path(item.key).stem)
-        aliases = _as_list(meta.get("aliases") or meta.get("alias"))
-        tags = _as_list(meta.get("tags") or meta.get("tag"))
-        item.title = title
-        item.info = {"path": item.key}
-        if aliases:
-            item.info["aliases"] = aliases
-        if tags:
-            item.info["tags"] = tags
-        name_line = " ".join([item.key, title, *aliases, *("#" + t for t in tags)])
-        segments = [Segment("name", name_line)]
-        headings = [(m.start(), len(m.group(1)), m.group(2)) for m in _HEADING.finditer(body)]
-        label = title + (f" ({', '.join(aliases)})" if aliases else "")
-        for start, piece in T.chunks(body):
-            path = _heading_path(headings, start)
-            embed_title = label + (" > " + " > ".join(path) if path else "")
-            seg = Segment("text", piece, loc=str(start))
-            if T.has_prose(piece):
-                seg.embed_text = document_text(embed_title, piece)
-            segments.append(seg)
-        if len(segments) == 1 and body.strip():
-            segments.append(Segment("text", body.strip()[:1800], loc="0"))
-        return segments
+        return note_segments(item, raw)
+
+
+def note_segments(item: Item, raw: str) -> list[Segment]:
+    """A Markdown note's segments: a name line (path, title, aliases, tags) and its passages, each embedded with the
+    title and the heading it sits under. Sets the item's title and info from the frontmatter."""
+    meta, body = _frontmatter(raw)
+    title = str(meta.get("title") or Path(item.key).stem)
+    aliases = _as_list(meta.get("aliases") or meta.get("alias"))
+    tags = _as_list(meta.get("tags") or meta.get("tag"))
+    item.title = title
+    item.info = {**item.info, "path": item.key}
+    if aliases:
+        item.info["aliases"] = aliases
+    if tags:
+        item.info["tags"] = tags
+    name_line = " ".join([item.key, title, *aliases, *("#" + t for t in tags)])
+    segments = [Segment("name", name_line)]
+    headings = [(m.start(), len(m.group(1)), m.group(2)) for m in _HEADING.finditer(body)]
+    label = title + (f" ({', '.join(aliases)})" if aliases else "")
+    for start, piece in T.chunks(body):
+        path = _heading_path(headings, start)
+        embed_title = label + (" > " + " > ".join(path) if path else "")
+        seg = Segment("text", piece, loc=str(start))
+        if T.has_prose(piece):
+            seg.embed_text = document_text(embed_title, piece)
+        segments.append(seg)
+    return segments
 
 
 def _heading_path(headings: list[tuple[int, int, str]], offset: int) -> list[str]:

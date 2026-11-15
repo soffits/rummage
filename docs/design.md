@@ -1,7 +1,7 @@
 # Design
 
-rummage keeps one local index over several read-only collections and answers queries by meaning and by exact
-words. It is a CLI with JSON output, meant to be called by people, scripts, scheduled jobs and agents.
+rummage keeps one local index over read-only collections of files and answers queries by meaning and by exact
+words. Sources are plugins: the core reads folders, plugins add services. It is a CLI with JSON output, meant to be called by people, scripts, scheduled jobs and agents.
 
 ## What it's built from, and why
 
@@ -33,19 +33,20 @@ item title weighted 3×), `source_state` (each source's cursor), `runs` (the las
 
 ## Sources
 
-Each source is read-only and answers `plan` (what changed: items to add or replace, keys gone, the cursor to
-save) and `load` (one item's segments).
+Each source type is a class in the `rummage.sources` entry-point group. A source is read-only and answers `plan`
+(what changed: items to add or replace, keys gone, the cursor to save) and `load` (one item's segments). The type
+name and the items' keys and fingerprints are part of the index format.
 
-| Type | Item | Change detection |
-|---|---|---|
-| `markdown` | a note; title, aliases, tags from frontmatter; passages of ~1800 chars embedded with the heading path | mtime+size, then SHA-256 |
-| `telegram-stickers` | a sticker in dsh-telegram-bot's library: saved meaning as text, picture as an image vector | hash of meaning, emoji, file id |
-| `seafile` | a file in a Seafile library, read through the web API with a read-only account | library head commit, then each file's object id |
-| `hermes` | a window of messages in a Hermes Agent `state.db` | message id cursor |
-| `dsh-sessions` | a window of messages in a DeepSeek Harness session log | per-session event count |
+| Type | Where | Item | Change detection |
+|---|---|---|---|
+| `files` | core | a file: text, HTML, PDF, Office/OpenDocument in ~1800-character passages; a picture as an image vector; an archive's list of names; anything else by name | mtime+size, then SHA-256 (size+mtime above 64 MB) |
+| `markdown` | core | a note; title, aliases, tags from frontmatter; passages embedded with the heading path | mtime+size, then SHA-256 |
+| `seafile` | plugin | a file in a Seafile library, read through the web API with a read-only account | library head commit, then each file's object id |
+| `dsh-sessions` | plugin | a person's message plus the reply, in a DeepSeek Harness session log | per-log mtime+size, then content hash |
+| `hermes` | plugin | the same, in a Hermes Agent `state.db` | message id cursor |
+| `telegram-stickers` | plugin | a sticker in dsh-telegram-bot's library: saved meaning as text, picture as an image vector | hash of meaning, emoji, file id |
 
-Archives (zip, 7z, tar, rar) are indexed by name and the list of file names inside; installers, disk images and
-other binaries by name only. Each type has a size limit.
+Installers, disk images and media files other than pictures are indexed by name. Each kind has a size limit.
 
 ## Runs
 

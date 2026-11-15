@@ -1,23 +1,34 @@
 [project]
 name = "rummage"
-version = "0.2.0"
-description = "Local hybrid search (meaning + exact words) over notes, stickers, chats and Seafile libraries, with EmbeddingGemma 2 on llama.cpp"
+version = "0.3.0"
+description = "Local search by meaning and exact words over your files, on your own machine, with EmbeddingGemma 2 on llama.cpp"
 readme = "README.md"
-license = "MIT"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
+    "pypdf>=5",
 ]
 
 [project.optional-dependencies]
-dsh = ["zstandard>=0.22"]
-server = ["pypdf>=5", "py7zr>=0.22", "rarfile>=4.2"]
+archives = ["py7zr>=0.22", "rarfile>=4.2"]
+seafile = ["py7zr>=0.22", "rarfile>=4.2"]
+dsh-sessions = ["zstandard>=0.22"]
+
+[project.entry-points."rummage.sources"]
+markdown = "rummage.sources.markdown:MarkdownSource"
+files = "rummage.sources.files:FilesSource"
+seafile = "rummage.plugins.seafile:SeafileSource"
+dsh-sessions = "rummage.plugins.dsh_sessions:DshSessionSource"
+hermes = "rummage.plugins.hermes:HermesSource"
+telegram-stickers = "rummage.plugins.telegram_stickers:StickerSource"
 
 [project.scripts]
 rummage = "rummage.cli:main"
 
 [build-system]
-requires = ["hatchling>=1.24"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]

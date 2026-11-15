@@ -4,7 +4,7 @@ import pytest
 
 zstandard = pytest.importorskip("zstandard")
 
-from rummage.sources.dsh_sessions import LOG_NAME, DshSessionSource  # noqa: E402
+from rummage.plugins.dsh_sessions import LOG_NAME, DshSessionSource  # noqa: E402
 
 TG = {"kind": "user", "rpcId": "telegram:100:9"}
 WEB = {"kind": "user", "rpcId": "40bde7f8"}

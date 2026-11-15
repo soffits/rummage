@@ -1,7 +1,8 @@
 # rummage
 
-Local hybrid search (meaning + exact words) over notes, chats, a sticker library and Seafile libraries. EmbeddingGemma 2
-runs on the CPU through llama.cpp's `llama-server`, started as a child process for one run; the index is one SQLite file.
+Local search by meaning and exact words over your files, on your own machine. EmbeddingGemma 2 runs on the CPU through
+llama.cpp's `llama-server`, started as a child process for one run; the index is one SQLite file. Licence: AGPL-3.0-or-later
+(up to 0.2.x it was MIT); third-party notices in `NOTICE`.
 User docs: `README.md`. Design and the reasons behind it: `docs/design.md`, `docs/decisions.md`. Known leftovers:
 `docs/queue.md`.
 
@@ -10,7 +11,11 @@ User docs: `README.md`. Design and the reasons behind it: `docs/design.md`, `doc
 - `src/rummage/runtime.py`: pinned model and llama.cpp files, `VECTOR_VERSION`, the `llama-server` child.
 - `store.py` (SQLite schema), `text.py` (normalisation, CJK tokens, chunking), `search.py` (ranking), `indexer.py`
   (one run, per-item commits, lock), `cli.py`, `serve.py` (HTTP API), `extract.py` (file bytes to text).
-- `sources/`: one module per source type; each only reads what it indexes.
+- `sources/`: the source base and entry-point discovery (`rummage.sources` group), the core types `markdown` and `files`
+  (folder walking in `folder.py`). `plugins/<name>/`: service-specific source types (seafile, dsh-sessions, hermes,
+  telegram-stickers), each registered as an entry point in `pyproject.toml`, with its own extra when it needs packages.
+  `chats.py` is the shared turn model for chat plugins.
+- A source type's name and its items' keys and fingerprints are the index format: changing them re-embeds everything.
 
 ## Rules for this project
 
@@ -18,12 +23,12 @@ User docs: `README.md`. Design and the reasons behind it: `docs/design.md`, `doc
   keep downloaded bytes in memory.
 - Anything that changes the vectors (model file, quantization, dimension, prompt format, llama.cpp build that fails the
   reference check) bumps `VECTOR_VERSION` in `runtime.py`.
-- New dependencies go in an optional extra unless every install needs them; the core needs only numpy.
+- New dependencies go in an optional extra unless every install needs them; the core needs only numpy and pypdf.
 - Text in the repo is English. CJK appears only where it tests or implements CJK handling.
 
 ## Checks and releases
 
-- `uv run --with pytest --extra server --extra dsh pytest -q` runs the tests (no model needed). CI runs them on pushes
+- `uv run --with pytest --extra archives --extra dsh-sessions pytest -q` runs the tests (no model needed). CI runs them on pushes
   to `main` and on pull requests.
 - A real run needs the model: `rummage setup`, then `rummage index` and `rummage search` against a small config.
 - Release: update `CHANGELOG.md`, bump `version` in `pyproject.toml` and `src/rummage/__init__.py`, merge to `main`,

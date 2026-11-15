@@ -4,7 +4,7 @@ import threading
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from rummage.sources.seafile import SeafileSource
+from rummage.plugins.seafile import SeafileSource
 
 
 def _zip() -> bytes:
