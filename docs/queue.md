@@ -26,8 +26,6 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 10. **Optional reranking.** A small local cross-encoder over the top ~40, opt-in, through llama.cpp's rerank
     endpoint so it needs no second runtime (fidx `--rerank`, claudegrep).
 12. **PyPI releases**, so `pip install rummage` and `uvx rummage` work without Git (fidx wheels).
-13. **File watching.** A debounced watcher that indexes new and changed files within seconds (grepai,
-    claudegrep `watch`, ruggiio/semfind `semfind-watch`).
 14. **Folder breadcrumbs in the embedded title** (`title: Docs › Housing › lease | text: …`), which ruggiio/semfind
     measured as a gain with EmbeddingGemma 2. Changes the vectors, so it goes in with the benchmark to prove it.
 15. **PDF page locations** and a two-pass index for long files (first pages now, the rest after everything else),

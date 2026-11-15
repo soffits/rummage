@@ -8,6 +8,7 @@
     rummage doctor [--json]        check runtime, vectors and source freshness; exit 1 on a problem
     rummage sources                list the installed source types (core and plugins)
     rummage recall [PROMPT]        cited context for an agent's prompt hook, silent when nothing matches
+    rummage watch                  keep the index current as files change
     rummage mcp                    a stdio MCP server (search, get, status) for MCP-only agents
     rummage daemon                 keep the query model loaded (searches use it when it runs)
     rummage serve                  answer searches over HTTP (for an index kept on another machine)
@@ -278,6 +279,20 @@ def cmd_recall(cfg: C.Config, args) -> int:
     return run(cfg, args)
 
 
+def cmd_watch(cfg: C.Config, args) -> int:
+    from .watch import run
+
+    names = args.source or list(cfg.sources)
+    unknown = [n for n in names if n not in cfg.sources]
+    if unknown:
+        _eprint("unknown source:", ", ".join(unknown))
+        return 2
+    try:
+        return run(cfg, names, args.poll_minutes, args.settle_seconds)
+    except KeyboardInterrupt:
+        return 0
+
+
 def cmd_mcp(cfg: C.Config, args) -> int:
     from .mcp_server import run
 
@@ -432,6 +447,12 @@ def main(argv: list[str] | None = None) -> int:
                    help="load the model when no daemon runs (~1.5 s); otherwise fall back to exact words")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_recall)
+
+    p = sub.add_parser("watch", help="keep the index current as files change")
+    p.add_argument("-s", "--source", action="append", help="only this source (repeatable)")
+    p.add_argument("--poll-minutes", type=float, default=10, help="how often to re-plan sources that aren't folders")
+    p.add_argument("--settle-seconds", type=float, default=3, help="wait for changes to settle before indexing")
+    p.set_defaults(func=cmd_watch)
 
     p = sub.add_parser("mcp", help="a stdio MCP server with read-only search, get and status tools (needs rummage[mcp])")
     p.set_defaults(func=cmd_mcp)
