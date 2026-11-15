@@ -66,7 +66,7 @@ def claude(model: str, prompt: str) -> dict:
 
 
 def json_in(text: str):
-    match = re.search(r"(\{.*\}|\[.*\])", text, re.S)
+    match = re.search(r"(\{.*\}|\[.*\])", text, re.DOTALL)
     return json.loads(match.group(1)) if match else None
 
 
@@ -123,7 +123,7 @@ def main() -> int:
 
     def text_of(name: str) -> str:
         body = (corpus / name).read_text(encoding="utf-8")
-        return re.sub(r"^---\n.*?\n---\n", "", body, flags=re.S).strip()
+        return re.sub(r"^---\n.*?\n---\n", "", body, flags=re.DOTALL).strip()
 
     results.mkdir(parents=True, exist_ok=True)
     rewrites = {}
