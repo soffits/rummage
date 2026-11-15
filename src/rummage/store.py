@@ -6,6 +6,7 @@ Nothing here is the source of truth; the index can be deleted and built again fr
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import time
@@ -69,6 +70,15 @@ class Segment:
     embed_text: str | None = None   # what the model reads, when it differs from `text`
     image: bytes | None = None      # PNG/JPEG bytes for an image segment (not stored)
 
+    @property
+    def embed_hash(self) -> str | None:
+        """What the vector depends on: the model's input text, or the picture's bytes."""
+        if self.image:
+            return "i:" + hashlib.sha256(self.image).hexdigest()
+        if self.embed_text:
+            return "t:" + hashlib.sha256(self.embed_text.encode("utf-8")).hexdigest()
+        return None
+
 
 @dataclass
 class Item:
@@ -95,6 +105,10 @@ class Store:
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(segments)")}
+        if "embed_hash" not in columns:
+            self.db.execute("ALTER TABLE segments ADD COLUMN embed_hash TEXT")
+        self.db.execute("CREATE INDEX IF NOT EXISTS segments_embed_hash ON segments(embed_hash)")
         version = self.meta("vector_version")
         if version is None:
             self.set_meta("vector_version", VECTOR_VERSION)
@@ -165,11 +179,24 @@ class Store:
             blob = None
             if seg.vector is not None:
                 blob = np.asarray(seg.vector[:DIM], np.float16).tobytes()
-            seg_id = self.db.execute("INSERT INTO segments(item, kind, loc, text, vector) VALUES(?, ?, ?, ?, ?)",
-                                     (item_id, seg.kind, seg.loc, seg.text, blob)).lastrowid
+            seg_id = self.db.execute(
+                "INSERT INTO segments(item, kind, loc, text, vector, embed_hash) VALUES(?, ?, ?, ?, ?, ?)",
+                (item_id, seg.kind, seg.loc, seg.text, blob, seg.embed_hash if blob else None)).lastrowid
             if seg.text or seg.kind == "name":
                 self.db.execute("INSERT INTO fts(rowid, title, body) VALUES(?, ?, ?)",
                                 (seg_id, title, T.for_index(seg.text or "")))
+
+    def known_vectors(self, hashes: list[str]) -> dict[str, np.ndarray]:
+        """Stored vectors for these embedding inputs, from any item: unchanged passages of an edited note, or a file
+        that moved, keep their vectors instead of being embedded again."""
+        found: dict[str, np.ndarray] = {}
+        for start in range(0, len(hashes), 500):
+            part = hashes[start:start + 500]
+            for h, blob in self.db.execute(
+                    f"SELECT embed_hash, vector FROM segments WHERE vector IS NOT NULL AND embed_hash IN "
+                    f"({','.join('?' * len(part))})", part):
+                found.setdefault(h, np.frombuffer(blob, np.float16).astype(np.float32))
+        return found
 
     def commit(self) -> None:
         self.db.commit()
