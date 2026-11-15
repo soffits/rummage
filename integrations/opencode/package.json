@@ -1,6 +1,6 @@
 {
   "name": "@soffits/opencode-rummage",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OpenCode plugin for rummage: recall from your own files on each prompt, a skill for searching them, and indexing progress in the footer.",
   "license": "AGPL-3.0-or-later",
   "author": "Sakina",
