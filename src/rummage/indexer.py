@@ -21,7 +21,7 @@ from .progress import Run
 from .runtime import (EmbedError, Embedder, RemoteEmbedder, Runtime, open_embedder,
                       reference_agreement)
 from .sources import Source
-from .store import Store, image_hash, text_hash
+from .store import MEDIA, Item, Store, media_hash, text_hash
 
 
 class Busy(RuntimeError):
@@ -121,7 +121,7 @@ class Embedders:
                 self.warn(f"embedder {self.accelerator_url} not used: {error}")
                 self.accelerator_url = None
                 return None
-        return self.accelerator if (self.accelerator.media or not media) else None
+        return self.accelerator if (self.accelerator.has_media or not media) else None
 
     def get(self, media: bool) -> Embedder:
         accelerated = self._accelerated(media)
@@ -133,14 +133,14 @@ class Embedders:
                 self.current.start()
             return self.current
         threads = None
-        if self.current and (self.current.media or not media or not self.profile.media):
+        if self.current and (self.current.has_media or not media or not self.profile.media):
             if self.max_threads <= self.threads or time.monotonic() - self.checked < self.RECHECK_SECONDS:
                 return self.current
             self.checked = time.monotonic()
             threads = self._wanted()
             if threads == self.current.threads:
                 return self.current
-            media = media or self.current.media
+            media = media or self.current.has_media
         threads = threads or self._wanted()
         self.close()
         self.current = open_embedder(self.runtime, self.profile, media, threads=threads, nice=self.nice,
@@ -155,14 +155,55 @@ class Embedders:
             self.current = None
 
 
+# Media inputs (pictures, sound windows, video frames, rendered pages) one item embeds per pass: a long recording or
+# a scanned book gets its first step in, then the rest after everything else, a step at a time, so it never holds up
+# the files behind it. What is left when the run ends waits in the item's `media_waiting` for the next run.
+MEDIA_STEP = 30
+
+
+def _read_item(store: Store, source: Source, item: Item, embedders: list[Embedders], counts: dict) -> int:
+    """Reads one item into the index with its reusable vectors and up to `MEDIA_STEP` new media vectors per model;
+    returns how many media inputs still wait."""
+    segments = source.load(item)
+    waiting = 0
+    for e in embedders:
+        for seg in segments:
+            if seg.kind in MEDIA and seg.media is not None:
+                seg.hashes[e.version] = media_hash(seg)
+            elif seg.embed:
+                seg.hashes[e.version] = text_hash(e.profile.document_text(*seg.embed))
+        reusable = store.known_vectors(e.version, [s.hashes[e.version] for s in segments if e.version in s.hashes])
+        for seg in segments:
+            reused = reusable.get(seg.hashes.get(e.version, ""))
+            if reused is not None:
+                seg.vectors[e.version] = reused
+                counts["reused"] += 1
+        media = [s for s in segments if s.kind in e.profile.encoders and s.media is not None
+                 and e.version not in s.vectors]
+        if media:
+            t0 = time.monotonic()
+            embedder = e.get(True)
+            for seg in media[:MEDIA_STEP]:
+                seg.vectors[e.version] = embedder.media(seg.media() if callable(seg.media) else seg.media)
+            counts["seconds_embedding"] += time.monotonic() - t0
+            waiting = max(waiting, len(media) - MEDIA_STEP)
+    if waiting > 0:
+        item.info["media_waiting"] = waiting
+    else:
+        item.info.pop("media_waiting", None)
+    store.put(item, segments)
+    store.commit()
+    return waiting
+
+
 def index_source(store: Store, source: Source, embedders: list[Embedders], log, warn, limit: int | None = None,
                  deadline: float | None = None, reload: bool = False, again: set[str] | frozenset = frozenset(),
                  progress: Run | None = None) -> dict:
     """Reads what changed into keyword search; vectors that can be reused go in now, the rest wait as pending
-    segments for `embed_pending` (pictures are embedded here, with every model in `embedders` that reads pictures,
-    since their bytes aren't kept). `log` gets progress, `warn` gets problems. `reload` reads every item again
-    (vectors are reused, so it only costs the reading), to pick up what a newer version stores about items; `again`
-    reads these keys again on top of what changed. `progress` gets how far it got, item by item."""
+    segments for `embed_pending` (media are embedded here, with every model in `embedders` that reads their kind,
+    since their bytes aren't kept; `MEDIA_STEP` at a time per item). `log` gets progress, `warn` gets problems.
+    `reload` reads every item again (vectors are reused, so it only costs the reading), to pick up what a newer
+    version stores about items; `again` reads these keys again on top of what changed. `progress` gets how far it got, item by item."""
     counts = {"added": 0, "updated": 0, "removed": 0, "failed": 0, "reused": 0, "seconds_embedding": 0.0}
     report = progress.source if progress else (lambda *a, **k: None)
     report(source.name, phase="planning", done=0, total=0, failed=0, last_error=None)
@@ -181,35 +222,10 @@ def index_source(store: Store, source: Source, embedders: list[Embedders], log, 
     done = 0
     complete = True
     report(source.name, phase="reading", total=total or 0)
-    for item in plan.upserts:
-        if (limit is not None and done >= limit) or (deadline is not None and time.monotonic() > deadline):
-            complete = False
-            break
+
+    def read(item: Item) -> int:
         try:
-            segments = source.load(item)
-            for e in embedders:
-                for seg in segments:
-                    if seg.image:
-                        seg.hashes[e.version] = image_hash(seg.image)
-                    elif seg.embed:
-                        seg.hashes[e.version] = text_hash(e.profile.document_text(*seg.embed))
-                reusable = store.known_vectors(e.version, [s.hashes[e.version] for s in segments
-                                                           if e.version in s.hashes])
-                for seg in segments:
-                    reused = reusable.get(seg.hashes.get(e.version, ""))
-                    if reused is not None:
-                        seg.vectors[e.version] = reused
-                        counts["reused"] += 1
-                images = [s for s in segments if s.kind == "image" and s.image and e.version not in s.vectors]
-                if images and e.profile.media:
-                    t0 = time.monotonic()
-                    embedder = e.get(True)
-                    for seg in images:
-                        seg.vectors[e.version] = embedder.image(seg.image)
-                    counts["seconds_embedding"] += time.monotonic() - t0
-            store.put(item, segments)
-            store.commit()
-            counts["updated" if item.key in known else "added"] += 1
+            return _read_item(store, source, item, embedders, counts)
         except Exception as error:  # one unreadable item must not sink the run
             store.rollback()
             counts["failed"] += 1
@@ -217,6 +233,14 @@ def index_source(store: Store, source: Source, embedders: list[Embedders], log, 
             warn(f"{source.name}: {item.key}: {type(error).__name__}: {error}")
             if counts["failed"] <= 3:
                 warn("".join(traceback.format_exception(error)[-3:]).rstrip())
+            return -1
+
+    for item in plan.upserts:
+        if (limit is not None and done >= limit) or (deadline is not None and time.monotonic() > deadline):
+            complete = False
+            break
+        if read(item) >= 0:
+            counts["updated" if item.key in known else "added"] += 1
         done += 1
         report(source.name, done=done)
         if total and total > 25 and (done % 100 == 0 or done == total):
@@ -224,9 +248,29 @@ def index_source(store: Store, source: Source, embedders: list[Embedders], log, 
     if complete and counts["failed"] == 0 and plan.state is not None:
         store.set_state(source.name, plan.state)
         store.commit()
+    if complete:
+        _finish_media(store, source, read, log, deadline)
     counts["complete"] = complete
     report(source.name, phase="done" if complete else "stopped")
     return counts
+
+
+def _finish_media(store: Store, source: Source, read, log, deadline: float | None) -> None:
+    """Embeds the media still waiting in this source's items, a step per item in turn, until none wait or the
+    deadline passes. Items are read again from the source (their done vectors are reused)."""
+    before = None
+    while waiting := sorted(store.media_waiting(source.name)):
+        left = store.media_waiting_total(source.name)
+        if left == before:
+            return   # no progress: the inputs aren't reusable between reads
+        before = left
+        log(f"{source.name}: {left} media inputs in {len(waiting)} items still to embed")
+        for key in waiting:
+            if deadline is not None and time.monotonic() > deadline:
+                return
+            item = store.stored_item(source.name, key)
+            if item is None or read(item) < 0:
+                return
 
 
 def embed_pending(store: Store, embedders: Embedders, log, sources: list[str] | None = None,
@@ -335,7 +379,7 @@ def embed_models(store: Store, active: Embedders | None, building: Embedders | N
         if made["waiting"] == 0 or (deadline is not None and time.monotonic() > deadline):
             break
     if building is not None and store.pending_count(building.version) == 0:
-        again = store.unreadable(building.version, store.model, building.profile.media)
+        again = store.unreadable(building.version, store.model, building.profile.encoders)
         waiting = sum(len(keys) for source, keys in again.items() if readable is None or source in readable)
         if waiting:
             switch.pause(store, f"{waiting} items wait to be read again by the next reading run")

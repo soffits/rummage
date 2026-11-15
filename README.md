@@ -1,7 +1,7 @@
 # rummage
 
 Search your files by what they mean and by the exact words in them, on your own machine. rummage indexes notes,
-documents, PDFs, pictures and archives with [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2), run on
+documents, PDFs, pictures, recordings, videos and archives with [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2), run on
 the CPU through [llama.cpp](https://github.com/ggml-org/llama.cpp), and keeps everything in one SQLite file. Nothing you
 index is sent anywhere.
 
@@ -19,6 +19,10 @@ $ rummage search "INV-20931" --words-only --json
 
 - Passages by meaning, in 100+ languages: a query in one language finds text written in another.
 - Pictures by what they show ("a dog on the beach", "a receipt from a restaurant"), and by text that's visible in them.
+- Recordings by what they sound like and videos by what they show and sound like, each hit at its moment (`0:01:25`):
+  the model hears 30-second windows and sees a frame per shot. Needs ffmpeg. It doesn't transcribe: an agent that
+  needs the words can transcribe that window itself.
+- PDFs page by page; a scanned page is matched as a picture of the page (`rummage[pdf-scans]`).
 - Names, IDs and numbers exactly as written, through a keyword index that also handles CJK text (Chinese, Japanese, Korean).
 - Each result points back to where it is: a file and character offset, or whatever a plugin uses (a chat message,
   a library path).
@@ -57,10 +61,13 @@ model = "embeddinggemma-2"            # the embedding model (`rummage models`); 
 #                                     # backfills); used only while it answers and its vectors agree
 
 [sources.documents]
-type = "files"                        # text, Markdown, HTML, PDF, Office/OpenDocument, pictures, archive listings
+type = "files"                        # text, Markdown, HTML, PDF, Office/OpenDocument, RTF, EPUB, .eml, pictures,
+                                      # recordings, videos, archive listings
 root = "~/Documents"
 exclude = [".*", "node_modules"]      # name patterns to skip (these are the defaults)
 images = true                         # embed pictures (needs the image encoder)
+recordings = true                     # embed audio and video (needs the encoders and ffmpeg)
+# read_secret_files = false           # keys, certificates, password stores, .env and .ssh are never read unless true
 
 [sources.notes]
 type = "markdown"                     # a Markdown vault: frontmatter title, aliases and tags, heading paths
@@ -94,7 +101,7 @@ Some files are too big to index whole. These limits apply per item and can be ra
 | `max_chars` | 400,000 | the item's text is indexed up to here (files, notes, mail and attachments) |
 | `limits.text`, `.html`, `.office`, `.pdf`, `.image` | 4, 8, 64, 128, 40 MB | the file is indexed by name only (`files`, `seafile`) |
 | `limits.tar` | 256 MB | a compressed tar is indexed by name only, without its listing |
-| `max_pdf_pages` | 500 | later pages are left out |
+| `max_pdf_pages` | 5000 | later pages are left out |
 | `max_archive_names` | 5,000 | the archive's later entries are left out of its listing |
 | `max_bytes` | 2 MB for `markdown`, none for `files` | the file is indexed by name only |
 | `max_attachment_bytes` | 32 MB | a mail attachment's text is left out |
@@ -211,7 +218,6 @@ settings for the speaker labels.
 | `dsh-sessions` | `dsh-sessions` | Chats in [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) session logs: one item per message a person wrote, with the reply after it. Config: optional `projects` (default: all), `people` (a JSON map of sender ids to names), `assistant_name`. Off until enabled. |
 | `hermes` | | Chats in a [Hermes Agent](https://github.com/NousResearch/hermes-agent) `state.db`, the same way. Config: `db` (default: Hermes's home), optional `people`, `exclude_sessions`, `frontends`. Off until enabled. |
 | `mail` | | Mail in a Maildir, an mbox, an IMAP or a JMAP account (read-only: nothing is marked read). One item per message: subject, sender, recipients, date, body, and the text of attached documents. Every folder but junk, trash and drafts by default. Config: `maildir` or `mbox`, or `imap_host` + `imap_user`, or `jmap_session` + `jmap_user`; `password_env`, `password_file` or `password_command` (or `oauth_token_command` for OAuth/XOAUTH2 IMAP); optional `folders`, `since` (`2024-01-01`, `2y`). |
-| `media` | | Audio and video files, by what is said in them: transcribed once with a local [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (`whisper-cli` and a model you install; ffmpeg for decoding), passages pointing to the time they start. Config: `root`, `model`, optional `whisper`, `ffmpeg`, `language`. |
 | `telegram-stickers` | | The sticker library kept by [dsh-telegram-bot](https://github.com/soffits/dsh-telegram-bot): each sticker's saved meaning, and its picture, so a sticker is found by what it says or shows. Needs ffmpeg and the bot token. |
 
 A plugin of your own is a class registered in the `rummage.sources` entry-point group; the docstring of

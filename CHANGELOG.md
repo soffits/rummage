@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.13.0
+
+- Recordings and videos are found by what they sound like and show, each hit at its moment: the model hears 30-second windows (every 25 s, silence skipped) and sees one frame per shot, plus a video's soundtrack. Needs ffmpeg and a model profile with the encoders (`encoders` in the profile; EmbeddingGemma 2 has image and audio, a text-only profile skips media). The whisper `media` source type is removed: rummage doesn't transcribe.
+- Long recordings, videos and scanned PDFs are embedded at most 30 inputs per item per pass; the rest follow after everything else and on the next run.
+- PDFs are read page by page (`loc` = `page N`, default `max_pdf_pages` 5000). A page with little text, like a scan, is also embedded as a picture of the page with the `pdf-scans` extra (pypdfium2); without it the item says so.
+- RTF, EPUB and saved mail (.eml) are read; spreadsheets give each sheet's name and rows, slides their speaker notes.
+- Keys, certificates, password stores, `.env` files and folders like `.ssh` are never read, nor text holding a private key; `status` counts them and `read_secret_files = true` allows them.
+- Re-read existing PDFs and media with `rummage index --reload`.
+
 ## 0.12.0
 
 - Indexing progress is visible while it runs: `rummage status --watch` follows it live per source (read, with

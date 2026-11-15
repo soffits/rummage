@@ -108,7 +108,7 @@ def cmd_index(cfg: C.Config, args) -> int:
                         live = [e for e in (_embedders(cfg, store, active, log), _embedders(cfg, store, building, log))
                                 if e is not None]
                         opened += live
-                        again = store.unreadable(building.version, store.model, building.media) if building else {}
+                        again = store.unreadable(building.version, store.model, building.encoders) if building else {}
                         reading = P.Run(cfg.data_dir, "read")
                         try:
                             _read_sources(cfg, store, names, live, again, args, deadline, log, report, failures,
@@ -689,7 +689,7 @@ def cmd_status(cfg: C.Config, args) -> int:
             out["model_name"] = active.name if active else None
             rec = switch.record(store)
             building = M.by_version(cfg.models, rec["to"]) if rec and rec["phase"] != "swapped" else None
-            again = store.unreadable(building.version, store.model, building.media) if building else {}
+            again = store.unreadable(building.version, store.model, building.encoders) if building else {}
             out["switch"] = switch.status(store, {k: v for k, v in again.items() if k in C.enabled(cfg)})
             out["models"] = store.models()
         finally:
@@ -726,7 +726,8 @@ def limit_notes(sources: dict) -> list[str]:
                          f"{', '.join(entry.get('settings') or [])}; `rummage get <ref> --original` reads a whole file")
         for why, left in (entry.get("left_out") or {}).items():
             examples = ", ".join(left.get("examples") or [])
-            setting = f" by {left['setting']} ({', '.join(left.get('patterns') or [])})" if left.get("setting") else ""
+            patterns = f" ({', '.join(left['patterns'])})" if left.get("patterns") else ""
+            setting = f" by {left['setting']}{patterns}" if left.get("setting") else ""
             notes.append(f"{name}: {left['count']} paths {why}{setting}, e.g. {examples}")
     return notes
 

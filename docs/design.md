@@ -96,7 +96,7 @@ name and the items' keys and fingerprints are part of the index format.
 
 | Type | Where | Item | Change detection |
 |---|---|---|---|
-| `files` | core | a file: text, HTML, PDF, Office/OpenDocument in ~1800-character passages; a picture as an image vector; an archive's list of names; anything else by name | mtime+size, then SHA-256 (size+mtime above 64 MB) |
+| `files` | core | a file: text, HTML, Office/OpenDocument (sheet rows, slide notes), RTF, EPUB, .eml in ~1800-character passages; a PDF by page, a scanned page also as an image; a picture as an image vector; a recording as 30 s sound windows and a video as a frame per shot plus its sound, at their moments; an archive's list of names; anything else by name | mtime+size, then SHA-256 (size+mtime above 64 MB) |
 | `markdown` | core | a note; title, aliases, tags from frontmatter; passages embedded with the heading path | mtime+size, then SHA-256 |
 | `seafile` | plugin | a file in a Seafile library, read through the web API with a read-only account | library head commit, then each file's object id |
 | `dsh-sessions` | plugin | a person's message plus the reply, in a DeepSeek Harness session log | per-log mtime+size, then content hash |
@@ -104,11 +104,10 @@ name and the items' keys and fingerprints are part of the index format.
 | `claude-code`, `codex` | plugin | the same, in append-only JSONL session logs | per-file size+mtime; reading resumes at the last turn's first line |
 | `gemini-cli` | plugin | the same, in Gemini CLI's JSONL logs, replayed with their patch and rewind records | per-file size+mtime, whole file |
 | `mail` | plugin | a mail message with its attached documents' text, from a Maildir, an mbox or IMAP | Maildir key / message hash; IMAP UIDVALIDITY + highest UID per folder |
-| `media` | plugin | an audio or video file's transcript (whisper.cpp), in passages by start time | size+mtime; transcripts cached by file |
 | `opencode` | plugin | the same, in OpenCode 2's `opencode.db` | message `time_updated` cursor |
 | `telegram-stickers` | plugin | a sticker in dsh-telegram-bot's library: saved meaning as text, picture as an image vector | hash of meaning, emoji, file id |
 
-Installers, disk images and media files other than pictures are indexed by name. Each kind has a size limit.
+Installers and disk images are indexed by name; keys, certificates and password files are never read. Each kind has a size limit.
 
 Sources that read another program's data answer `detect()` with the settings to use when that data is on the
 machine; `rummage sources` lists them, and they are read only once a config section switches them on. Each source

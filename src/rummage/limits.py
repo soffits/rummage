@@ -13,9 +13,10 @@ from dataclasses import dataclass
 # Bytes read at most per kind of file; a bigger file keeps only its name (archives: their names list is still read,
 # except for compressed tars, which must be decompressed to list).
 BYTES = {"text": 4 << 20, "html": 8 << 20, "office": 64 << 20, "pdf": 128 << 20, "tar": 256 << 20,
-         "image": 40 << 20}
+         "image": 40 << 20,
+         "rtf": 32 << 20, "epub": 64 << 20, "mail": 64 << 20}
 MAX_CHARS = 400_000          # characters of text per item (and per mail attachment)
-MAX_PDF_PAGES = 500
+MAX_PDF_PAGES = 5000
 MAX_ARCHIVE_NAMES = 5000
 MAX_ATTACHMENT_BYTES = 32 << 20
 KEEP_CHARS = 12_000          # characters kept per side of a chat turn
@@ -29,10 +30,12 @@ class Cut:
     total: int | None
     unit: str
     setting: str
+    reason: str | None = None   # why it wasn't read, when that isn't a size limit (a missing tool or package)
 
     def as_dict(self, source: str) -> dict:
-        return {"what": self.what, "kept": self.kept, "total": self.total, "unit": self.unit,
-                "setting": f"sources.{source}.{self.setting}"}
+        out = {"what": self.what, "kept": self.kept, "total": self.total, "unit": self.unit,
+               "setting": f"sources.{source}.{self.setting}"}
+        return out | ({"reason": self.reason} if self.reason else {})
 
 
 @dataclass(frozen=True)
@@ -78,6 +81,8 @@ def record(item, cuts: list[Cut]) -> None:
 
 def describe(entry: dict) -> str:
     """One line for a `partial` entry: what was left out and the setting that lifts it."""
+    if entry.get("reason"):
+        return f"{entry['what']} not read: {entry['reason']} ({entry['setting']})"
     if entry["kept"] == 0:
         size = f" ({entry['total']} {entry['unit']})" if entry.get("total") else ""
         return f"{entry['what']} not read{size}, only its name; raise {entry['setting']} to read it"

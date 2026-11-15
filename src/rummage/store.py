@@ -12,6 +12,7 @@ import os
 import sqlite3
 import time
 from dataclasses import dataclass, field
+from typing import Callable
 from pathlib import Path
 
 import numpy as np
@@ -74,12 +75,14 @@ CREATE TABLE IF NOT EXISTS runs (
 
 @dataclass
 class Segment:
-    kind: str                 # "name" (keyword only), "text", "image"
+    kind: str                 # "name" (keyword only), "text", or a media kind ("image", "audio")
     text: str = ""            # what keyword search reads and results quote
     loc: str | None = None    # where in the item: a character offset, a message id...
     lines: str | None = None  # "first-last" lines of a passage in a text file
     embed: tuple[str | None, str] | None = None   # what the model reads: (title, text), before the model's prompt
-    image: bytes | None = None      # PNG/JPEG bytes for an image segment (not stored)
+    media: bytes | Callable[[], bytes] | None = None   # what the model reads for a media segment: PNG/JPEG or WAV
+    #                               bytes, or a function that reads them when needed (never stored)
+    media_id: str | None = None     # what lazily read media depends on (file, place, settings), for its hash
     vectors: dict[str, np.ndarray] = field(default_factory=dict)   # model version -> vector
     hashes: dict[str, str] = field(default_factory=dict)            # model version -> what its vector depends on
 
@@ -93,8 +96,15 @@ def text_hash(model_text: str) -> str:
     return "t:" + hashlib.sha256(model_text.encode("utf-8")).hexdigest()
 
 
-def image_hash(data: bytes) -> str:
-    return "i:" + hashlib.sha256(data).hexdigest()
+MEDIA = ("image", "audio")
+
+
+def media_hash(seg: "Segment") -> str:
+    """What a media vector depends on: its bytes, or for media read lazily, its `media_id`."""
+    prefix = "i:" if seg.kind == "image" else "a:"
+    if seg.media_id is not None:
+        return prefix + hashlib.sha256(("id\0" + seg.media_id).encode("utf-8")).hexdigest()
+    return prefix + hashlib.sha256(seg.media).hexdigest()
 
 
 @dataclass
@@ -411,18 +421,40 @@ class Store:
         self.db.execute("DELETE FROM meta WHERE key IN (?, ?)", (f"reference:{model}", f"calibration:{model}"))
         return n
 
-    def unreadable(self, model: str, active: str | None, media: bool) -> dict[str, list[str]]:
-        """Items whose vectors of `model` can't be made from what the index keeps, by source: pictures (their bytes
-        aren't kept; only when `media`), and passages with a vector of the active model but no stored input. Reading
-        them again gives the model their input."""
+    def unreadable(self, model: str, active: str | None, encoders: tuple[str, ...]) -> dict[str, list[str]]:
+        """Items whose vectors of `model` can't be made from what the index keeps, by source: media of the kinds in
+        `encoders` (pictures, sound: their bytes aren't kept), and passages with a vector of the active model but no
+        stored input. Reading them again gives the model their input."""
         out: dict[str, set[str]] = {}
+        marks = ",".join("?" * len(MEDIA))
+        wanted = ",".join("?" * len(encoders)) or "NULL"
         query = ("SELECT DISTINCT i.source, i.key FROM segments s JOIN items i ON i.id = s.item "
                  "WHERE s.input IS NULL AND NOT EXISTS (SELECT 1 FROM vectors v WHERE v.model = ? AND v.segment = s.id) "
-                 "AND ((s.kind = 'image' AND ?) OR (s.kind != 'image' AND EXISTS "
+                 f"AND (s.kind IN ({wanted}) OR (s.kind NOT IN ({marks}) AND EXISTS "
                  "(SELECT 1 FROM vectors a WHERE a.model = ? AND a.segment = s.id)))")
-        for source, key in self.db.execute(query, (model, int(media), active or "")):
+        for source, key in self.db.execute(query, (model, *encoders, *MEDIA, active or "")):
             out.setdefault(source, set()).add(key)
         return {k: sorted(v) for k, v in out.items()}
+
+    def stored_item(self, source: str, key: str) -> Item | None:
+        """The item as the source planned it, to read it again: its info without what reading it added."""
+        found = self.db.execute("SELECT kind, title, ref, mtime, fingerprint, info FROM items WHERE source = ? AND key = ?",
+                                (source, key)).fetchone()
+        if found is None:
+            return None
+        kind, title, ref, mtime, fingerprint, info = found
+        info = {k: v for k, v in json.loads(info or "{}").items() if k not in ("partial", "media_waiting")}
+        return Item(source, key, kind, title or "", ref or "", mtime, fingerprint, info)
+
+    def media_waiting(self, source: str) -> set[str]:
+        """Keys of the source's items with media still to embed (long recordings, videos, scanned PDFs are embedded
+        a step at a time)."""
+        return {key for (key,) in self.db.execute(
+            "SELECT key FROM items WHERE source = ? AND json_extract(info, '$.media_waiting') > 0", (source,))}
+
+    def media_waiting_total(self, source: str) -> int:
+        return self.db.execute("SELECT COALESCE(SUM(json_extract(info, '$.media_waiting')), 0) FROM items "
+                               "WHERE source = ?", (source,)).fetchone()[0]
 
     def inputs(self, segments: list[int]) -> dict[int, tuple[str | None, str]]:
         out = {}
