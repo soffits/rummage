@@ -61,3 +61,17 @@ def test_service_definitions_run_watch_with_the_config(tmp_path):
     assert f"<string>{config}</string>" in plist and "<key>KeepAlive</key><true/>" in plist
     task = service.windows_task(config)
     assert task[:2] == ["schtasks", "/Create"] and "watch" in task[-1] and '"' in task[-1]
+
+
+def test_watch_leaves_out_switched_off_sources(tmp_path, monkeypatch):
+    from rummage.cli import main
+
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(f"data_dir = '{tmp_path / 'data'}'\n[sources.on]\ntype = 'markdown'\nroot = '{notes}'\n"
+                   f"[sources.off]\ntype = 'markdown'\nroot = '{notes}'\nenabled = false\n", encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(W, "run", lambda cfg, names, *a: seen.append(names) or 0)
+    assert main(["--config", str(cfg), "watch"]) == 0
+    assert seen == [["on"]]
