@@ -30,6 +30,7 @@ from . import runtime as R
 from . import envelope as E
 from .query import FALLBACK_ERRORS, reason_for
 from .search import Searcher
+from .when import understand
 from .secrets import mask_value
 from .store import Store
 
@@ -67,7 +68,7 @@ class Service:
                     vector = self.query_vector(q)
                 except FALLBACK_ERRORS as error:
                     degraded = reason_for(error)
-            hits = Searcher(store, sources or None, paths, globs).search(q, vector, limit=limit,
+            hits = Searcher(store, sources or None, paths, globs).search(q, vector, limit=limit, when=understand(q),
                                                                             kinds=set(kinds) or None)
         finally:
             store.close()

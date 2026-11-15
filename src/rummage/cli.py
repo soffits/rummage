@@ -38,6 +38,7 @@ from .indexer import Busy, Embedders, embed_pending, index_source, lock
 from .search import Searcher
 from .chats import SAME_MESSAGE_SECONDS
 from .query import meaning_vector
+from .when import understand
 from .secrets import mask_value
 from .sources import available, build, load_type
 from .store import Ambiguous, NotFound, Store, VersionMismatch
@@ -178,6 +179,15 @@ def _remote_search(name: str, spec: dict, args) -> dict:
     return _remote(spec, "/search", params)
 
 
+def _day(value: str | None, plus_days: int = 0) -> float | None:
+    """Epoch seconds of a `YYYY-MM-DD` (local midnight), plus some days."""
+    if not value:
+        return None
+    import datetime as dt
+
+    return (dt.datetime.fromisoformat(value) + dt.timedelta(days=plus_days)).timestamp()
+
+
 def _fail(args, status: str, code: int, message: str, actions: list[dict] | None = None) -> int:
     if getattr(args, "json", False):
         print(json.dumps(E.error(status, message, actions), ensure_ascii=False))
@@ -194,6 +204,7 @@ def cmd_search(cfg: C.Config, args) -> int:
     index_empty = True
     pending = 0
     degraded = None
+    when = None if args.no_dates or args.since or args.until else understand(args.query)
     if not cfg.index_path.exists() and not cfg.remotes:
         return _fail(args, "index_missing", E.INDEX_MISSING, "no index yet: run `rummage index`",
                      [{"intent": "build_index", "reason": "Nothing is indexed yet.", "command": ["rummage", "index"]}])
@@ -205,9 +216,9 @@ def cmd_search(cfg: C.Config, args) -> int:
             vector = None
             if not args.words_only and not index_empty:
                 vector, degraded = meaning_vector(cfg, args.query, use_daemon=not args.no_daemon)
-            searcher = Searcher(store, local_sources, args.path, args.glob)
+            searcher = Searcher(store, local_sources, args.path, args.glob, _day(args.since), _day(args.until, 1))
             hits += [_show(cfg, args, h.as_dict()) for h in searcher.search(
-                args.query, vector, limit=args.limit, kinds=set(args.kind) if args.kind else None)]
+                args.query, vector, limit=args.limit, kinds=set(args.kind) if args.kind else None, when=when)]
             pending = store.pending_count(local_sources)
         except VersionMismatch as error:
             return _fail(args, "index_invalid", E.INDEX_MISSING, str(error),
@@ -229,6 +240,8 @@ def cmd_search(cfg: C.Config, args) -> int:
     doc = E.build(args, hits, errors, time.monotonic() - started, index_empty)
     doc["summary"]["pending_vectors"] = pending
     E.mark_degraded(doc, degraded)
+    if when:
+        doc["request"]["time"] = when.as_dict()
     for error in errors:
         _eprint("warning:", error)
     if args.files:
@@ -660,6 +673,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--glob", action="append", help="only items whose ref matches this pattern, e.g. '*.pdf' (repeatable)")
     p.add_argument("-n", "--limit", type=int, default=10)
     p.add_argument("--words-only", action="store_true", help="keyword search only (no model start, ~instant)")
+    p.add_argument("--since", metavar="YYYY-MM-DD", help="only items from this day on (a chat's time, a mail's date, "
+                                                         "a file's change)")
+    p.add_argument("--until", metavar="YYYY-MM-DD", help="only items up to and including this day")
+    p.add_argument("--no-dates", action="store_true",
+                   help="don't read time phrases in the query (\"last Wednesday\", \"上周\") as a time range")
     p.add_argument("--no-remote", action="store_true", help="only the local index")
     p.add_argument("--no-daemon", action="store_true", help="load the model even when a query daemon is running")
     p.add_argument("--truncate", choices=["off", "knee", "strong"], default="off",
