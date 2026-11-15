@@ -17,6 +17,7 @@ from . import envelope as E
 from . import runtime as R
 from .query import FALLBACK_ERRORS, reason_for
 from .search import Searcher
+from .when import understand
 from .secrets import mask_value
 from .store import Store
 
@@ -70,7 +71,7 @@ def build(cfg: C.Config):
                     vector = query_vector(query)
                 except FALLBACK_ERRORS as error:
                     degraded = reason_for(error)
-            hits = Searcher(store, sources, paths, globs).search(query, vector, limit=limit)
+            hits = Searcher(store, sources, paths, globs).search(query, vector, limit=limit, when=understand(query))
         finally:
             store.close()
         args = SimpleNamespace(query=query, limit=limit, source=sources, kind=None, words_only=words_only,
