@@ -21,7 +21,7 @@ from .. import media as M
 from .. import text as T
 from ..limits import Cut, record
 from ..store import Item, Segment
-from .folder import FolderSource
+from .folder import PRIVATE_KEY, FolderSource
 from .markdown import note_segments
 
 MARKDOWN = {".md", ".markdown"}
@@ -69,7 +69,7 @@ class FilesSource(FolderSource):
         if kind in ("audio", "video"):
             return segments + self.recording(item, str(path))
         data = path.read_bytes()
-        if kind == "text" and self.skip_secrets and b"PRIVATE KEY-----" in data:
+        if kind == "text" and self.skip_secrets and PRIVATE_KEY.search(data):
             record(item, [Cut("file", 0, size, "bytes", "read_secret_files", "it holds a private key")])
             return segments
         if kind == "pdf":
