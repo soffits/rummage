@@ -582,7 +582,7 @@ def cmd_recall(cfg: C.Config, args) -> int:
 def cmd_watch(cfg: C.Config, args) -> int:
     from .watch import run
 
-    names = args.source or list(cfg.sources)
+    names = args.source or C.enabled(cfg)
     unknown = [n for n in names if n not in cfg.sources]
     if unknown:
         _eprint("unknown source:", ", ".join(unknown))
