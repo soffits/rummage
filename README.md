@@ -19,7 +19,7 @@ $ rummage search "INV-20931" --words-only --json
 
 - Passages by meaning, in 100+ languages: a query in one language finds text written in another.
 - Pictures by what they show ("a dog on the beach", "a receipt from a restaurant"), and by text that's visible in them.
-- Names, IDs and numbers exactly as written, through a keyword index that also handles Chinese and Japanese.
+- Names, IDs and numbers exactly as written, through a keyword index that also handles CJK text (Chinese, Japanese, Korean).
 - Each result points back to where it is: a file and character offset, or whatever a plugin uses (a chat message,
   a library path).
 
@@ -128,7 +128,7 @@ After the first index, a run only embeds what changed.
 Every stored vector is scored against the query. Scores are put on one scale per query (z-scores, with a separate
 mean per modality so pictures and passages compare), and only segments well above the rest count as meaning
 matches, which also gives an honest "nothing found". Exact-word matches from SQLite FTS5 add a bonus that grows
-with how many of the query's words an item has. Chinese and Japanese text is indexed one character per token, so
+with how many of the query's words an item has. CJK text (Chinese, Japanese, Korean) is indexed one character per token and queried by character pairs, so
 two-character words match. The ranking is adapted from [DigUp](https://github.com/ARahim3/DigUp). More in
 [docs/design.md](docs/design.md).
 
