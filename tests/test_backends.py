@@ -15,7 +15,8 @@ class _Timed:
     def __init__(self, delay: dict, skew: dict):
         self.delay, self.skew = delay, skew
 
-    def __call__(self, runtime, profile, threads, nice, backend):
+    def __call__(self, runtime, profile, threads, nice, backend, device=None):
+        backend = device or backend
         _Timed.calls.append(backend)
         outer = self
 
@@ -43,7 +44,7 @@ class _Timed:
 _clock = [0.0]
 
 
-def _runtime(tmp_path, monkeypatch, found=("Vulkan0: Test GPU (16000 MiB)",)):
+def _runtime(tmp_path, monkeypatch, found=("vulkan: Test GPU (16000 MiB)",)):
     rt = R.Runtime(tmp_path)
     monkeypatch.setattr(B.time, "monotonic", lambda: _clock[0])
     monkeypatch.setattr(B, "candidate", lambda: "vulkan")
@@ -56,8 +57,8 @@ def test_gpu_kept_only_when_faster_and_agreeing(tmp_path, monkeypatch):
     rt = _runtime(tmp_path, monkeypatch)
     record = B.choose(rt, PROFILE, 2, log=lambda *a: None,
                       open_embedder=_Timed({"cpu": 0.2, "vulkan": 0.01}, {"cpu": 0.0, "vulkan": 0.0}))
-    assert record["backend"] == "vulkan" and rt.backend == "vulkan" and record["agreement"] >= 0.999
-    assert rt.gpu_layers() == 999 and rt.server_binary().parent.name.endswith("-vulkan")
+    assert record["backend"] == "vulkan" and rt.backend == "vulkan" and record["devices"][0]["agreement"] >= 0.999
+    assert rt.gpu_layers() == 999 and rt.server_binary().parent.name.endswith("-vulkan") and rt.device == "vulkan"
 
     record = B.choose(rt, PROFILE, 2, log=lambda *a: None,
                       open_embedder=_Timed({"cpu": 0.05, "vulkan": 0.05}, {"cpu": 0.0, "vulkan": 0.0}))
@@ -65,7 +66,7 @@ def test_gpu_kept_only_when_faster_and_agreeing(tmp_path, monkeypatch):
 
     record = B.choose(rt, PROFILE, 2, log=lambda *a: None,
                       open_embedder=_Timed({"cpu": 0.2, "vulkan": 0.01}, {"cpu": 0.0, "vulkan": 0.3}))
-    assert record["backend"] == "cpu" and "differ" in record["reason"]
+    assert record["backend"] == "cpu" and "model's vectors" in record["reason"]
 
 
 def test_no_gpu_means_cpu_without_running_anything(tmp_path, monkeypatch):
@@ -91,3 +92,14 @@ def test_device_listing():
     assert B.parse_devices("Available devices:\n  Vulkan0: NVIDIA GeForce RTX 5080 (16303 MiB, 15411 MiB free)\n"
                            "main: exiting\n") == ["Vulkan0: NVIDIA GeForce RTX 5080 (16303 MiB, 15411 MiB free)"]
     assert B.parse_devices("error: unknown argument") == []
+
+
+def test_the_fastest_agreeing_gpu_is_pinned(tmp_path, monkeypatch):
+    rt = _runtime(tmp_path, monkeypatch, found=("Vulkan0: AMD Radeon(TM) Graphics (16225 MiB)",
+                                                "Vulkan1: NVIDIA GeForce RTX 5080 (15977 MiB)"))
+    record = B.choose(rt, PROFILE, 2, log=lambda *a: None, open_embedder=_Timed(
+        {"cpu": 0.5, "Vulkan0": 0.1, "Vulkan1": 0.02}, {"cpu": 0.0, "Vulkan0": 0.0, "Vulkan1": 0.0}))
+    assert record["device"] == "Vulkan1" and rt.device == "Vulkan1" and "RTX 5080" in record["reason"]
+    record = B.choose(rt, PROFILE, 2, log=lambda *a: None, open_embedder=_Timed(
+        {"cpu": 0.5, "Vulkan0": 0.1, "Vulkan1": 0.02}, {"cpu": 0.0, "Vulkan0": 0.0, "Vulkan1": 0.3}))
+    assert record["device"] == "Vulkan0"     # the faster one makes other vectors
