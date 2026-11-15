@@ -18,7 +18,6 @@ from pathlib import Path
 
 from rummage import net
 from rummage import extract as X
-from rummage.runtime import document_text
 from rummage.store import Item, Segment
 from rummage.sources import Plan, Source
 
@@ -89,7 +88,7 @@ class StickerSource(Source):
                                                           entry.get("emoji")])))]
         if meaning:
             segments.append(Segment("text", meaning, loc="meaning",
-                                    embed_text=document_text(f"sticker {entry.get('emoji') or ''}".strip(), meaning)))
+                                    embed=(f"sticker {entry.get('emoji') or ''}".strip(), meaning)))
         if self.images:
             png = self.picture(item.key, entry)
             if png:

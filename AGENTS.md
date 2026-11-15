@@ -1,14 +1,18 @@
 # rummage
 
-Local search by meaning and exact words over your files, on your own machine. EmbeddingGemma 2 runs on the CPU through
-llama.cpp's `llama-server`, started as a child process for one run; the index is one SQLite file. Licence: AGPL-3.0-or-later
+Local search by meaning and exact words over your files, on your own machine. An embedding model (EmbeddingGemma 2 by
+default) runs on the CPU through llama.cpp's `llama-server`, started as a child process for one run, or behind an
+OpenAI-compatible endpoint; the index is one SQLite file. Licence: AGPL-3.0-or-later
 (up to 0.2.x it was MIT); third-party notices in `NOTICE`.
 User docs: `README.md`. Design and the reasons behind it: `docs/design.md`, `docs/decisions.md`. Known leftovers:
 `docs/queue.md`.
 
 ## Layout
 
-- `src/rummage/runtime.py`: pinned model and llama.cpp files, `VECTOR_VERSION`, the `llama-server` child.
+- `src/rummage/models.py` and `profiles/*.toml`: model profiles (files or endpoint, prompts, dimensions, version,
+  thresholds, reference vectors). `runtime.py`: the pinned llama.cpp build, the `llama-server` child and the
+  endpoint embedder. `switch.py`: a model switch's record and phases; `calibrate.py`: per-model thresholds;
+  `compare.py`: `rummage models compare`.
 - `store.py` (SQLite schema), `text.py` (normalisation, CJK tokens, chunking), `search.py` (ranking), `indexer.py`
   (one run, per-item commits, lock), `cli.py`, `serve.py` (HTTP API), `extract.py` (file bytes to text).
 - `sources/`: the source base and entry-point discovery (`rummage.sources` group), the core types `markdown` and `files`
@@ -21,8 +25,8 @@ User docs: `README.md`. Design and the reasons behind it: `docs/design.md`, `doc
 
 - Sources are read-only: open files read-only (SQLite with `mode=ro&immutable=1`), never write next to what is indexed,
   keep downloaded bytes in memory.
-- Anything that changes the vectors (model file, quantization, dimension, prompt format, llama.cpp build that fails the
-  reference check) bumps `VECTOR_VERSION` in `runtime.py`.
+- Anything that changes a built-in model's vectors (model file, quantization, dimension, prompt format, llama.cpp build
+  that fails the reference check) changes the `version` in its profile; indexes then switch in the background.
 - New dependencies go in an optional extra unless every install needs them; the core needs only numpy and pypdf.
 - Text in the repo is English. CJK appears only where it tests or implements CJK handling.
 

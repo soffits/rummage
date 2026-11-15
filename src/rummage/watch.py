@@ -19,6 +19,7 @@ from pathlib import Path
 
 from . import config as C
 from . import envelope as E
+from . import switch
 from .sources import build
 from .store import Store
 
@@ -68,7 +69,7 @@ class Runner:
         try:
             store = Store(self.cfg.index_path)
             try:
-                waiting = store.pending_count()
+                waiting = switch.work_left(store)
             finally:
                 store.close()
         except Exception:

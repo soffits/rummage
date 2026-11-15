@@ -27,6 +27,7 @@ from corpora import load  # noqa: E402
 from run import metrics, summarize  # noqa: E402
 
 from rummage import config as C  # noqa: E402
+from rummage import models as M  # noqa: E402
 from rummage import runtime as R  # noqa: E402
 
 BATCH = 32
@@ -34,16 +35,15 @@ DEPTH = 100
 
 
 def embed(embedder, texts: list[str]) -> tuple[np.ndarray, np.ndarray]:
-    """Two normalized matrices: rummage's 512-dimension vectors (each piece cut, then merged, as `Embedder.texts`
-    does) and the model's whole vectors (float16). A text longer than a micro-batch is embedded in pieces whose
-    vectors are averaged by token count."""
+    """Two normalized matrices: rummage's vectors cut to the profile's dimensions (each piece cut, then merged, as
+    `Embedder.texts` does) and the model's whole vectors (float16). A text longer than a micro-batch is embedded in
+    pieces whose vectors are averaged by token count."""
     cut, full = [], []
     for i in range(0, len(texts), BATCH):
         pieces = [(n, piece, weight) for n, text in enumerate(texts[i:i + BATCH])
                   for piece, weight in embedder._pieces(text)]
-        out = embedder._post("/v1/embeddings", {"input": [piece for _, piece, _ in pieces]})
-        rows = np.array([r["embedding"] for r in sorted(out["data"], key=lambda d: d["index"])], np.float32)
-        for target, part in ((cut, R._cut(rows)), (full, _norm(rows))):
+        rows = embedder._embed([piece for _, piece, _ in pieces])
+        for target, part in ((cut, embedder.cut(rows)), (full, _norm(rows))):
             merged = np.zeros((len(texts[i:i + BATCH]), part.shape[1]), np.float32)
             for (n, _, weight), row in zip(pieces, part):
                 merged[n] += weight * row
@@ -84,15 +84,16 @@ def main() -> int:
     docs = list(documents())
     relevant = {q: {d: g for d, g in judged[q].items() if g > 0} for q in judged if q in queries}
     qids = sorted(q for q, rel in relevant.items() if rel)
+    cfg = C.load()
+    profile = M.by_name(cfg.models, cfg.model)
     if args.embedder_url:
-        embedder = R.RemoteEmbedder(args.embedder_url, timeout=30)
+        embedder = R.RemoteEmbedder(args.embedder_url, profile, timeout=30)
     else:
-        cfg = C.load()
-        embedder = R.Embedder(R.Runtime(cfg.data_dir, cfg.llama_server), media=False, threads=args.threads, nice=15)
+        embedder = R.open_embedder(R.Runtime(cfg.data_dir, cfg.llama_server), profile, threads=args.threads, nice=15)
     embedder.start()
     try:
-        D512, Dfull = embed(embedder, [R.document_text(title, text) for _, title, text in docs])
-        Q512, Qfull = embed(embedder, [R.QUERY_PREFIX + queries[q] for q in qids])
+        D512, Dfull = embed(embedder, [profile.document_text(title, text) for _, title, text in docs])
+        Q512, Qfull = embed(embedder, [profile.query_text(queries[q]) for q in qids])
     finally:
         embedder.stop()
     runs = {"d512": rank(Q512, D512, qids, docs)}

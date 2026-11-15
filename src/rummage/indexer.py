@@ -16,9 +16,11 @@ import traceback
 from contextlib import contextmanager
 from pathlib import Path
 
-from .runtime import REFERENCE_COSINE, EmbedError, Embedder, RemoteEmbedder, Runtime, reference_agreement
+from .models import REFERENCE_COSINE, Profile
+from .runtime import (EmbedError, Embedder, RemoteEmbedder, Runtime, open_embedder,
+                      reference_agreement)
 from .sources import Source
-from .store import Store
+from .store import Store, image_hash, text_hash
 
 
 class Busy(RuntimeError):
@@ -70,17 +72,19 @@ def _load() -> float | None:
 
 
 class Embedders:
-    """Starts llama-server on first need, with the image encoders only when a source needs them. With
-    `max_threads` above `threads`, it checks the machine's load every minute and restarts the server with more
-    threads while cores sit idle, or back to `threads` when other work shows up."""
+    """The embedder of one model profile for a run. A local GGUF starts llama-server on first need, with the image
+    encoders only when a source needs them; with `max_threads` above `threads`, it checks the machine's load every
+    minute and restarts the server with more threads while cores sit idle, or back to `threads` when other work shows
+    up. `accelerator`: an endpoint running the same model, used instead once its reference vectors agree."""
 
     RECHECK_SECONDS = 60
 
-    def __init__(self, runtime: Runtime, threads: int, nice: int, log_path: Path, max_threads: int = 0,
-                 remote: str | None = None, warn=lambda *a: None):
-        self.remote_url = remote
-        self.remote: RemoteEmbedder | None = None
-        self.reference: list | None = None
+    def __init__(self, runtime: Runtime, profile: Profile, threads: int, nice: int, log_path: Path | None,
+                 max_threads: int = 0, accelerator: str | None = None, warn=lambda *a: None):
+        self.profile = profile
+        self.accelerator_url = accelerator if profile.local else None
+        self.accelerator: Embedder | None = None
+        self.reference: list | None = list(profile.reference) or None
         self.warn = warn
         self.runtime = runtime
         self.threads = threads
@@ -90,36 +94,45 @@ class Embedders:
         self.current: Embedder | None = None
         self.checked = 0.0
 
+    @property
+    def version(self) -> str:
+        return self.profile.version
+
     def _wanted(self) -> int:
         mine = self.current.threads if self.current else 0
         return spare_threads(self.threads, self.max_threads, mine, _load(), os.cpu_count() or 1)
 
-    def _remote(self, media: bool) -> Embedder | None:
-        """The remote embedder, once it answered and agreed with the index's reference vectors; None otherwise
-        (checked once per run)."""
-        if not self.remote_url:
+    def _accelerated(self, media: bool) -> Embedder | None:
+        """The accelerator, once it answered and agreed with the reference vectors; None otherwise (checked once
+        per run)."""
+        if not self.accelerator_url:
             return None
-        if self.remote is None:
-            candidate = RemoteEmbedder(self.remote_url)
+        if self.accelerator is None:
+            candidate = RemoteEmbedder(self.accelerator_url, self.profile)
             try:
                 candidate.start()
                 if self.reference is not None:
                     agreement = reference_agreement(candidate, self.reference)
                     if agreement < REFERENCE_COSINE:
-                        raise EmbedError(f"its vectors differ from the index's (cosine {agreement:.4f})")
-                self.remote = candidate
+                        raise EmbedError(f"its vectors differ from {self.profile.name}'s (cosine {agreement:.4f})")
+                self.accelerator = candidate
             except EmbedError as error:
-                self.warn(f"remote embedder {self.remote_url} not used: {error}")
-                self.remote_url = None
+                self.warn(f"embedder {self.accelerator_url} not used: {error}")
+                self.accelerator_url = None
                 return None
-        return self.remote if (self.remote.media or not media) else None
+        return self.accelerator if (self.accelerator.media or not media) else None
 
     def get(self, media: bool) -> Embedder:
-        remote = self._remote(media)
-        if remote is not None:
-            return remote
+        accelerated = self._accelerated(media)
+        if accelerated is not None:
+            return accelerated
+        if not self.profile.local:
+            if self.current is None:
+                self.current = open_embedder(self.runtime, self.profile)
+                self.current.start()
+            return self.current
         threads = None
-        if self.current and (self.current.media or not media):
+        if self.current and (self.current.media or not media or not self.profile.media):
             if self.max_threads <= self.threads or time.monotonic() - self.checked < self.RECHECK_SECONDS:
                 return self.current
             self.checked = time.monotonic()
@@ -129,7 +142,8 @@ class Embedders:
             media = media or self.current.media
         threads = threads or self._wanted()
         self.close()
-        self.current = Embedder(self.runtime, media, threads, self.nice, self.log_path)
+        self.current = open_embedder(self.runtime, self.profile, media, threads=threads, nice=self.nice,
+                                     log_path=self.log_path)
         self.current.start()
         self.checked = time.monotonic()
         return self.current
@@ -140,16 +154,19 @@ class Embedders:
             self.current = None
 
 
-def index_source(store: Store, source: Source, embedders: Embedders, log, warn, limit: int | None = None,
-                 deadline: float | None = None, reload: bool = False) -> dict:
+def index_source(store: Store, source: Source, embedders: list[Embedders], log, warn, limit: int | None = None,
+                 deadline: float | None = None, reload: bool = False, again: set[str] | frozenset = frozenset()) -> dict:
     """Reads what changed into keyword search; vectors that can be reused go in now, the rest wait as pending
-    segments for `embed_pending` (pictures are embedded here, since their bytes aren't kept). `log` gets progress,
-    `warn` gets problems. `reload` reads every item again (vectors are reused, so it only costs the reading), to
-    pick up what a newer version stores about items."""
+    segments for `embed_pending` (pictures are embedded here, with every model in `embedders` that reads pictures,
+    since their bytes aren't kept). `log` gets progress, `warn` gets problems. `reload` reads every item again
+    (vectors are reused, so it only costs the reading), to pick up what a newer version stores about items; `again`
+    reads these keys again on top of what changed."""
     counts = {"added": 0, "updated": 0, "removed": 0, "failed": 0, "reused": 0, "seconds_embedding": 0.0}
     known = store.fingerprints(source.name)
     if reload:
         plan = source.plan({key: None for key in known}, {})
+    elif again:
+        plan = source.plan({key: (None if key in again else value) for key, value in known.items()}, {})
     else:
         plan = source.plan(known, store.state(source.name))
     for key in plan.removed:
@@ -159,29 +176,32 @@ def index_source(store: Store, source: Source, embedders: Embedders, log, warn, 
     total = plan.total
     done = 0
     complete = True
-    started = time.monotonic()
     for item in plan.upserts:
         if (limit is not None and done >= limit) or (deadline is not None and time.monotonic() > deadline):
             complete = False
             break
         try:
             segments = source.load(item)
-            known_vectors = store.known_vectors([h for h in (s.embed_hash for s in segments) if h])
-            legacy = store.unhashed_vectors(item.source, item.key) if item.key in known else {}
-            for seg in segments:
-                reused = known_vectors.get(seg.embed_hash) if seg.embed_hash else None
-                if reused is None:
-                    reused = legacy.get((seg.kind, seg.loc, seg.text))
-                if reused is not None and seg.embed_hash:
-                    seg.vector = reused
-                    counts["reused"] += 1
-            images = [s for s in segments if s.kind == "image" and s.image and s.vector is None]
-            if images:
-                t0 = time.monotonic()
-                embedder = embedders.get(True)
-                for seg in images:
-                    seg.vector = embedder.image(seg.image)
-                counts["seconds_embedding"] += time.monotonic() - t0
+            for e in embedders:
+                for seg in segments:
+                    if seg.image:
+                        seg.hashes[e.version] = image_hash(seg.image)
+                    elif seg.embed:
+                        seg.hashes[e.version] = text_hash(e.profile.document_text(*seg.embed))
+                reusable = store.known_vectors(e.version, [s.hashes[e.version] for s in segments
+                                                           if e.version in s.hashes])
+                for seg in segments:
+                    reused = reusable.get(seg.hashes.get(e.version, ""))
+                    if reused is not None:
+                        seg.vectors[e.version] = reused
+                        counts["reused"] += 1
+                images = [s for s in segments if s.kind == "image" and s.image and e.version not in s.vectors]
+                if images and e.profile.media:
+                    t0 = time.monotonic()
+                    embedder = e.get(True)
+                    for seg in images:
+                        seg.vectors[e.version] = embedder.image(seg.image)
+                    counts["seconds_embedding"] += time.monotonic() - t0
             store.put(item, segments)
             store.commit()
             counts["updated" if item.key in known else "added"] += 1
@@ -202,27 +222,99 @@ def index_source(store: Store, source: Source, embedders: Embedders, log, warn, 
 
 
 def embed_pending(store: Store, embedders: Embedders, log, sources: list[str] | None = None,
-                  deadline: float | None = None, batch: int = 8) -> dict:
-    """Makes the missing vectors, oldest first, until none are left (new ones that arrive meanwhile included) or
-    the deadline passes."""
+                  deadline: float | None = None, batch: int = 8, after_batch=None) -> dict:
+    """Makes the missing vectors of one model, oldest first, until none are left (new ones that arrive meanwhile
+    included) or the deadline passes. `after_batch(made, waiting)` runs after each committed batch and may return
+    True to stop."""
+    version = embedders.version
     done, seconds = 0, 0.0
-    left = store.pending_count(sources)
+    left = store.pending_count(version, sources)
     started = time.monotonic()
     while True:
         if deadline is not None and time.monotonic() > deadline:
             break
-        rows = store.pending(sources, limit=batch)
+        rows = store.pending(version, sources, limit=batch)
         if not rows:
             break
         t0 = time.monotonic()
-        vectors = embedders.get(False).texts([text for _, text in rows])
+        written = [embedders.profile.document_text(*embed) for _, embed in rows]
+        vectors = embedders.get(False).texts(written)
         seconds += time.monotonic() - t0
-        for (segment, text), vector in zip(rows, vectors):
-            store.set_vector(segment, vector, text)
+        for (segment, embed), text, vector in zip(rows, written, vectors):
+            store.set_vector(segment, version, vector, embed, text_hash(text))
         store.commit()
         done += len(rows)
         if left > 25 and (done % 200 < batch or done >= left):
             rate = (time.monotonic() - started) / done
-            remaining = store.pending_count(sources)
-            log(f"vectors: {done} made, {remaining} waiting ({rate:.1f} s each, ~{rate * remaining / 60:.0f} min left)")
-    return {"made": done, "seconds": seconds, "waiting": store.pending_count(sources)}
+            remaining = store.pending_count(version, sources)
+            log(f"vectors ({embedders.profile.name}): {done} made, {remaining} waiting "
+                f"({rate:.1f} s each, ~{rate * remaining / 60:.0f} min left)")
+        if after_batch and after_batch(done, None):
+            break
+    return {"made": done, "seconds": seconds, "waiting": store.pending_count(version, sources)}
+
+
+def embed_models(store: Store, active: Embedders | None, building: Embedders | None, configured: dict, log,
+                 sources: list[str] | None = None, deadline: float | None = None,
+                 readable: list[str] | None = None) -> dict:
+    """The embedding half of a run: the active model's missing vectors first, then the vectors of the model a switch
+    is building, going back to the active model whenever new passages wait for it. When the new model's vectors are
+    complete, the switch goes on to calibrating, comparing and the swap (`switch.finish`). `readable`: the sources
+    this machine reads, so items to read again elsewhere don't hold the switch up."""
+    from . import switch
+
+    report: dict = {}
+
+    def active_waiting(*_):
+        return active is not None and store.pending_count(active.version, sources) > 0
+
+    def building_batch(made, _):
+        rec = switch.record(store)
+        if not rec or rec["to"] != building.version or rec["phase"] == "swapped":
+            return True   # cancelled or finished elsewhere meanwhile
+        switch.note_progress(store, store.pending_count(building.version))
+        return active_waiting()
+
+    while True:
+        if active is not None:
+            made = embed_pending(store, active, log, sources, deadline)
+            report.setdefault(active.version, {"made": 0, "seconds": 0.0})
+            report[active.version]["made"] += made["made"]
+            report[active.version]["seconds"] += made["seconds"]
+            _remember_reference(store, active)
+        if building is None or (deadline is not None and time.monotonic() > deadline):
+            break
+        try:
+            made = embed_pending(store, building, log, None, deadline, after_batch=building_batch)
+        except (EmbedError, OSError) as error:
+            switch.pause(store, "the new model's embedder failed", f"{type(error).__name__}: {error}")
+            raise
+        report[building.version] = made
+        _remember_reference(store, building)
+        rec = switch.record(store)
+        if not rec or rec["to"] != building.version:
+            building = None
+            break
+        if made["waiting"] == 0 or (deadline is not None and time.monotonic() > deadline):
+            break
+    if building is not None and store.pending_count(building.version) == 0:
+        again = store.unreadable(building.version, store.model, building.profile.media)
+        waiting = sum(len(keys) for source, keys in again.items() if readable is None or source in readable)
+        if waiting:
+            switch.pause(store, f"{waiting} items wait to be read again by the next reading run")
+        else:
+            embedders = {e.version: e for e in (active, building) if e is not None}
+            report["switch"] = switch.finish(store, configured, switch.probe_vectors(
+                lambda version: embedders[version].get(False) if version in embedders else None), log)
+    return report
+
+
+def _remember_reference(store: Store, embedders: Embedders) -> None:
+    """Keeps the reference vectors of a model with no published ones, made by this machine's own runtime, so a
+    later runtime or an accelerator can be checked against them."""
+    key = f"reference:{embedders.version}"
+    if embedders.current is not None and not embedders.profile.reference and store.meta(key) is None:
+        import json
+
+        store.set_meta(key, json.dumps(embedders.current.texts(embedders.profile.reference_texts()).round(5).tolist()))
+        store.commit()

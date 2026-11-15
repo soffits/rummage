@@ -7,7 +7,8 @@ import numpy as np
 
 from rummage import extract as X
 from rummage import text as T
-from rummage.runtime import DIM
+from conftest import DIM, PROFILE
+from rummage import switch
 from rummage.search import Searcher
 from rummage.sources import available, build
 from rummage.sources.files import FilesSource
@@ -55,7 +56,7 @@ def test_markdown_plan_and_load(tmp_path):
     assert [i.key for i in items] == ["a.md"]
     segs = src.load(items[0])
     assert segs[0].kind == "name" and "宠物" in segs[0].text
-    assert "Cats" in segs[1].embed_text
+    assert "Cats" in segs[1].embed[1]
     again = src.plan({"a.md": items[0].fingerprint}, plan.state)
     assert list(again.upserts) == [] and again.removed == []
     (tmp_path / "a.md").unlink()
@@ -82,12 +83,13 @@ def _vec(seed: int) -> np.ndarray:
 
 def test_hybrid_search_meaning_and_words(tmp_path):
     store = Store(tmp_path / "index.db")
+    switch.activate(store, PROFILE)
     target = _vec(1)
     for n in range(60):
         vec = target if n == 7 else _vec(100 + n)
         store.put(Item("s", f"k{n}", "note", f"note {n}", f"ref{n}"),
                   [Segment("text", f"filler text number {n}" + (" invoice K7Q2LM" if n == 33 else ""), loc="0",
-                           vector=vec)])
+                           vectors={PROFILE.version: vec})])
     store.commit()
     searcher = Searcher(store)
     hits = searcher.search("anything", target, limit=3)
@@ -99,6 +101,7 @@ def test_hybrid_search_meaning_and_words(tmp_path):
 
 def test_store_replaces_segments(tmp_path):
     store = Store(tmp_path / "index.db")
+    switch.activate(store, PROFILE)
     item = Item("s", "k", "note", "t", "r")
     store.put(item, [Segment("text", "alpha beta")])
     store.put(item, [Segment("text", "gamma")])
@@ -143,6 +146,7 @@ def test_files_source_reads_each_kind(tmp_path):
 def test_get_by_id_ref_and_loc(tmp_path):
     from rummage.store import Ambiguous, NotFound, item_id
     store = Store(tmp_path / "index.db")
+    switch.activate(store, PROFILE)
     item = Item("notes", "a.md", "note", "A", "a.md")
     store.put(item, [Segment("name", "a.md"), Segment("text", "First part of the note, which runs on for a while.", loc="0"),
                      Segment("text", "which runs on for a while. Then the second part.", loc="30")])
@@ -166,6 +170,7 @@ def test_get_by_id_ref_and_loc(tmp_path):
 
 def test_path_and_glob_scoping(tmp_path):
     store = Store(tmp_path / "index.db")
+    switch.activate(store, PROFILE)
     for key in ("housing/lease.pdf", "housing/notes.md", "health/lease-of-life.md", "housing_old/lease.pdf"):
         store.put(Item("docs", key, "file", key, key), [Segment("text", "the lease says cats are fine", loc="0")])
     store.commit()
@@ -178,9 +183,10 @@ def test_path_and_glob_scoping(tmp_path):
 
 def test_tiny_index_still_finds_by_meaning(tmp_path):
     store = Store(tmp_path / "index.db")
+    switch.activate(store, PROFILE)
     target = _vec(5)
     for n, vec in enumerate([target, _vec(6), _vec(7)]):
-        store.put(Item("s", f"k{n}", "note", f"n{n}", f"r{n}"), [Segment("text", f"words {n}", loc="0", vector=vec)])
+        store.put(Item("s", f"k{n}", "note", f"n{n}", f"r{n}"), [Segment("text", f"words {n}", loc="0", vectors={PROFILE.version: vec})])
     store.commit()
     hits = Searcher(store).search("query with no shared words", target, limit=3)
     assert hits and hits[0].ref == "r0"
@@ -191,13 +197,15 @@ def test_ranking_variants_switch_off_one_signal_each(tmp_path):
     from rummage.search import Ranking
 
     store = Store(tmp_path / "index.db")
+
+    switch.activate(store, PROFILE)
     target = _vec(5)
-    store.put(Item("s", "near", "note", "near", "near"), [Segment("text", "nothing shared", loc="0", vector=target)])
+    store.put(Item("s", "near", "note", "near", "near"), [Segment("text", "nothing shared", loc="0", vectors={PROFILE.version: target})])
     store.put(Item("s", "words", "note", "words", "words"), [Segment("text", "blue lantern festival", loc="0",
-                                                                      vector=_vec(9))])
+                                                                      vectors={PROFILE.version: _vec(9)})])
     for n in range(30):
         store.put(Item("s", f"x{n}", "note", f"x{n}", f"x{n}"), [Segment("text", f"filler {n}", loc="0",
-                                                                         vector=_vec(100 + n))])
+                                                                         vectors={PROFILE.version: _vec(100 + n)})])
     store.commit()
     refs = lambda **kw: [h.ref for h in Searcher(store, ranking=Ranking(**kw)).search("blue lantern", target, limit=3)]
     assert "near" in refs() and "words" in refs()
