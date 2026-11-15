@@ -19,7 +19,7 @@ from pathlib import Path
 
 from rummage.store import Item, Segment
 from rummage.sources import Plan, Source
-from rummage.chats import Turn, people_map, turn_item, turn_segments
+from rummage.chats import Turn, keep_chars, people_map, turn_item, turn_segments
 
 LOG_NAME = "session.v4.jsonl.zstd"
 _TG_TAG = re.compile(r"^\[Telegram message from .*?user id (\d+)\)\]")
@@ -56,6 +56,7 @@ def _text(data: dict) -> str:
 class DshSessionSource(Source):
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
+        self.keep_chars = keep_chars(spec)
         home = Path(os.path.expanduser(spec.get("dsh_home") or os.environ.get("DSH_HOME") or "~/.dsh"))
         self.root = Path(os.path.expanduser(spec.get("sessions", str(home / "sessions"))))
         self.projects = list(spec.get("projects") or [])  # empty: every project
@@ -170,4 +171,4 @@ class DshSessionSource(Source):
         return Plan(upserts, removed, {"stats": seen}, len(upserts))
 
     def load(self, item: Item) -> list[Segment]:
-        return turn_segments(item)
+        return turn_segments(item, self.keep_chars)

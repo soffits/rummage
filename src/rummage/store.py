@@ -566,6 +566,20 @@ class Store:
                 "SELECT i.source, s.kind, count(*), count(s.vector) FROM segments s JOIN items i ON i.id = s.item "
                 "GROUP BY i.source, s.kind"):
             out["sources"].setdefault(source, {}).setdefault("segments", {})[kind] = {"count": n, "vectors": vectors}
+        for source, partial, name_only in self.db.execute(
+                "SELECT source, count(*), sum(EXISTS (SELECT 1 FROM json_each(info, '$.partial') "
+                "WHERE json_extract(value, '$.kept') = 0)) FROM items "
+                "WHERE json_extract(info, '$.partial') IS NOT NULL GROUP BY source"):
+            entry = out["sources"].setdefault(source, {})
+            entry["partial_items"] = partial
+            entry["name_only_items"] = name_only
+            entry["settings"] = sorted({s for (s,) in self.db.execute(
+                "SELECT DISTINCT json_extract(value, '$.setting') FROM items, json_each(items.info, '$.partial') "
+                "WHERE items.source = ?", (source,))})
+        for source, state in self.states().items():
+            left_out = {k: v for k, v in (state.get("left_out") or {}).items() if v.get("count")}
+            if left_out:
+                out["sources"].setdefault(source, {})["left_out"] = left_out
         for source, in self.db.execute("SELECT DISTINCT source FROM runs"):
             last = self.db.execute(
                 "SELECT started, finished, ok, added, updated, removed, failed, seconds_embedding, error FROM runs "

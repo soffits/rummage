@@ -8,11 +8,11 @@ ffmpeg when it's installed.
 
 from __future__ import annotations
 
-import io
 from pathlib import Path, PurePosixPath
 
 from .. import extract as X
 from .. import text as T
+from ..limits import record
 from ..runtime import document_text
 from ..store import Item, Segment
 from .folder import FolderSource
@@ -25,42 +25,44 @@ class FilesSource(FolderSource):
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         super().__init__(name, spec, data_dir)
         self.images = bool(spec.get("images", True))
-        self.limits = {**X.LIMITS, **spec.get("limits", {})}
         self.ffmpeg = spec.get("ffmpeg")
 
     @property
     def media(self) -> bool:
         return self.images
 
-    def load(self, item: Item) -> list[Segment]:
+    def read(self, item: Item) -> list[Segment]:
         path = self.root / item.key
         suffix = X.suffix(item.key)
         kind = X.kind_of(item.key)
         size = path.stat().st_size
         item.info["type"] = kind
-        if suffix in MARKDOWN and size <= self.limits["text"]:
-            return note_segments(item, path.read_text(encoding="utf-8", errors="replace"))
+        if suffix in MARKDOWN and not self.limits.too_big("text", size):
+            return note_segments(item, path.read_text(encoding="utf-8", errors="replace"), self.limits)
         segments = [Segment("name", item.key)]
         if kind == "name" or (kind == "image" and not self.images):
             return segments
         if kind == "archive":
-            if suffix in (".tgz", ".tar.gz", ".tbz2", ".tar.bz2", ".txz", ".tar.xz") and size > self.limits["tar"]:
-                item.info["skipped"] = "compressed tar over the size limit: name only"
+            if suffix in X.COMPRESSED_TARS and (cut := self.limits.too_big("tar", size)):
+                record(item, [cut])
                 return segments
             with open(path, "rb") as fh:
-                names = X.archive_names(fh, item.key)
+                names, cuts = X.archive_names(fh, item.key, self.limits)
+            record(item, cuts)
             item.info["entries"] = len(names)
             return segments + [Segment("text", X.names_text(names), loc="names")]
-        if size > self.limits[kind]:
-            item.info["skipped"] = f"over {self.limits[kind]} bytes: name only"
+        if cut := self.limits.too_big(kind, size):
+            record(item, [cut])
             return segments
         data = path.read_bytes()
         if kind == "image":
             png = data if suffix in X.NATIVE_IMAGES else X.to_png(data, self.ffmpeg, flatten=False)
             return segments + [Segment("image", "", loc="picture", image=png)]
-        body = X.bytes_text(item.key, data) or ""
+        body, cuts = X.bytes_text(item.key, data, self.limits)
+        record(item, cuts)
+        body = body or ""
         title = PurePosixPath(item.key).stem
-        for start, piece in T.chunks(body[:X.MAX_CHARS]):
+        for start, piece in T.chunks(body):
             seg = Segment("text", piece, loc=str(start),
                           lines=T.line_span(body, start, piece) if kind == "text" else None)
             if T.has_prose(piece):

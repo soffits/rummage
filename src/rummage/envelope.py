@@ -5,12 +5,18 @@
 `status` is `ok`, `no_results` (the index has items, none matched), `empty_index` or `error`. `next_actions` are
 runnable commands (argument lists) with an intent and a reason. Optional fields can be trimmed to fit
 `--budget-tokens`; consumers should tolerate their absence.
+
+Nothing is left out silently: a result whose item was indexed only in part carries `partial` (what was cut and the
+setting that lifts it), and one with masked credentials carries `masked`; `summary.masked_secrets` and
+`summary.partial_results` count them, and `next_actions` say how to see the rest.
 """
 
 from __future__ import annotations
 
 import json
 import math
+
+from .secrets import masked_total
 
 SCHEMA = "rummage.search.v1"
 ERROR_SCHEMA = "rummage.error.v1"
@@ -94,6 +100,37 @@ def next_actions(args, status: str, hits: list[dict], strong: int) -> list[dict]
     return actions
 
 
+def show_secrets_command(argv: list[str]) -> list[str]:
+    """The command that printed this output, again with credentials shown."""
+    return ["rummage", *argv] + ([] if "--show-secrets" in argv else ["--show-secrets"])
+
+
+def original_command(ref: str) -> list[str]:
+    return ["rummage", "get", ref, "--original"]
+
+
+def note_hidden(doc: dict, results: list[dict], show_command, original_for=original_command) -> dict:
+    """Counts masked values and partially indexed results in `doc`'s summary and adds the actions that show the
+    rest: `show_command` (the same request with credentials shown) and `original_for(ref)` (reading a cut item's
+    whole original). Commands are argument lists for the CLI, or tool calls for MCP."""
+    masked = masked_total(results)
+    partial = [r for r in results if r.get("partial")]
+    doc["summary"]["masked_secrets"] = masked
+    doc["summary"]["partial_results"] = len(partial)
+    actions = doc.setdefault("next_actions", [])
+    if masked:
+        actions.append({"intent": "show_secrets",
+                        "reason": f"{masked} values that look like credentials were masked as [secret].",
+                        "command": show_command})
+    if partial:
+        first = partial[0]
+        actions.append({"intent": "read_original",
+                        "reason": f"{len(partial)} results were indexed only in part ({first['partial'][0]['setting']} "
+                                  "and similar settings lift the limits); read the whole original.",
+                        "command": original_for(first["id"])})
+    return doc
+
+
 def build(args, hits: list[dict], errors: list[str], seconds: float, index_empty: bool) -> dict:
     strong = strong_count([h["score"] for h in hits])
     if hits:
@@ -133,6 +170,8 @@ def tokens(doc: dict) -> int:
     return math.ceil(len(json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode()) / 4)
 
 
+# Actions that stay when the output is trimmed: they are the only way to see what the output hides.
+KEEP_ACTIONS = ("show_secrets", "read_original")
 # Dropped in this order until the output fits. Fields marked True also go from the top result.
 _OPTIONAL_FIELDS = (("next_actions", None), ("info", True), ("cosine", True), ("segment", True),
                     ("snippet", False), ("title", False))
@@ -147,7 +186,7 @@ def fit(doc: dict, budget: int) -> dict:
             break
         if from_top is None:
             if doc["status"] == "ok":
-                doc.pop(field, None)
+                doc[field] = [a for a in doc.get(field, []) if a["intent"] in KEEP_ACTIONS]
                 dropped["fields"].append(field)
             continue
         for hit in doc["results"][0 if from_top else 1:]:

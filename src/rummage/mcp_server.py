@@ -18,7 +18,7 @@ from . import runtime as R
 from .query import FALLBACK_ERRORS, reason_for
 from .search import Searcher
 from .when import understand
-from .secrets import mask_value
+from .secrets import shown as masked
 from .store import Store
 
 
@@ -34,9 +34,7 @@ def build(cfg: C.Config):
     read_only = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 
     def shown(value: dict, show_secrets: bool) -> dict:
-        if show_secrets or not C.masks_secrets(cfg, value.get("source", "")):
-            return value
-        return mask_value(value)
+        return masked(value, show_secrets, lambda source: C.masks_secrets(cfg, source))
 
     def query_vector(text: str):
         vector = D.query_vector(cfg.data_dir, text)
@@ -76,26 +74,38 @@ def build(cfg: C.Config):
             store.close()
         args = SimpleNamespace(query=query, limit=limit, source=sources, kind=None, words_only=words_only,
                                truncate=truncate, path=paths, glob=globs)
-        results = [shown(h.as_dict(), show_secrets) for h in hits]
-        return E.mark_degraded(E.build(args, E.truncate(results, truncate), [], time.monotonic() - started,
-                                       index_empty), degraded)
+        results = [shown(h, show_secrets) for h in E.truncate([h.as_dict() for h in hits], truncate)]
+        doc = E.build(args, results, [], time.monotonic() - started, index_empty)
+        E.note_hidden(doc, results, {"tool": "search", "arguments": {
+            "query": query, "limit": limit, "sources": sources, "paths": paths, "globs": globs,
+            "words_only": words_only, "truncate": truncate, "show_secrets": True}},
+            lambda ref: {"tool": "get", "arguments": {"ref": ref, "original": True}})
+        return E.mark_degraded(doc, degraded)
 
     @server.tool(annotations=read_only)
     def get(ref: str, loc: str | None = None, head: int | None = None, around: int | None = None,
-            show_secrets: bool = False) -> dict:
+            original: bool = False, show_secrets: bool = False) -> dict:
         """Read an item by a result's id (#...), its ref, or source:key; loc limits it to one passage, head to the
-        first lines, around adds the chat turns before and after it. Credentials are masked unless show_secrets is
-        set (only when the user asked for one)."""
+        first lines, around adds the chat turns before and after it. An item indexed only in part carries
+        `partial`; original reads the whole file from disk instead. Credentials are masked unless show_secrets is
+        set (only when the user asked for one); `masked` counts them."""
+        from .cli import read_original
+
         store = Store(cfg.index_path)
         try:
             row = store.find(ref)
             doc = store.item(row, loc)
             if around:
                 doc["around"] = {"turns": store.neighbours(row, around)}
-        except LookupError as error:
+            if original:
+                doc.update(read_original(cfg, doc))
+        except (LookupError, OSError) as error:
             return {"error": str(error)}
         finally:
             store.close()
+        partial = doc["info"].pop("partial", None)
+        if partial and not original:
+            doc["partial"] = partial
         if head:
             doc["text"] = "\n".join(doc["text"].splitlines()[:head])
         return shown(doc, show_secrets)

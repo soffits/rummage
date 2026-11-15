@@ -78,7 +78,7 @@ class MediaSource(FolderSource):
         cached.write_text(json.dumps(parts, ensure_ascii=False), encoding="utf-8")
         return parts
 
-    def load(self, item: Item) -> list[Segment]:
+    def read(self, item: Item) -> list[Segment]:
         parts = self.transcript(item)
         segments = [Segment("name", item.key)]
         item.info["duration"] = clock(parts[-1]["end"]) if parts else "0:00:00"

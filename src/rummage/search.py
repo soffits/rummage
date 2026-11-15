@@ -58,10 +58,13 @@ class Hit:
     date: str | None
     snippet: str
     info: dict
+    partial: list | None = None     # what the item's indexing left out (`limits.record`)
     also: list[str] | None = None   # the same chat message as recorded by other sources (their refs)
 
     def as_dict(self) -> dict:
         d = asdict(self)
+        if d["partial"] is None:
+            del d["partial"]
         for key in ("score", "z", "cosine", "words"):
             if d[key] is not None:
                 d[key] = round(d[key], 4)
@@ -180,7 +183,8 @@ class Searcher:
                 id=row["id"], source=row["source"], kind=row["kind"], title=row["title"], ref=row["ref"],
                 score=score, z=semantic[0] if semantic else None, cosine=semantic[1] if semantic else None,
                 words=coverage.get(item, 0.0), segment=seg_kind, loc=loc, lines=lines,
-                date=_date(row["info"], row["mtime"]), snippet=T.snippet(seg_text or "", words), info=row["info"]))
+                date=_date(row["info"], row["mtime"]), snippet=T.snippet(seg_text or "", words),
+                info={k: v for k, v in row["info"].items() if k != "partial"}, partial=row["info"].get("partial")))
             if key:
                 said[key] = (hits[-1], row["mtime"] or 0)
         return hits

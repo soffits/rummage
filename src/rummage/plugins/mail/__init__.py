@@ -42,11 +42,11 @@ from pathlib import Path
 
 from rummage import extract as X
 from rummage import text as T
+from rummage.limits import Cut, Limits, record
 from rummage.runtime import document_text
 from rummage.sources import Plan, Source
 from rummage.store import Item, Segment
 
-ATTACHMENT_LIMIT = 32 << 20
 # Folder names to leave out on servers that don't mark special-use folders.
 SKIP_FOLDER_NAMES = ("*spam*", "*junk*", "*trash*", "*deleted*", "*drafts*", "*bin")
 _LIST_LINE = re.compile(r'^\((?P<flags>[^)]*)\)\s+(?:"[^"]*"|NIL)\s+(?P<name>.+)$')
@@ -63,26 +63,31 @@ def _addresses(message: EmailMessage, field: str) -> str:
     return ", ".join(f"{name} <{addr}>" if name else addr for name, addr in getaddresses(message.get_all(field, [])))
 
 
-def body_and_attachments(message: EmailMessage) -> tuple[str, list[tuple[str, str]]]:
-    """The message's text, and `(file name, text)` for each attached document rummage can read."""
+def body_and_attachments(message: EmailMessage, limits: Limits) -> tuple[str, list[tuple[str, str]], list[Cut]]:
+    """The message's text, `(file name, text)` for each attached document rummage can read, and what the limits
+    left out (attachments too big to read, text past `max_chars`)."""
     part = message.get_body(preferencelist=("plain", "html"))
     body = ""
     if part is not None:
         content = part.get_content()
         body = X.html_text(content.encode("utf-8")) if part.get_content_subtype() == "html" else content
-    attached = []
+    attached, cuts = [], []
     for att in message.iter_attachments():
         name = att.get_filename() or ""
         data = att.get_payload(decode=True) or b""
-        if not name or len(data) > ATTACHMENT_LIMIT:
+        if not name:
+            continue
+        if len(data) > limits.max_attachment_bytes:
+            cuts.append(Cut(f"attachment {name}", 0, len(data), "bytes", "max_attachment_bytes"))
             continue
         try:
-            text = X.bytes_text(name, data)
+            text, clipped = X.bytes_text(name, data, limits)
         except Exception:
-            text = None
+            text, clipped = None, []
         if text and text.strip():
             attached.append((name, text))
-    return body.strip(), attached
+            cuts += [Cut(f"attachment {name}: {c.what}", c.kept, c.total, c.unit, c.setting) for c in clipped]
+    return body.strip(), attached, cuts
 
 
 def message_item(source: str, key: str, ref: str, raw: bytes, folder: str = "") -> Item:
@@ -99,19 +104,21 @@ def message_item(source: str, key: str, ref: str, raw: bytes, folder: str = "") 
     return item
 
 
-def message_segments(item: Item) -> list[Segment]:
+def message_segments(item: Item, limits: Limits) -> list[Segment]:
     message = item._message  # type: ignore[attr-defined]
-    body, attached = body_and_attachments(message)
+    body, attached, cuts = body_and_attachments(message, limits)
     head = f"From: {item.info['from']}\nTo: {item.info['to']}\nSubject: {item.title}\n\n"
+    text, clipped = limits.clip(head + body, "message text")
+    record(item, clipped + cuts)
     segments = [Segment("name", " ".join(filter(None, [item.title, item.info["from"], item.info["to"]])))]
-    for start, piece in T.chunks((head + body)[:X.MAX_CHARS]):
+    for start, piece in T.chunks(text):
         seg = Segment("text", piece, loc=str(start))
         if T.has_prose(piece):
             seg.embed_text = document_text(item.title, piece)
         segments.append(seg)
     for name, text in attached:
         item.info.setdefault("attachments", []).append(name)
-        for start, piece in T.chunks(text[:X.MAX_CHARS]):
+        for start, piece in T.chunks(text):
             seg = Segment("text", piece, loc=f"{name}@{start}")
             if T.has_prose(piece):
                 seg.embed_text = document_text(f"{item.title} / {name}", piece)
@@ -130,6 +137,7 @@ class MailSource(Source):
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
         self.spec = spec
+        self.limits = Limits.of(spec)
         self.since = spec.get("since")
 
     def watch_roots(self) -> list[Path]:
@@ -270,4 +278,4 @@ class MailSource(Source):
         return Plan(upserts(), removed, new_state, len(todo))
 
     def load(self, item: Item) -> list[Segment]:
-        return message_segments(item)
+        return message_segments(item, self.limits)

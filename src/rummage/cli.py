@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import signal
 import sys
 import time
@@ -40,7 +41,8 @@ from .search import Searcher
 from .chats import SAME_MESSAGE_SECONDS
 from .query import meaning_vector
 from .when import understand
-from .secrets import mask_value
+from .limits import describe
+from .secrets import masked_total, shown
 from .sources import available, build, load_type
 from .store import Ambiguous, NotFound, Store, VersionMismatch
 
@@ -241,7 +243,7 @@ def cmd_search(cfg: C.Config, args) -> int:
             if not args.words_only and not index_empty:
                 vector, degraded = meaning_vector(cfg, args.query, use_daemon=not args.no_daemon)
             searcher = Searcher(store, local_sources, args.path, args.glob, _day(args.since), _day(args.until, 1))
-            hits += [_show(cfg, args, h.as_dict()) for h in searcher.search(
+            hits += [h.as_dict() for h in searcher.search(
                 args.query, vector, limit=args.limit, kinds=set(args.kind) if args.kind else None, when=when)]
             pending = store.pending_count(local_sources)
         except VersionMismatch as error:
@@ -260,9 +262,10 @@ def cmd_search(cfg: C.Config, args) -> int:
         except Exception as error:
             errors.append(f"remote {name}: {type(error).__name__}: {error}")
     hits.sort(key=lambda h: -h["score"])
-    hits = E.truncate(hits[: args.limit], args.truncate)
+    hits = [_show(cfg, args, h) for h in E.truncate(hits[: args.limit], args.truncate)]
     doc = E.build(args, hits, errors, time.monotonic() - started, index_empty)
     doc["summary"]["pending_vectors"] = pending
+    E.note_hidden(doc, hits, E.show_secrets_command(args.argv))
     E.mark_degraded(doc, degraded)
     _remember_search(cfg, args.query, hits)
     if when:
@@ -298,6 +301,10 @@ def cmd_search(cfg: C.Config, args) -> int:
               f"  {', '.join(how)}")
         if h["snippet"]:
             print(f"       {h['snippet'][:200]}")
+        for entry in h.get("partial") or []:
+            print(f"       partial: {describe(entry)}")
+    for line in _hidden_lines(args, hits):
+        print(line)
     return E.OK
 
 
@@ -372,17 +379,80 @@ def _switch_source(cfg: C.Config, args) -> int:
     return 0
 
 
-def _show(cfg: C.Config, args, value: dict, source: str | None = None):
-    """`value` with credentials masked, unless `--show-secrets` or the source switched masking off."""
-    if getattr(args, "show_secrets", False) or not C.masks_secrets(cfg, source or value.get("source", "")):
-        return value
-    return mask_value(value)
+def _show(cfg: C.Config, args, value: dict) -> dict:
+    """`value` with credentials masked and counted, unless `--show-secrets` or the source switched masking off."""
+    return shown(value, getattr(args, "show_secrets", False), lambda source: C.masks_secrets(cfg, source))
+
+
+def _lift_partial(value: dict) -> dict:
+    """An item's `partial` record moved from its info to the top, where readers look."""
+    partial = (value.get("info") or {}).pop("partial", None)
+    if partial:
+        value["partial"] = partial
+    return value
+
+
+def _hidden_summary(args, results: list[dict]) -> dict:
+    """For JSON outputs without a search envelope: how many values were masked, and the command that shows them."""
+    masked = masked_total(results)
+    return {"masked_secrets": masked, **({"show_secrets_command": E.show_secrets_command(args.argv)} if masked else {})}
+
+
+def _hidden_lines(args, results: list[dict]) -> list[str]:
+    """Closing lines for text output that hides something: masked credentials (with the command that shows them)
+    and items indexed only in part (with the command that reads their original)."""
+    lines = []
+    masked = masked_total(results)
+    if masked:
+        lines.append(f"note: {masked} values that look like credentials are masked as [secret]; to see them: "
+                     f"{shlex.join(E.show_secrets_command(args.argv))}")
+    partial = [r for r in results if r.get("partial")]
+    if partial:
+        lines.append(f"note: {len(partial)} of these were indexed only in part (see 'partial'); the whole original: "
+                     f"{shlex.join(E.original_command(partial[0]['id']))}")
+    return lines
+
+
+def _find(cfg: C.Config, store: Store, ref: str) -> int:
+    """The item named by `ref`; failing that, when `ref` is a file on disk, the item of the folder source whose root
+    holds it."""
+    from .sources.folder import FolderSource
+
+    try:
+        return store.find(ref)
+    except NotFound:
+        if ref.startswith("#") or not os.path.exists(os.path.expanduser(ref)):
+            raise
+    path = Path(os.path.expanduser(ref)).resolve()
+    for name, spec in cfg.sources.items():
+        root = Path(os.path.expanduser(spec["root"])).resolve() if spec.get("root") else None
+        if root and path.is_relative_to(root):
+            key = path.relative_to(root).as_posix()
+            try:
+                return store.find(f"{name}:{key}")
+            except NotFound:
+                source = build(name, spec, cfg.data_dir)
+                why = source.not_indexed(key) if isinstance(source, FolderSource) else "not indexed"
+                raise NotFound(f"no item {ref!r}: {why}") from None
+    raise NotFound(f"no item {ref!r}: the file is in no configured source's root")
+
+
+def read_original(cfg: C.Config, doc: dict) -> dict:
+    """The item's whole original, read from its file now, without the limits indexing applies."""
+    from .sources.folder import FolderSource
+
+    spec = cfg.sources.get(doc["source"])
+    source = build(doc["source"], spec, cfg.data_dir) if spec else None
+    if not isinstance(source, FolderSource):
+        raise NotFound(f"{doc['ref']} is not a file in a folder source, so there is no original to read; "
+                       "its indexed text is all rummage has")
+    return source.original(doc["key"])
 
 
 def cmd_get(cfg: C.Config, args) -> int:
     store = Store(cfg.index_path)
     try:
-        row = store.find(args.ref)
+        row = _find(cfg, store, args.ref)
         doc = store.item(row, args.loc)
         _note_open(cfg, store, row, doc["id"])
         also = store.same_message(row, SAME_MESSAGE_SECONDS)
@@ -390,6 +460,8 @@ def cmd_get(cfg: C.Config, args) -> int:
             doc["also"] = also
         if args.around is not None:
             doc["around"] = _around(cfg, store, row, doc, args.around)
+        if args.original:
+            doc.update(read_original(cfg, doc))
     except Ambiguous as error:
         _eprint(f"{error}: " + ", ".join(error.candidates))
         store.close()
@@ -407,15 +479,27 @@ def cmd_get(cfg: C.Config, args) -> int:
             _eprint(error)
             store.close()
             return 1
+    except OSError as error:
+        _eprint(f"can't read the original: {error}")
+        store.close()
+        return 1
     store.close()
+    partial = doc["info"].pop("partial", None) or doc.pop("partial", None)
+    if partial and not args.original:
+        doc["partial"] = partial
     doc = _show(cfg, args, doc)
     if args.head:
         doc["text"] = "\n".join(doc["text"].splitlines()[: args.head])
+    notes = _get_notes(args, doc)
     if args.json:
+        doc["next_actions"] = notes
         print(json.dumps(doc, ensure_ascii=False))
         return 0
     print(f"{doc['id']}  [{doc['source']}] {doc['title']}  ({doc['ref']})"
-          + (f"\n  also recorded as: {', '.join(doc['also'])}" if doc.get("also") else "") + "\n")
+          + (f"\n  also recorded as: {', '.join(doc['also'])}" if doc.get("also") else ""))
+    for note in notes:
+        print(f"note: {note['reason']} {shlex.join(note['command'])}")
+    print()
     around = doc.get("around")
     if around and around.get("turns"):
         for turn in around["turns"]:
@@ -426,6 +510,20 @@ def cmd_get(cfg: C.Config, args) -> int:
     else:
         print(doc["text"])
     return 0
+
+
+def _get_notes(args, doc: dict) -> list[dict]:
+    """What `get` printed only in part, and the command that prints the rest."""
+    notes = []
+    if doc.get("partial") and not args.original:
+        cut = "; ".join(describe(e) for e in doc["partial"])
+        notes.append({"intent": "read_original", "reason": f"Indexed only in part ({cut}). The whole file:",
+                      "command": E.original_command(doc["id"])})
+    if doc.get("masked"):
+        notes.append({"intent": "show_secrets",
+                      "reason": f"{doc['masked']} values that look like credentials are masked as [secret]. To see "
+                                "them:", "command": E.show_secrets_command(args.argv)})
+    return notes
 
 
 def _around(cfg: C.Config, store: Store, row: int, doc: dict, n: int) -> dict:
@@ -457,18 +555,20 @@ def cmd_recent(cfg: C.Config, args) -> int:
         items = store.recent(time.time() - args.minutes * 60, args.source, args.exclude_session, args.limit)
     finally:
         store.close()
-    items = [_show(cfg, args, {k: v for k, v in i.items() if k != "row"}) for i in items]
+    items = [_show(cfg, args, _lift_partial({k: v for k, v in i.items() if k != "row"})) for i in items]
     for item in items:
         item["text"] = T.snippet_head(item["text"], args.chars)
     if args.json:
-        print(json.dumps({"schema": "rummage.recent.v1", "minutes": args.minutes, "results": items},
-                         ensure_ascii=False))
+        print(json.dumps({"schema": "rummage.recent.v1", "minutes": args.minutes, "results": items,
+                          **_hidden_summary(args, items)}, ensure_ascii=False))
         return 0
     for item in items:
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(item["mtime"] or 0))
         session = item["info"].get("session")
         print(f"{item['id']} · {item['source']} · {when}" + (f" · session {session}" if session else "")
               + f" · {item['title']}\n  {item['text']}")
+    for line in _hidden_lines(args, items):
+        print(line)
     return 0
 
 
@@ -488,7 +588,8 @@ def cmd_about(cfg: C.Config, args) -> int:
         store.close()
     found = [_show(cfg, args, f) for f in found]
     if args.json:
-        print(json.dumps({"schema": "rummage.about.v1", "names": names, "results": found}, ensure_ascii=False))
+        print(json.dumps({"schema": "rummage.about.v1", "names": names, "results": found,
+                          **_hidden_summary(args, found)}, ensure_ascii=False))
         return 0
     print(f"{args.name} (also: {', '.join(n for n in names if n != args.name) or 'no other names'})")
     for f in found:
@@ -496,6 +597,8 @@ def cmd_about(cfg: C.Config, args) -> int:
               f"      {f['snippet']}")
     if not found:
         print("nothing found")
+    for line in _hidden_lines(args, found):
+        print(line)
     return 0
 
 
@@ -517,7 +620,8 @@ def cmd_report(cfg: C.Config, args) -> int:
         store.close()
     found = [_show(cfg, args, {"source": f["a"]["source"], **f}) for f in found]
     if args.json:
-        print(json.dumps({"schema": f"rummage.{args.report}.v1", "results": found}, ensure_ascii=False))
+        print(json.dumps({"schema": f"rummage.{args.report}.v1", "results": found,
+                          **_hidden_summary(args, found)}, ensure_ascii=False))
         return 0
     for f in found:
         print(f"{f['cosine']:.3f}")
@@ -529,6 +633,8 @@ def cmd_report(cfg: C.Config, args) -> int:
         print()
     if not found:
         print("nothing found")
+    for line in _hidden_lines(args, found):
+        print(line)
     return 0
 
 
@@ -619,8 +725,24 @@ def cmd_status(cfg: C.Config, args) -> int:
         store.close()
         out["config"] = str(cfg.path)
     out["configured_sources"] = list(cfg.sources)
+    out["notes"] = limit_notes(out.get("sources") or {})
     print(json.dumps(out, ensure_ascii=False, indent=None if args.json else 2))
     return 0
+
+
+def limit_notes(sources: dict) -> list[str]:
+    """One sentence per source whose items were indexed in part or whose files were left out, with the settings."""
+    notes = []
+    for name, entry in sources.items():
+        if entry.get("partial_items"):
+            notes.append(f"{name}: {entry['partial_items']} items indexed only in part "
+                         f"({entry.get('name_only_items') or 0} of them by name only); settings that lift the limits: "
+                         f"{', '.join(entry.get('settings') or [])}; `rummage get <ref> --original` reads a whole file")
+        for why, left in (entry.get("left_out") or {}).items():
+            examples = ", ".join(left.get("examples") or [])
+            setting = f" by {left['setting']} ({', '.join(left.get('patterns') or [])})" if left.get("setting") else ""
+            notes.append(f"{name}: {left['count']} paths {why}{setting}, e.g. {examples}")
+    return notes
 
 
 def cmd_doctor(cfg: C.Config, args) -> int:
@@ -749,6 +871,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--head", type=int, help="only the first N lines")
     p.add_argument("--around", type=int, metavar="N",
                    help="with its context: N chat turns before and after, or N lines around the passage of a file")
+    p.add_argument("--original", action="store_true",
+                   help="read the whole file from its folder source now, without the size limits of indexing")
     p.add_argument("--show-secrets", action="store_true", help="don't mask credentials in the output")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_get)
@@ -860,6 +984,7 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_doctor)
 
     args = parser.parse_args(argv)
+    args.argv = list(sys.argv[1:] if argv is None else argv)
     # A stopped run (scheduler timeout, container stop) still runs its cleanup and stops llama-server.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     cfg = C.load(C.Path(args.config).expanduser() if args.config else None)

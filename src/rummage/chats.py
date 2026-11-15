@@ -18,13 +18,13 @@ from pathlib import Path
 from typing import Callable, Iterable, Iterator
 
 from . import text as T
+from .limits import KEEP_CHARS, Cut, record
 from .runtime import document_text
 from .sources import Plan
 from .store import Item, Segment
 
 HUMAN_EMBED_CHARS = 1200
 REPLY_EMBED_CHARS = 600
-KEEP_CHARS = 12000
 
 
 @dataclass
@@ -91,14 +91,23 @@ def turn_item(source: str, prefix: str, turn: Turn, assistant: str) -> Item:
     return item
 
 
-def turn_segments(item: Item) -> list[Segment]:
+def keep_chars(spec: dict) -> int:
+    """How many characters of each side of a turn a chat source keeps (`keep_chars`)."""
+    return int(spec.get("keep_chars", KEEP_CHARS))
+
+
+def turn_segments(item: Item, keep: int) -> list[Segment]:
+    """A turn's name line and its text: up to `keep` characters of the message and of the reply (a cut is recorded
+    on the item)."""
     turn, assistant = item._turn  # type: ignore[attr-defined]
     when = item.info.get("time", "")[:10]
     human = turn.text.strip()
     reply = turn.reply
-    shown = f"{turn.speaker}: {human[:KEEP_CHARS]}"
+    record(item, [Cut(what, keep, len(text), "chars", "keep_chars")
+                  for what, text in (("message", human), ("reply", reply)) if len(text) > keep])
+    shown = f"{turn.speaker}: {human[:keep]}"
     if reply:
-        shown += f"\n\n{assistant}: {reply[:KEEP_CHARS]}"
+        shown += f"\n\n{assistant}: {reply[:keep]}"
     seg = Segment("text", shown, loc=turn.message)
     model_text = f"{turn.speaker}: {human[:HUMAN_EMBED_CHARS]}"
     if reply:
