@@ -80,7 +80,7 @@ def test_newer_plausible_match_comes_before_older_repeats(tmp_path):
     assert Searcher(store).search(query, q, limit=5)[0].ref in {"mail", "note"}
 
 
-def test_index_from_before_scripts_gets_them_on_open(tmp_path):
+def test_segments_without_a_script_get_one_on_open(tmp_path):
     path = tmp_path / "index.db"
     store = Store(path)
     _put(store, "a", "车库钥匙放在门口", np.ones(DIM) / 4)
@@ -88,8 +88,14 @@ def test_index_from_before_scripts_gets_them_on_open(tmp_path):
     store.commit()
     store.close()
     db = sqlite3.connect(path)
+    db.execute("DROP INDEX segments_no_script")
     db.execute("ALTER TABLE segments DROP COLUMN script")
     db.commit()
     db.close()
+    store = Store(path)
+    assert sorted(r[0] for r in store.db.execute("SELECT script FROM segments")) == ["CJK", "LATIN"]
+    store.db.execute("UPDATE segments SET script = NULL")   # rows an older rummage wrote into this index
+    store.commit()
+    store.close()
     store = Store(path)
     assert sorted(r[0] for r in store.db.execute("SELECT script FROM segments")) == ["CJK", "LATIN"]

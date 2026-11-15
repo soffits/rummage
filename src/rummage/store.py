@@ -293,8 +293,8 @@ class Store:
         for column in ("lines", "input", "script"):
             if columns and column not in columns:
                 self.db.execute(f"ALTER TABLE segments ADD COLUMN {column} TEXT")
-        if columns and "script" not in columns:
-            _fill_scripts(self.db)
+        self.db.execute("CREATE INDEX IF NOT EXISTS segments_no_script ON segments(id) WHERE script IS NULL")
+        _fill_scripts(self.db)
         if "vector" in columns:
             _migrate_single_model(self.db)
         self.db.execute("CREATE INDEX IF NOT EXISTS segments_input ON segments(id) WHERE input IS NOT NULL")
@@ -811,10 +811,11 @@ def _migrate_single_model(db: sqlite3.Connection) -> None:
 
 
 def _fill_scripts(db: sqlite3.Connection) -> None:
-    """Sets the script of every segment of an index made before segments had one."""
+    """Sets the script of segments that have none: every segment of an index made before segments had one, and any
+    an older rummage wrote into this index since."""
     last = -1
-    while rows := db.execute("SELECT id, kind, text, input FROM segments WHERE id > ? ORDER BY id LIMIT 5000",
-                             (last,)).fetchall():
+    while rows := db.execute("SELECT id, kind, text, input FROM segments WHERE script IS NULL AND id > ? "
+                             "ORDER BY id LIMIT 5000", (last,)).fetchall():
         db.executemany("UPDATE segments SET script = ? WHERE id = ?",
                        [(segment_script(kind, text, tuple(json.loads(raw)) if raw else None), seg)
                         for seg, kind, text, raw in rows])
