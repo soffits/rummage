@@ -51,5 +51,4 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 
 Same rules as everything else: general, any language family, sources opt-in where they read someone's private
 data, tests.
-
-1. **Audio and video:** a source that transcribes with a local whisper.cpp and indexes the transcript with times.
+- `media`: whisper.cpp publishes no prebuilt binaries for every system, so `rummage setup` can't fetch and pin it the way it does llama.cpp; people install `whisper-cli` and a model themselves. Not yet run against a real whisper.cpp build here (tests use stand-ins for ffmpeg and whisper-cli).

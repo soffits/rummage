@@ -32,6 +32,7 @@ gemini-cli = "rummage.plugins.gemini_cli:GeminiCliSource"
 opencode = "rummage.plugins.opencode:OpenCodeSource"
 jsonl-chat = "rummage.plugins.jsonl_chat:JsonlChatSource"
 mail = "rummage.plugins.mail:MailSource"
+media = "rummage.plugins.media:MediaSource"
 
 [project.scripts]
 rummage = "rummage.cli:main"

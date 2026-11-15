@@ -55,9 +55,9 @@ class FolderSource(Source):
         self.extensions = tuple(e.lower() for e in extensions) if extensions else None
         self.max_bytes = int(spec.get("max_bytes", self.default_max_bytes))
 
-
     def watch_roots(self) -> list[Path]:
         return [self.root]
+
     def _skip(self, rel: str) -> bool:
         return any(fnmatch.fnmatch(part, pat) for part in rel.split("/") for pat in self.exclude) or any(
             fnmatch.fnmatch(rel, pat) for pat in self.exclude)

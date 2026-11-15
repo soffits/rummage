@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `media` source: audio and video files searchable by what is said in them. Each file is transcribed once with a local whisper.cpp (`whisper-cli`, after ffmpeg makes 16 kHz mono audio), the transcript is cached by file in the data directory, and passages point to the time they start.
 - A date in a file's path (`2026-10-15`, `2026-W44`, `2026-10`) counts as the file's time for time phrases in queries, besides its modification time: notes of a dated series are about that time whenever they were edited.
 - `rummage export` / `import` carry the feedback records too.
 - Implicit feedback: opening a result with `get` within 10 minutes of the search that found it counts for that item, and later searches with mostly the same words rank it a little higher (at most twice). Kept in the index, per source and key, so it survives re-indexing.
