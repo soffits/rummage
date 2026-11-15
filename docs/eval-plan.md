@@ -48,6 +48,7 @@ Each switched off alone, on every retrieval set:
 - the meaning gate (z ≥ 2, scaled down for small indexes) → no gate (every vector candidate is ranked);
 - the word-coverage bonus → meaning only;
 - hybrid → vectors only, and → words only;
+- plain cosine ranking (no words, no z-scores, no gate), the dense baseline the other variants are read against;
 - CJK character-pair matching → whole-run matching (CJK sets only);
 - for recall: the "say nothing" gate → always inject the top results.
 
