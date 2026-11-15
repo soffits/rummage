@@ -135,6 +135,7 @@ def _remote(spec: dict, path: str, params: list[tuple[str, str]]) -> dict:
 def _remote_search(name: str, spec: dict, args) -> dict:
     params = [("q", args.query), ("limit", str(args.limit))]
     params += [("source", s) for s in args.source or []] + [("kind", k) for k in args.kind or []]
+    params += [("path", p) for p in args.path or []] + [("glob", g) for g in args.glob or []]
     if args.words_only:
         params.append(("words_only", "1"))
     return _remote(spec, "/search", params)
@@ -168,7 +169,7 @@ def cmd_search(cfg: C.Config, args) -> int:
                 if vector is None:
                     with R.embedder(_runtime(cfg), media=False, threads=cfg.threads, nice=0) as e:
                         vector = e.query(args.query)
-            searcher = Searcher(store.db, local_sources)
+            searcher = Searcher(store.db, local_sources, args.path, args.glob)
             hits += [h.as_dict() for h in searcher.search(
                 args.query, vector, limit=args.limit, kinds=set(args.kind) if args.kind else None)]
         except VersionMismatch as error:
@@ -377,7 +378,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("search", help="search the index")
     p.add_argument("query")
     p.add_argument("-s", "--source", action="append", help="only this source (repeatable)")
-    p.add_argument("-k", "--kind", action="append", help="only items of this kind (note, sticker, message...)")
+    p.add_argument("-k", "--kind", action="append", help="only items of this kind (note, file, chat, sticker...)")
+    p.add_argument("--path", action="append", help="only items whose ref starts with this folder or file (repeatable)")
+    p.add_argument("--glob", action="append", help="only items whose ref matches this pattern, e.g. '*.pdf' (repeatable)")
     p.add_argument("-n", "--limit", type=int, default=10)
     p.add_argument("--words-only", action="store_true", help="keyword search only (no model start, ~instant)")
     p.add_argument("--no-remote", action="store_true", help="only the local index")

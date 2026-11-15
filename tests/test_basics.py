@@ -162,3 +162,15 @@ def test_get_by_id_ref_and_loc(tmp_path):
         else:
             raise AssertionError(bad)
     store.close()
+
+
+def test_path_and_glob_scoping(tmp_path):
+    store = Store(tmp_path / "index.db")
+    for key in ("housing/lease.pdf", "housing/notes.md", "health/lease-of-life.md", "housing_old/lease.pdf"):
+        store.put(Item("docs", key, "file", key, key), [Segment("text", "the lease says cats are fine", loc="0")])
+    store.commit()
+    refs = lambda **kw: sorted(h.ref for h in Searcher(store.db, **kw).search("lease cats", None, limit=10))
+    assert refs(paths=["housing"]) == ["housing/lease.pdf", "housing/notes.md"]
+    assert refs(globs=["*.pdf"]) == ["housing/lease.pdf", "housing_old/lease.pdf"]
+    assert refs(paths=["housing/"], globs=["*.md"]) == ["housing/notes.md"]
+    store.close()
