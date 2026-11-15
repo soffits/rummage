@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from rummage import net
 from rummage import extract as X
 from rummage import text as T
+from rummage.limits import Limits, record
 from rummage.store import Item, Segment
 from rummage.sources import Plan, Source
 
@@ -82,7 +83,7 @@ class SeafileSource(Source):
         self.headers = {"Authorization": f"Token {token}", "Accept": "application/json"}
         self.libraries = spec.get("libraries")  # names or ids; default: every library the account can read
         self.exclude = [p.rstrip("/") for p in spec.get("exclude_paths", [])]
-        self.limits = {**X.LIMITS, **spec.get("limits", {})}
+        self.limits = Limits.of(spec)
         self._repos: dict[str, dict] = {}
 
     # API
@@ -151,31 +152,26 @@ class SeafileSource(Source):
         kind = item.info["type"]
         name_line = f"{item.info['library']}{path}"
         segments = [Segment("name", name_line)]
-        limit = self.limits.get(kind, 0)
-        if kind in ("name", "image") or (kind != "archive" and size > limit):
-            if kind not in ("name", "image"):
-                item.info["skipped"] = f"over {limit} bytes"
+        if kind in ("name", "image"):
             return segments
         url = self._download_url(repo_id, path)
         if kind == "archive":
-            if X.suffix(path) in (".tar", ".tgz", ".tar.gz", ".tbz2", ".tar.bz2", ".txz", ".tar.xz") and size > limit:
-                item.info["skipped"] = "compressed tar over the size limit: name only"
+            if X.suffix(path) in X.COMPRESSED_TARS and (cut := self.limits.too_big("tar", size)):
+                record(item, [cut])
                 return segments
-            names = X.archive_names(io.BufferedReader(HTTPRangeFile(url, size), 1 << 16), path)
+            names, cuts = X.archive_names(io.BufferedReader(HTTPRangeFile(url, size), 1 << 16), path, self.limits)
+            record(item, cuts)
             segments.append(Segment("text", X.names_text(names), loc="names"))
             item.info["entries"] = len(names)
             return segments
+        if cut := self.limits.too_big(kind, size):
+            record(item, [cut])
+            return segments
         with net.urlopen(urllib.request.Request(url), timeout=300) as r:
-            data = r.read(limit + 1)
-        if kind == "text":
-            body = X.decode(data)
-        elif kind == "html":
-            body = X.html_text(data)
-        elif kind == "office":
-            body = X.office_text(io.BytesIO(data))
-        else:
-            body = X.pdf_text(io.BytesIO(data))
-        body = body[:X.MAX_CHARS]
+            data = r.read(self.limits.bytes[kind] + 1)
+        body, cuts = X.bytes_text(path, data, self.limits)
+        record(item, cuts)
+        body = body or ""
         title = PurePosixPath(path).stem
         for start, piece in T.chunks(body):
             seg = Segment("text", piece, loc=str(start),

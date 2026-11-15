@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.10.0
 
+- Output says what it leaves out. Masked credentials are counted per result (`masked`) and in the JSON summary (`masked_secrets`), with the same command plus `--show-secrets` in `next_actions` and as a closing note in text output; `recall` names `rummage get <#id> --show-secrets` per item. Items a size limit cut keep a `partial` record at index time (what, kept of total, the setting to raise), shown by `search`, `get`, `recent`, `recall`, `serve` and `mcp`; `rummage status` counts them per source, with the files `exclude` left out. Re-read existing items with `rummage index --reload` to record their cuts.
+- Every size limit is a source setting: `max_chars`, `max_pdf_pages`, `max_archive_names`, `max_attachment_bytes`, `keep_chars` (chat sources) and `limits.<kind>`, besides `max_bytes`. Markdown notes now stop at `max_chars` like other text, instead of at 400 passages.
+- `rummage get <ref> --original` reads a file's whole text from disk, past the indexing limits; `<ref>` can be the file's path. A path under a source root that isn't indexed says why (excluded, wrong extension, not read yet).
+- Files over `max_bytes` are indexed by name with a note, instead of being left out without a trace. Mail attachments over the limit are recorded instead of dropped silently.
+- `seafile`: compressed tars under the size limit are listed again; every one was skipped because the limit was looked up under the wrong name.
+- A search with no query daemon running starts one in the background (`[daemon] idle_minutes`, default 20; 0 turns this off) and uses it as soon as the model is loaded instead of loading a second copy; later searches are fast, and the daemon exits when unused. `recall` starts one for the next prompt without waiting. Only one daemon runs per data directory. `rummage status` shows whether it runs.
+- Copies of one mail in several folders or accounts (same Message-ID) are one search result, with the other copies under `also`; `get` lists them too.
+- Chat turns: a client's notices and the quoted message before a person's words ("[Replying to ...]" and its `> ` lines) are kept as `context` in the item's info, not as the person's words, and a session title cut inside such a notice loses it. Affected turns are read and embedded again on the next index run.
 - Embedding models are profiles you can switch at any time. A profile names a pinned GGUF (run by the bundled
   llama.cpp), a GGUF on disk, or an OpenAI-compatible endpoint, with its query and document prompts and how many
   dimensions to keep; EmbeddingGemma 2 is built in and stays the default, with results unchanged. `rummage models use

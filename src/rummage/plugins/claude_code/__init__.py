@@ -12,7 +12,8 @@ import os
 import re
 from pathlib import Path
 
-from rummage.chats import AppendOnlyLogs, Turn, iso_time, session_files, text_blocks, turn_segments
+from rummage.chats import (
+    AppendOnlyLogs, Turn, iso_time, keep_chars, session_files, text_blocks, turn_segments)
 from rummage.sources import Plan, Source
 from rummage.store import Item, Segment
 
@@ -27,6 +28,7 @@ def default_root() -> Path:
 class ClaudeCodeSource(Source):
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
+        self.keep_chars = keep_chars(spec)
         self.root = Path(os.path.expanduser(spec.get("root") or default_root()))
         self.person = spec.get("user_name", "user")
         self.skip = tuple(spec.get("skip_prefixes", DEFAULT_SKIP))
@@ -71,4 +73,4 @@ class ClaudeCodeSource(Source):
         return self.logs.plan(session_files([self.root], ["*/*.jsonl"]), known, state)
 
     def load(self, item: Item) -> list[Segment]:
-        return turn_segments(item)
+        return turn_segments(item, self.keep_chars)

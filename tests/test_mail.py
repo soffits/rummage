@@ -204,3 +204,22 @@ def test_imap_xoauth2_sends_the_token(tmp_path):
 
     src.login(Auth())
     assert sent == {"mechanism": "XOAUTH2", "payload": b"user=me@school.example\x01auth=Bearer ya29.token\x01\x01"}
+
+
+def test_copies_of_one_mail_in_two_folders_are_one_hit(tmp_path):
+    from rummage.search import Searcher
+    from rummage.store import Item, Segment, Store
+
+    store = Store(tmp_path / "index.db")
+    for key, folder, mtime in (("inbox:7", "INBOX", 100.0), ("archive:3", "Archive", 5_000_000.0)):
+        info = {"message_id": "<abc@shop.example>", "folder": folder}
+        store.put(Item("mail", key, "mail", "Your order shipped", f"mail:{key}", mtime, key, info),
+                  [Segment("text", "Your order with tracking number 1Z999 has shipped.", loc="0")])
+    store.put(Item("mail", "inbox:8", "mail", "Other", "mail:inbox:8", 100.0, "x", {"message_id": "<other@x>"}),
+              [Segment("text", "Another order has shipped too.", loc="0")])
+    store.commit()
+    hits = Searcher(store).search("order shipped", None)
+    assert len(hits) == 2
+    copy = next(h for h in hits if "1Z999" in h.snippet)
+    assert {copy.ref, *copy.also} == {"mail:inbox:7", "mail:archive:3"}
+    assert store.same_message(store.find("mail:inbox:7")) == ["mail:archive:3"]

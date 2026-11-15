@@ -29,6 +29,9 @@
 - `dsh-sessions` reads who wrote a message from `source.principal` first (DSH's field for the caller behind a user message, filled by dsh-oidc and dsh-telegram-bot as `{kind, channel, id, name?}`), then from the text tag or OIDC notice: structured data beats parsing, and old logs have only the text.
 - Chats: one item per message a person wrote plus the reply after it; the model reads the start of both, keyword search the full text.
 - Seafile: an account token with read-only shares; head commit per library, then file object ids; archives listed over HTTP range requests.
+- Size limits stay, with defaults sized for a laptop, but each is a source setting and each cut is stored on the item at index time (`info.partial`: what, kept, total, unit, setting), the way Elasticsearch records ignored fields in a document's [`_ignored`](https://www.elastic.co/docs/reference/elasticsearch/mapping-reference/mapping-ignored-field) and Apache Tika marks a [write limit reached](https://tika.apache.org/docs/4.2.x/advanced/setting-limits.html) in the extracted metadata; a debug flag that lists skipped files, as in ripgrep, helps only someone who already suspects a gap. Stored on the item, it reaches every output and `status` without another pass over the files.
+- Files over `max_bytes` are indexed by name with a `partial` note instead of being left out of the plan, so a search for the file finds it and says why its text is missing. Files `exclude` leaves out are only counted with a few examples in the source's state: walking excluded folders (`node_modules`) to list them would cost what excluding them saves.
+- The passage cap in `chunks` (400 per item) is gone: `max_chars` is the one limit on text per item, so there is one setting to raise.
 
 ## Licence
 
@@ -39,7 +42,10 @@
 - Sessions kept as append-only JSONL are read from where the last read stopped, restarting at the last turn's first line, so a growing reply is re-read but nothing older; a file that shrank is read again from the start. Gemini CLI's logs patch earlier records, so they are replayed whole when they change.
 - Codex turns come from its `event_msg` user and agent messages, the text its UI shows, rather than the raw response items with their tool plumbing.
 - Credentials are masked when printed, not when indexed: masking at index time would lose a value the user may later ask for, and the index is a local file kept mode 600. The patterns are well-known token shapes plus credential-like assignments; scanners such as gitleaks and detect-secrets are built for files and repositories, and a short pattern list is enough for masking result text.
+- Masking is counted where it happens (`mask_count`) and each printed result carries `masked`, rather than counting `[secret]` in the output: a text that contains the marker itself would be miscounted, and per-result counts survive truncation, token budgets and merging remote results.
 - Reading and embedding are separate phases with separate locks, so keyword search covers new items within seconds while vectors follow; pending vectors are stored with their model input, so any later run finishes them.
+- Copies of one mail are recognised by Message-ID with no time window (a copy moved to an archive months later is the same mail) and collapsed at search time like chat messages, so both folders stay indexed.
+- A client's notices before a person's words count as scaffolding only when the message starts with a bracketed notice line; the `> ` lines and blank lines after it go with it. A message the person starts with their own quote stays as written.
 - The same chat message in two sources is recognised by its text with leading bracketed notices removed (sender tags, channel headers that one recorder adds and the other doesn't) and times within 10 minutes, and collapsed at search time rather than dropped at index time: both records stay, so either source can be switched off without losing the message.
 - Refer-back phrases for recall's recent part are one multilingual list, used only to decide whether to add at most two recent turns; shared words with the prompt are the main signal.
 
@@ -51,6 +57,7 @@
 
 ## Runtime
 
+- A search with no daemon starts one (`daemon.ensure`) and waits for its answer rather than also loading the model itself: one model load instead of two in memory, about the same wait. The daemon holds a per-data-directory lock for its life, so searches racing to start it end up with one; it exits after `[daemon] idle_minutes` unused so memory comes back. A prompt hook starts it without waiting, since hooks must stay fast.
 - Threads follow the load by restarting `llama-server` (about a second) when the wanted count changes, checked at most once a minute: llama.cpp fixes the thread count at start, and a minute-scale check matches the 1-minute load average it reads.
 - An accelerator is trusted by result, not by name: it is used only when its vectors for three fixed reference texts agree with the profile's published ones or those stored at the first run (cosine ≥ 0.999, the same bar `doctor` applies to a llama.cpp upgrade). Queries keep using the local model or daemon, so search never depends on another machine unless the model itself is remote.
 

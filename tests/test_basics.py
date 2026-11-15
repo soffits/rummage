@@ -7,6 +7,7 @@ import numpy as np
 
 from rummage import extract as X
 from rummage import text as T
+from rummage.limits import Limits
 from conftest import DIM, PROFILE
 from rummage import switch
 from rummage.search import Searcher
@@ -72,7 +73,7 @@ def test_office_and_archive_extract():
     buf.seek(0)
     assert X.office_text(buf) == "Hello lease\nSecond"
     buf.seek(0)
-    assert X.archive_names(buf, "x.zip") == ["word/document.xml"]
+    assert X.archive_names(buf, "x.zip", Limits.of({})) == (["word/document.xml"], [])
     assert X.kind_of("a.tar.gz") == "archive" and X.kind_of("setup.exe") == "name"
 
 

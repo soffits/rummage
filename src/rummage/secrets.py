@@ -4,6 +4,9 @@ unless asked not to (`--show-secrets`, or `mask_secrets = false` on a source).
 
 The patterns are formats with a recognisable shape (provider token prefixes, key blocks, JWTs, credentials in
 URLs) and values assigned to names like password, token or api_key. They catch common cases, not every secret.
+
+Output says what it masked: each result, item or entry with masked values carries `masked` (how many), so a reader
+knows a `[secret]` stands for a real value and can ask again with `--show-secrets`.
 """
 
 from __future__ import annotations
@@ -38,21 +41,55 @@ _BEARER = re.compile(r"(\bBearer\s+)[A-Za-z0-9._~+/\-]{16,}=*", re.I)
 _FIXED = re.compile("|".join(f"(?:{p})" for p in _PATTERNS))
 
 
-def mask(text: str | None) -> str | None:
+def mask_count(text: str | None) -> tuple[str | None, int]:
+    """`text` with credentials replaced by `[secret]`, and how many were replaced."""
     if not text:
-        return text
-    text = _FIXED.sub(MASK, text)
-    text = _URL_CREDENTIAL.sub(lambda m: m.group(1) + MASK + m.group(2), text)
-    text = _BEARER.sub(lambda m: m.group(1) + MASK, text)
-    return _ASSIGNED.sub(lambda m: m.group(1) + (m.group(2) if m.group(2) == MASK else MASK), text)
+        return text, 0
+    text, fixed = _FIXED.subn(MASK, text)
+    text, url = _URL_CREDENTIAL.subn(lambda m: m.group(1) + MASK + m.group(2), text)
+    text, bearer = _BEARER.subn(lambda m: m.group(1) + MASK, text)
+    assigned = 0
+
+    def assign(m):
+        nonlocal assigned
+        if m.group(2) == MASK:
+            return m.group(0)
+        assigned += 1
+        return m.group(1) + MASK
+
+    text = _ASSIGNED.sub(assign, text)
+    return text, fixed + url + bearer + assigned
 
 
-def mask_value(value):
-    """`mask` applied through strings, lists and dicts (a result's info, a document)."""
+def mask(text: str | None) -> str | None:
+    return mask_count(text)[0]
+
+
+def mask_value(value) -> tuple[object, int]:
+    """`mask` applied through strings, lists and dicts (a result's info, a document), and the count of masked
+    values."""
     if isinstance(value, str):
-        return mask(value)
+        return mask_count(value)
     if isinstance(value, list):
-        return [mask_value(v) for v in value]
+        pairs = [mask_value(v) for v in value]
+        return [v for v, _ in pairs], sum(n for _, n in pairs)
     if isinstance(value, dict):
-        return {k: mask_value(v) for k, v in value.items()}
+        pairs = {k: mask_value(v) for k, v in value.items()}
+        return {k: v for k, (v, _) in pairs.items()}, sum(n for _, n in pairs.values())
+    return value, 0
+
+
+def shown(value: dict, show: bool, masks) -> dict:
+    """`value` (a result, an item, an entry) as printed: credentials masked unless `show` or `masks(source)` is
+    false, with `masked` set to how many were."""
+    if show or not masks(value.get("source", "")):
+        return value
+    value, count = mask_value(value)
+    if count:
+        value["masked"] = count
     return value
+
+
+def masked_total(values) -> int:
+    """How many values were masked across printed results (their `masked` counts)."""
+    return sum(v.get("masked", 0) for v in values if isinstance(v, dict))

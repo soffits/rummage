@@ -14,7 +14,7 @@ from pathlib import Path
 
 from rummage.store import Item, Segment
 from rummage.sources import Plan, Source
-from rummage.chats import Turn, people_map, turn_item, turn_segments
+from rummage.chats import Turn, keep_chars, people_map, turn_item, turn_segments
 
 DEFAULT_FRONTENDS = ["telegram", "desktop", "tui", "api_server"]
 # Injected by Hermes itself, not typed by a person.
@@ -36,6 +36,7 @@ def hermes_home() -> Path:
 class HermesSource(Source):
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
+        self.keep_chars = keep_chars(spec)
         self.db_path = os.path.expanduser(spec.get("db") or str(hermes_home() / "state.db"))
         self.frontends = list(spec.get("frontends", DEFAULT_FRONTENDS))
         self.exclude = set(spec.get("exclude_sessions", []))
@@ -105,4 +106,4 @@ class HermesSource(Source):
         return Plan(upserts, removed, {"max_id": top}, len(upserts))
 
     def load(self, item: Item) -> list[Segment]:
-        return turn_segments(item)
+        return turn_segments(item, self.keep_chars)

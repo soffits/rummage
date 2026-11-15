@@ -1,5 +1,6 @@
 """What folder sources share: walking a directory read-only, skipping excluded names, and planning by mtime and
-size first, then by content hash."""
+size first, then by content hash. What the walk leaves out (excluded names, files it can't read) is counted in the
+source's state, so `rummage status` can show it; files over `max_bytes` are indexed by name with a `partial` note."""
 
 from __future__ import annotations
 
@@ -10,7 +11,8 @@ import os
 import re
 from pathlib import Path
 
-from ..store import Item
+from ..limits import UNLIMITED, Cut, Limits, record
+from ..store import Item, Segment
 from . import Plan, Source
 
 DEFAULT_EXCLUDE = [".*", "node_modules", "__pycache__", "$RECYCLE.BIN", "System Volume Information"]
@@ -44,7 +46,7 @@ def path_dates(rel: str) -> dict:
 class FolderSource(Source):
     kind = "file"
     default_extensions: tuple[str, ...] | None = None   # None: every file
-    default_max_bytes = 0                                # files above this are skipped; 0: no limit
+    default_max_bytes = 0                                # files above this keep only their name; 0: no limit
     hash_bytes = 64 << 20                                # bigger files are fingerprinted by size and mtime
 
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
@@ -54,6 +56,7 @@ class FolderSource(Source):
         extensions = spec.get("extensions", self.default_extensions)
         self.extensions = tuple(e.lower() for e in extensions) if extensions else None
         self.max_bytes = int(spec.get("max_bytes", self.default_max_bytes))
+        self.limits = Limits.of(spec)
 
     def watch_roots(self) -> list[Path]:
         return [self.root]
@@ -62,38 +65,84 @@ class FolderSource(Source):
         return any(fnmatch.fnmatch(part, pat) for part in rel.split("/") for pat in self.exclude) or any(
             fnmatch.fnmatch(rel, pat) for pat in self.exclude)
 
-    def files(self):
+    def files(self, excluded: list[str] | None = None):
+        """Paths of the files to index, relative to the root. Excluded files and folders go into `excluded`."""
+        excluded = [] if excluded is None else excluded
         for dirpath, dirnames, filenames in os.walk(self.root):
             rel_dir = os.path.relpath(dirpath, self.root)
             rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
-            dirnames[:] = sorted(d for d in dirnames if not self._skip(f"{rel_dir}/{d}".lstrip("/")))
+            kept = []
+            for d in sorted(dirnames):
+                rel = f"{rel_dir}/{d}".lstrip("/")
+                (excluded.append(rel + "/") if self._skip(rel) else kept.append(d))
+            dirnames[:] = kept
             for f in sorted(filenames):
                 rel = f"{rel_dir}/{f}".lstrip("/")
-                if (self.extensions is None or f.lower().endswith(self.extensions)) and not self._skip(rel):
+                if self.extensions is not None and not f.lower().endswith(self.extensions):
+                    continue
+                if self._skip(rel):
+                    excluded.append(rel)
+                else:
                     yield rel
+
+    def not_indexed(self, rel: str) -> str:
+        """Why file `rel` under the root has no item."""
+        if self._skip(rel):
+            return f"excluded by sources.{self.name}.exclude ({', '.join(self.exclude)})"
+        if self.extensions is not None and not rel.lower().endswith(self.extensions):
+            return f"source {self.name} reads only {', '.join(self.extensions)} files (sources.{self.name}.extensions)"
+        return f"not indexed yet: `rummage index -s {self.name}` reads it"
+
+    def load(self, item: Item) -> list[Segment]:
+        size = item.info.get("size") or (self.root / item.key).stat().st_size
+        if self.max_bytes and size > self.max_bytes:
+            record(item, [Cut("file", 0, size, "bytes", "max_bytes")])
+            return [Segment("name", item.key)]
+        return self.read(item)
+
+    def read(self, item: Item) -> list[Segment]:
+        raise NotImplementedError
+
+    def original(self, key: str) -> dict:
+        """The whole text of file `key` as it is now, without the limits indexing applies: `{"text", "original"}`
+        (the file's path)."""
+        from .. import extract as X
+
+        path = self.root / key
+        with open(path, "rb") as fh:
+            if X.kind_of(key) == "archive":
+                text = X.names_text(X.archive_names(fh, key, UNLIMITED)[0])
+            else:
+                text = X.bytes_text(key, fh.read(), UNLIMITED)[0]
+        if text is None:
+            raise OSError(f"{path} is a {X.suffix(key) or 'file'} file with no text rummage can read")
+        return {"text": text, "original": str(path)}
 
     def plan(self, known: dict[str, str | None], state: dict) -> Plan:
         stats = state.get("stats", {})
         upserts: list[Item] = []
         seen: dict[str, list] = {}
-        for rel in self.files():
+        excluded: list[str] = []
+        unreadable: list[str] = []
+        for rel in self.files(excluded):
             path = self.root / rel
             try:
                 st = path.stat()
             except OSError:
-                continue
-            if self.max_bytes and st.st_size > self.max_bytes:
+                unreadable.append(rel)
                 continue
             stamp = [st.st_mtime_ns, st.st_size]
             seen[rel] = stamp
             if rel in known and stats.get(rel) == stamp:
                 continue
-            if st.st_size > self.hash_bytes:
+            if st.st_size > self.hash_bytes or (self.max_bytes and st.st_size > self.max_bytes):
                 fingerprint = f"stat:{st.st_size}:{st.st_mtime_ns}"
             else:
                 try:
                     fingerprint = hashlib.sha256(path.read_bytes()).hexdigest()
                 except OSError:
+                    unreadable.append(rel)
+                    seen.pop(rel)
                     continue
             if known.get(rel) == fingerprint:
                 continue
@@ -101,4 +150,18 @@ class FolderSource(Source):
             upserts.append(Item(self.name, rel, self.kind, Path(rel).stem, rel, st.st_mtime, fingerprint,
                                 {"path": rel, "size": st.st_size, **info}))
         removed = [key for key in known if key not in seen]
-        return Plan(upserts, removed, {"stats": seen}, len(upserts))
+        left_out = {"excluded": _left_out(excluded, f"sources.{self.name}.exclude", self.exclude),
+                    "unreadable": _left_out(unreadable)}
+        return Plan(upserts, removed, {"stats": seen, "left_out": left_out}, len(upserts))
+
+
+EXAMPLES = 5
+
+
+def _left_out(paths: list[str], setting: str | None = None, patterns: list[str] | None = None) -> dict:
+    """A count of paths a folder walk left out, a few of them as examples, and the setting that decides it."""
+    out: dict = {"count": len(paths), "examples": paths[:EXAMPLES]}
+    if setting:
+        out["setting"] = setting
+        out["patterns"] = list(patterns or [])
+    return out
