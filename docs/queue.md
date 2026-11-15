@@ -40,21 +40,21 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 - Audio and video are not indexed.
 - A message that another agent sends into a DSH session through `open_session` without the "[Sent by the agent" prefix is attributed to the web user.
 - Vectors are loaded from SQLite on every search; a memory-mapped cache would help once an index passes a few hundred thousand segments.
-- **Cross-language miss beaten by same-language keywords.** A Chinese question ("漏水传感器放哪几个位置", where do the
-  leak sensors go) whose answer is an English note section ("Home while away" in a trip note, listing the sensor
-  spots) didn't reach the top five: Chinese chat lines that contain the words "漏水传感器" ranked above it on the
-  word-coverage bonus, while the English section matched by meaning only. Repro for the evaluation: a corpus with
-  one English passage answering the question and three or more Chinese passages that only mention the term (a
-  purchase, a delivery, a reminder), query in Chinese; expected the English passage in the top 3. Measure the word
-  weight against meaning when the query and the best passage are in different languages (CJK and Latin scripts
-  both ways) before changing ranking; `rummage-ablations` with a cross-language set is the place.
-- **Recall ignores how recent a lead is.** `recall "漏水传感器到了没有"` (have the leak sensors arrived) returned three
-  chat turns from the day before, not that morning's "delivery attempted" mails or the support-chat summary, which
-  answer it. Recall ranks plausible matches by meaning and words only, and a fresh item that is a weaker match
-  loses. First check where the fresh items fall out (outside the top 20 that recall reads, or below its gates),
-  then try a configurable time-decay term or slots kept for the newest plausible matches. Repro: one topic, three
-  older chat turns that repeat the query's words, two newer items (a mail, a note) that answer it with fewer of
-  them; expected at least one newer item among the recalled. Measure on `bench/memory.py` before changing defaults.
+- **Cross-language miss beaten by same-language keywords.** A Chinese question ("车库钥匙放在哪里", where is the
+  garage key kept) whose answer is an English note section ("Spare keys" in a moving checklist) didn't reach the top
+  five: Chinese chat lines that contain the words "车库钥匙" ranked above it on the word-coverage bonus, while the
+  English section matched by meaning only. Repro for the evaluation: a corpus with one English passage answering the
+  question and three or more Chinese passages that only mention the term (a purchase, a delivery, a reminder), query
+  in Chinese; expected the English passage in the top 3. Measure the word weight against meaning when the query and
+  the best passage are in different languages (CJK and Latin scripts both ways) before changing ranking;
+  `rummage-ablations` with a cross-language set is the place.
+- **Recall ignores how recent a lead is.** `recall "did the bookshelf arrive yet"` returned three chat turns from the
+  day before, not that morning's "delivery attempted" mails or the support-chat summary, which answer it. Recall
+  ranks plausible matches by meaning and words only, and a fresh item that is a weaker match loses. First check
+  where the fresh items fall out (outside the top 20 that recall reads, or below its gates), then try a configurable
+  time-decay term or slots kept for the newest plausible matches. Repro: one topic, three older chat turns that
+  repeat the query's words, two newer items (a mail, a note) that answer it with fewer of them; expected at least
+  one newer item among the recalled. Measure on `bench/memory.py` before changing defaults.
 - `get --original` reads files of folder sources only; for a Seafile item it could download the file the same way
   indexing does.
 - The query daemon a search starts isn't used on systems without Unix sockets (Windows); they keep loading the
@@ -79,8 +79,7 @@ data, tests.
    automatically.
 3. **`rummage related --file/--text`:** related items for something that just arrived (a mail, a calendar event),
    for event-driven recall.
-4. **Golden questions:** a private regression set of real past questions with known answers, run weekly to catch
-   quality drops.
+4. **Golden questions:** a regression set of questions with known answers, run weekly to catch quality drops.
 5. **Optional local cross-encoder rerank** for hard queries, off by default, measured in the evaluation.
 
 ## Model switching leftovers
@@ -98,9 +97,9 @@ data, tests.
   special tokens or long causal contexts would take more per piece than rummage gives them (`max_tokens` in the
   profile raises the limit).
 9. **Cross-language queries:** the word bonus can only match words in the query's own language, so a Chinese
-   question about an English note ranks same-language chat lines that share a word above the note (private vault
-   set: hit@1 0.57 hybrid against 0.79 by meaning alone). Weigh the bonus by whether query and passage share a
-   language, or match words across languages, and measure it on that set and a public cross-lingual one.
+   question about an English note ranks same-language chat lines that share a word above the note. Weigh the bonus by
+   whether query and passage share a language, or match words across languages, and measure it on a public
+   cross-lingual set.
 10. **Recall as leads:** at its thresholds recall shows nothing for 23% of LoCoMo questions whose evidence plain
    search has in its top 10-20, and injects about as often on unanswerable questions as on answerable ones. If its
    output is pointers for an agent to open, lower thresholds and a few newest-related items fit better; measure

@@ -127,12 +127,12 @@ def test_fit_keeps_the_actions_that_show_hidden_parts():
 
 
 def test_chat_turn_cut_is_recorded():
-    turn = Turn("s1", "m1", 1_700_000_000, "Livia", "a" * 50, replies=["b" * 20])
-    item = turn_item("chats", "chat", turn, "Sakina")
+    turn = Turn("s1", "m1", 1_700_000_000, "Alex", "a" * 50, replies=["b" * 20])
+    item = turn_item("chats", "chat", turn, "Robin")
     segments = turn_segments(item, 30)
     assert item.info["partial"] == [{"what": "message", "kept": 30, "total": 50, "unit": "chars",
                                      "setting": "sources.chats.keep_chars"}]
-    assert segments[1].text == "Livia: " + "a" * 30 + "\n\nSakina: " + "b" * 20
+    assert segments[1].text == "Alex: " + "a" * 30 + "\n\nRobin: " + "b" * 20
 
 
 def test_mail_attachment_over_the_limit_is_recorded_not_dropped_silently():

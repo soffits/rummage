@@ -80,7 +80,7 @@
 rummage is now a smaller memory add-on: it reads, finds, opens and says what it left out, and leaves judgment to the agent calling it. Reasons in `docs/decisions.md`, "Scope".
 
 - Removed `rummage dupes`, `rummage conflicts` and `rummage about`. `search --sort newest` lists the newest of the matches first, which covers "everything about a person, latest first". The `[people]` config table went with `about`.
-- Removed reading time phrases in queries ("last Wednesday", "上周") and the `dates` extra; pass `--since/--until`. Those now also match notes whose path names a date or period (`todo/2026-W44.md` counts as that week), which before only affected time phrases.
+- Removed reading time phrases in queries ("last Wednesday", "上周") and the `dates` extra; pass `--since/--until`. Those now also match notes whose path names a date or period (`weekly/2026-W44.md` counts as that week), which before only affected time phrases.
 - Removed `--truncate` and the strategy hints in `next_actions` (open the best match, trim the tail, broaden, rephrase). `next_actions` now only says how to see what the output left out (`--show-secrets`, `get --original`) or that the index is empty. The JSON lost its always-empty `errors` field and the `error` status.
 - Removed `rummage serve`, `[serve]` tokens, `[remotes]`, the container image and its workflow, and the Postgres design in `docs/backends.md`.
 - Removed `rummage mcp` and the `mcp` extra.

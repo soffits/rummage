@@ -20,8 +20,9 @@ end. On what did:
   adds 0.7 to 2.7 points of nDCG@10 on SciFact and NFCorpus across four models, and 3.2 to 6.3 points on Korean.
 - **The 512-dimension cut only suits models trained for it.** It costs harrier-oss-v1-0.6b up to 8 points; the width
   has to come with the model.
-- **The keyword bonus works against cross-language questions.** On a private set of Chinese questions about English
-  notes and the reverse, ranking by meaning alone puts the right note first more often than the hybrid ranking does.
+- **Cross-language questions are a known weakness.** The keyword bonus can only match words in the question's own
+  language, so across languages it can lift same-language items above the right one. It has not been measured on a
+  public set yet (see "Not run"); the fix is in the queue.
 - **As memory, retrieval is not the bottleneck; selection and reading are.** On LongMemEval-S an agent that searches
   rummage answers 80% right, one recall injection 55%, no memory 3%; in 63 of the agent's 100 misses it had seen a
   turn from every session holding the answer. Recall's thresholds inject about as often on unanswerable questions
@@ -256,38 +257,6 @@ LongMemEval's paper used, so these numbers aren't comparable with published lead
   answer (reading or reasoning failed, or the right turn of that session wasn't among those shown), 30 after only
   some of several answer sessions were found (15 multi-session, 14 temporal: questions that need many sessions or
   their order at once), 3 after none were found, and 4 were answers to unanswerable questions.
-
-## A private vault set
-
-45 real questions about one person's notes (657 Markdown files, mixed English and Chinese), each with its known
-answer note. The questions and notes stay private; only the scores are published. hit@1 / hit@3 / MRR@10:
-
-| | hit@1 | hit@3 | MRR@10 |
-|---|---|---|---|
-| rummage | **0.889** | **1.000** | **0.941** |
-| rummage's index, cosine only | 0.867 | 0.978 | 0.916 |
-| plain dense, same model, one vector per note | 0.800 | 0.889 | 0.861 |
-| fidx | 0.467 | 0.733 | 0.602 |
-| qmd `search` | 0.378 | 0.444 | — |
-
-Passages beat one vector per note on long notes (+7 points hit@1); the hybrid ranking adds 2 more.
-
-### Across languages
-
-14 more questions asked in one language about a note written in the other (8 Chinese questions about English notes,
-6 English questions about Chinese ones), among the vault's notes alone and among everything indexed (chat history
-and mail too, whose same-language lines compete):
-
-| | vault only: hit@1 | hit@3 | everything: hit@1 | hit@3 |
-|---|---|---|---|---|
-| rummage | 0.571 | 0.857 | 0.286 | 0.500 |
-| cosine only | **0.786** | 0.857 | **0.429** | 0.500 |
-| words only | 0.000 | 0.000 | 0.000 | 0.000 |
-
-The keyword bonus can only match words in the question's own language, so across languages it lifts the wrong
-items: same-language chat lines that share a word rank above the right note. This is the clearest weakness found;
-the fix belongs in the ranking (weighing the bonus by whether the query and the passage share a language, or
-matching words across languages), and is in the queue.
 
 ## A language-agnostic keyword side
 

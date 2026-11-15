@@ -74,7 +74,7 @@ def split_scaffold(text: str) -> tuple[str, str]:
 
 
 def clean_title(title: str) -> str:
-    """A session title without a notice it was cut from (`Telegram-Lia-[Telegram message from ...`)."""
+    """A session title without a notice it was cut from (`Telegram-Alex-[Telegram message from ...`)."""
     return _CUT_NOTICE.sub("", title).rstrip(" -·:,")
 
 

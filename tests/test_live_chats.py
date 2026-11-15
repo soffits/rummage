@@ -183,7 +183,7 @@ def test_one_message_recorded_by_two_sources_is_one_hit(tmp_path, capsys):
                 {"type": "assistant", "message": {"content": [{"type": "text", "text": "Booked for 3 pm."}]}}]
 
     _lines(logs / "a" / "project" / "s1.jsonl", turn("book the dentist for next Tuesday", when))
-    _lines(logs / "b" / "project" / "s9.jsonl", turn("[Web message from Lia]  Book the dentist for next Tuesday",
+    _lines(logs / "b" / "project" / "s9.jsonl", turn("[Web message from Alex]  Book the dentist for next Tuesday",
                                                      when + 1))
     cfg = tmp_path / "config.toml"
     cfg.write_text(f"data_dir = '{tmp_path / 'data'}'\n"
@@ -222,11 +222,11 @@ def test_reply_notice_and_quote_are_context_not_the_persons_words():
 
     text = ("[Replying to a message from the assistant (this bot) (sent 2026-11-15 15:20 UTC)]\n"
             "> Three things on the board today.\n> \n> First, the backup.\n\nok, go ahead")
-    turn = Turn("s1", "m1", 1_700_000_000, "Livia", text, session_title="Telegram-Lia-[Telegram message from Lia (@x,")
-    item = turn_item("chats", "dsh", turn, "Sakina")
+    turn = Turn("s1", "m1", 1_700_000_000, "Alex", text, session_title="Telegram-Alex-[Telegram message from Alex (@x,")
+    item = turn_item("chats", "dsh", turn, "Robin")
     assert item.info["context"].startswith("[Replying to a message") and "First, the backup." in item.info["context"]
-    assert item.info["session_title"] == "Telegram-Lia" and item.title.endswith("· Telegram-Lia")
-    assert turn_segments(item, 1000)[1].text == "Livia: ok, go ahead"
+    assert item.info["session_title"] == "Telegram-Alex" and item.title.endswith("· Telegram-Alex")
+    assert turn_segments(item, 1000)[1].text == "Alex: ok, go ahead"
 
-    plain = turn_item("chats", "dsh", Turn("s1", "m2", 1_700_000_000, "Livia", "> quoting myself\nand more"), "S")
+    plain = turn_item("chats", "dsh", Turn("s1", "m2", 1_700_000_000, "Alex", "> quoting myself\nand more"), "S")
     assert "context" not in plain.info

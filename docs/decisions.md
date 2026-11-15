@@ -113,4 +113,4 @@
 
 ## Time in queries
 
-- `--since/--until` match an item's own time or the period its path names (`todo/2026-W44.md` is about that week), as a filter. A dated note is often edited long after the period it covers, so its change time alone would put it in the wrong window.
+- `--since/--until` match an item's own time or the period its path names (`weekly/2026-W44.md` is about that week), as a filter. A dated note is often edited long after the period it covers, so its change time alone would put it in the wrong window.
