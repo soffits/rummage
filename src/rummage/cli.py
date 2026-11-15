@@ -74,7 +74,29 @@ def cmd_setup(cfg: C.Config, args) -> int:
         elif args.backend == "auto" or "reason" not in rt.backend_record:
             backends.choose(rt, profile, cfg.threads, log=_eprint)
     _eprint(f"runtime ready for {profile.name} on {rt.backend}:", rt.root)
+    _offer_found(cfg)
     return 0
+
+
+def _offer_found(cfg: C.Config) -> None:
+    """Lists the other programs' histories found on this machine that no source reads yet, with the command that
+    switches each on. Asks about each when a person is at the terminal; never switches one on unasked."""
+    found = _found(cfg)
+    if not found:
+        return
+    print("\nFound on this machine, not read until you switch it on:")
+    for name in found:
+        print(f"  {name:14} rummage sources enable {name}")
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return
+    for name, spec in found.items():
+        try:
+            answer = input(f"Remember {name}'s history now? [y/N] ").strip().lower()
+        except EOFError:
+            return
+        if answer in ("y", "yes"):
+            C.set_enabled(cfg.path, name, spec, True)
+            print(_switched_on(name))
 
 
 def _embedders(cfg: C.Config, store: Store, profile: M.Profile | None, log) -> Embedders | None:
@@ -369,16 +391,24 @@ def _detected() -> dict[str, dict]:
     return out
 
 
+def _found(cfg: C.Config) -> dict[str, dict]:
+    """Detected sources that no configured source reads yet, with the settings to use."""
+    configured_types = {s.get("type") for s in cfg.sources.values()}
+    return {k: spec for k, spec in _detected().items() if k not in cfg.sources and k not in configured_types}
+
+
+def _switched_on(name: str) -> str:
+    return (f"{name} is on: `rummage index -s {name}` reads it now, `rummage watch` keeps it current; "
+            f"`rummage sources disable {name}` switches it off")
+
+
 def cmd_sources(cfg: C.Config, args) -> int:
     if args.action in ("enable", "disable"):
         return _switch_source(cfg, args)
     types = available()
-    detected = _detected()
     on = set(C.enabled(cfg))
     configured = {n: {"type": s.get("type"), "enabled": n in on} for n, s in cfg.sources.items()}
-    configured_types = {s.get("type") for s in cfg.sources.values()}
-    found = {k: {"type": k, "enabled": False, "detected": True} for k in detected
-             if k not in cfg.sources and k not in configured_types}
+    found = {k: {"type": k, "enabled": False, "detected": True} for k in _found(cfg)}
     if args.json:
         print(json.dumps({"types": types, "configured": configured, "detected": found}))
         return 0
@@ -405,9 +435,9 @@ def _switch_source(cfg: C.Config, args) -> int:
             return 2
     C.set_enabled(cfg.path, name, spec, on)
     if on:
-        print(f"{name} is on: `rummage index -s {name}` reads it now; `rummage watch` keeps it current")
+        print(_switched_on(name))
         return 0
-    print(f"{name} is off")
+    print(f"{name} is off; `rummage sources enable {name}` switches it back on")
     if not cfg.index_path.exists():
         return 0
     store = Store(cfg.index_path)

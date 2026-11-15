@@ -197,6 +197,31 @@ progress reads that file, never the index, so a status bar can ask every few sec
 passages with vectors, time left, why it paused or what failed) and their text output adds the note. Once it's
 complete they add nothing.
 
+## Coming from another memory system
+
+`rummage setup` lists the agent histories it finds on the machine (Claude Code, Codex, Gemini CLI, OpenCode, Hermes
+Agent, DeepSeek Harness) with the command that switches each on, and asks about each one when you run it in a
+terminal. Nothing is read until you say so; `rummage sources disable <name>` switches one off again.
+
+What another memory system has stored comes over through its export, with a `memory-export` source per system:
+
+```toml
+[sources.mem0]
+type = "memory-export"
+format = "mem0"
+path = "~/exports/mem0"        # one file, or a folder of them
+```
+
+| `format` | Where the file comes from |
+|---|---|
+| `mem0` | The JSON of `Memory.get_all()` (open source) or `MemoryClient.get_all()` (platform), saved as `.json` or one memory per line in `.jsonl`, or `mem0 list --output json`. |
+| `letta` | A Letta Agent File (`.af`, exported from the ADE or the API): its memory blocks. Agent Files don't hold archival memory, so passages come from a JSON list of what the passages API returns. Memory kept by Letta Code is Markdown files under `~/.letta/agents/<id>/memory`; point a `markdown` source at that folder instead. |
+| `zep` | Facts (edges) from Zep's `graph.edge.get_by_user_id` / `get_by_graph_id` or Graphiti's `EntityEdge`s, as a JSON list or under `edges`. A fact that stopped being true says since when. |
+| `lines` | A text or Markdown file with one memory per line, optionally starting with `[YYYY-MM-DD] - `. ChatGPT, Claude and Gemini have no memory file to download: copy the list from their memory settings, or ask the assistant to "list every memory you have stored about me" and save the answer (when it has a code block, only the lines in it are read). |
+
+The export files are only read. Writing a newer export over the old file replaces the memories that changed and
+drops the ones that are gone.
+
 ## Agents
 
 Agents use the same CLI: `search --json`, `get` and `recent`. `rummage recall` gives prompt hooks a short block of
@@ -236,6 +261,7 @@ settings for the speaker labels.
 | `dsh-sessions` | `dsh-sessions` | Chats in [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) session logs: one item per message a person wrote, with the reply after it. Config: optional `projects` (default: all), `people` (a JSON map of sender ids to names), `assistant_name`. Off until enabled. |
 | `hermes` | | Chats in a [Hermes Agent](https://github.com/NousResearch/hermes-agent) `state.db`, the same way. Config: `db` (default: Hermes's home), optional `people`, `exclude_sessions`, `frontends`. Off until enabled. |
 | `mail` | | Mail in a Maildir, an mbox, an IMAP or a JMAP account (read-only: nothing is marked read). One item per message: subject, sender, recipients, date, body, and the text of attached documents. Every folder but junk, trash and drafts by default. Config: `maildir` or `mbox`, or `imap_host` + `imap_user`, or `jmap_session` + `jmap_user`; `password_env`, `password_file` or `password_command` (or `oauth_token_command` for OAuth/XOAUTH2 IMAP); optional `folders`, `since` (`2024-01-01`, `2y`). |
+| `memory-export` | | Memories exported from another memory system, one item per memory with its time, user, agent and origin, embedded again with rummage's model (vectors in the file are not used). Config: `format` (`mem0`, `letta`, `zep` or `lines`), `path` (a file or a folder of them), optional `user` and `agent` for files that don't say. See [Coming from another memory system](#coming-from-another-memory-system). |
 | `telegram-stickers` | | The sticker library kept by [dsh-telegram-bot](https://github.com/soffits/dsh-telegram-bot): each sticker's saved meaning, and its picture, so a sticker is found by what it says or shows. Needs ffmpeg and the bot token. |
 
 A plugin of your own is a class registered in the `rummage.sources` entry-point group; the docstring of

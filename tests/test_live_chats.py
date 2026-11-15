@@ -68,6 +68,30 @@ def test_agent_history_is_off_until_enabled(tmp_path, monkeypatch, capsys):
     assert json.loads(out)["results"] == []
 
 
+def test_setup_lists_found_histories_and_asks_before_switching_one_on(tmp_path, monkeypatch, capsys):
+    from rummage import cli
+    from rummage import config as C
+
+    _, cfg = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "_detected", lambda: {"claude-code": {"type": "claude-code"},
+                                                   "codex": {"type": "codex"}})
+    cli._offer_found(C.load(cfg))    # not at a terminal: listed with the commands, nothing switched on
+    out = capsys.readouterr().out
+    assert "rummage sources enable claude-code" in out and "rummage sources enable codex" in out
+    assert "[sources." not in cfg.read_text()
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    answers = iter(["y", "", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    cli._offer_found(C.load(cfg))
+    out = capsys.readouterr().out
+    assert "[sources.claude-code]" in cfg.read_text() and "[sources.codex]" not in cfg.read_text()
+    assert "rummage sources disable claude-code" in out
+    cli._offer_found(C.load(cfg))    # what is on is not offered again
+    assert "claude-code" not in capsys.readouterr().out
+
+
 def test_new_lines_are_searchable_while_another_run_makes_vectors(tmp_path, monkeypatch, capsys):
     project, cfg = _setup(tmp_path, monkeypatch)
     _run(capsys, "--config", str(cfg), "sources", "enable", "claude-code")

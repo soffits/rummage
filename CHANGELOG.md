@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `memory-export` source: memories exported from mem0 (`get_all` JSON or JSONL, platform pages, `mem0 list --output json`), Letta (Agent File memory blocks, passages lists), Zep or Graphiti (fact lists) and assistants whose memory can only be copied (ChatGPT, Claude: one memory per line), one item per memory with its time, user, agent and origin, embedded with rummage's own model. README: "Coming from another memory system".
+- `rummage setup` lists the agent histories found on the machine with the command that switches each on, and asks about each at a terminal; switching a source on prints the command that switches it off.
+
 ## 0.14.0
 
 - Scopes: what `search`, `recall` and `recent` see depends on the folder they run in (`--cwd`, or a hook's `cwd`). Inside a git repository that is the project (its files and the chats held in it, worktrees shared); `[scopes.<name>]` tables give folders like an assistant's home a wider view; elsewhere `default_scope` (everything). Sources with `local = true` are seen only from inside their folder. `--all` sees everything, and every output says which scope applied.

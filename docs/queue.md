@@ -114,6 +114,7 @@ data, tests.
   one. Worth measuring on a real GPU before changing.
 - Not run on a machine with a GPU here (CI and this box have none): the device listing, the download and the
   fall-back-to-CPU path ran for real against the Vulkan build, the GPU-wins path only with stand-ins.
+- `memory-export`: mem0 open source also keeps `~/.mem0/history.db` (every ADD/UPDATE/DELETE with the memory text), which could make mem0 detectable like the agent histories without an export; Letta Agent Files' message history is not read (only memory blocks).
 
 ## Media
 
