@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.17.1
+
+- Fixed: a `files` index made before 0.17.0 kept data files as one item until they changed; the next run now reads them as records.
+
 ## 0.17.0
 
 - The `files` source reads JSON, JSON Lines, CSV and TSV files of records as one item per record: a JSON array of objects (or one under a top-level key), or a table with a header row. Each record's values are searchable as `key: value` lines, the title comes from a title/name/subject-like field, and the item time from a date-like field. Other JSON and single-record files stay one item.
