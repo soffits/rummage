@@ -23,12 +23,13 @@ def recall(session_id="", user_message="", **_):
         return None
     command = os.environ.get("RUMMAGE_COMMAND", "rummage")
     timeout = float(os.environ.get("RUMMAGE_RECALL_TIMEOUT", "5"))
-    event = json.dumps({"prompt": prompt, "session_id": session_id or ""})
+    event = json.dumps({"prompt": prompt, "session_id": session_id or "", "cwd": os.getcwd(), "harness": "hermes"})
     try:
         run = subprocess.run([command, "recall", "--hook"], input=event, capture_output=True, text=True,
                              timeout=timeout)
-        block = json.loads(run.stdout)["hookSpecificOutput"]["additionalContext"] if run.stdout.strip() else ""
-    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        reply = json.loads(run.stdout) if run.stdout.strip() else {}
+        block = (reply.get("hookSpecificOutput") or {}).get("additionalContext", "")
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError):
         return None
     return {"context": block} if block else None
 
