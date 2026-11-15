@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `rummage sources` no longer offers a found agent history whose type is already configured under another name.
 - `mail`: JMAP accounts (`jmap_session`, `jmap_user`), read-only; IMAP reads every folder by default (`folders = "all"`): an "All Mail" folder alone when the server marks one, otherwise everything but junk, trash and drafts; `password_command`; `since` also takes a span (`90d`, `2y`).
 - `media` source: audio and video files searchable by what is said in them. Each file is transcribed once with a local whisper.cpp (`whisper-cli`, after ffmpeg makes 16 kHz mono audio), the transcript is cached by file in the data directory, and passages point to the time they start.
 - A date in a file's path (`2026-10-15`, `2026-W44`, `2026-10`) counts as the file's time for time phrases in queries, besides its modification time: notes of a dated series are about that time whenever they were edited.
