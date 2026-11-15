@@ -1,6 +1,6 @@
 """`rummage serve`: answer searches over HTTP from a machine that holds an index, and keep that index current.
 
-    GET /search?q=...&limit=10&source=...&kind=...&words_only=1   the same JSON as `rummage search --json`
+    GET /search?q=...&limit=10&source=...&kind=...&words_only=1   a rummage.search.v1 object, as `search --json`
     GET /get?ref=#id&loc=...                                      the same JSON as `rummage get --json`
     GET /status                                                   the same JSON as `rummage status --json`
     GET /health                                                   200 "ok"
@@ -21,11 +21,13 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 from . import config as C
 from . import runtime as R
-from .search import Searcher, strong
+from . import envelope as E
+from .search import Searcher
 from .store import Store
 
 
@@ -49,12 +51,14 @@ class Service:
         store = Store(self.cfg.index_path)
         try:
             store.check_version()
-            vector = None if words_only else self.query_vector(q)
+            index_empty = store.db.execute("SELECT count(*) FROM items").fetchone()[0] == 0
+            vector = None if words_only or index_empty else self.query_vector(q)
             hits = Searcher(store.db, sources or None).search(q, vector, limit=limit, kinds=set(kinds) or None)
         finally:
             store.close()
-        return {"query": q, "strong": strong(hits), "seconds": round(time.monotonic() - started, 2),
-                "hits": [h.as_dict() for h in hits]}
+        args = SimpleNamespace(query=q, limit=limit, source=sources, kind=kinds, words_only=words_only,
+                               truncate="off")
+        return E.build(args, [h.as_dict() for h in hits], [], time.monotonic() - started, index_empty)
 
     def get(self, ref: str, loc: str | None) -> dict:
         store = Store(self.cfg.index_path)
