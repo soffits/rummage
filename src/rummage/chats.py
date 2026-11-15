@@ -12,6 +12,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Iterator
@@ -55,6 +56,18 @@ def people_map(path: str | None) -> dict:
         return {}
 
 
+_NOTICE = re.compile(r"^(?:\[[^\]\n]{0,300}\]\s*)+")
+SAME_MESSAGE_SECONDS = 600
+
+
+def said_key(text: str) -> str:
+    """What a person's message says, as a short key that stays the same when another program recorded it with a
+    notice in front (a sender tag, a channel header) or other spacing: one message seen by two sources gets the same
+    key."""
+    core = " ".join(_NOTICE.sub("", text.strip()).split()).lower()[:300]
+    return hashlib.sha1(core.encode("utf-8")).hexdigest()[:16]
+
+
 def turn_item(source: str, prefix: str, turn: Turn, assistant: str) -> Item:
     when = dt.datetime.fromtimestamp(turn.time, dt.timezone.utc).astimezone()
     body = f"{turn.speaker}: {turn.text}"
@@ -63,7 +76,7 @@ def turn_item(source: str, prefix: str, turn: Turn, assistant: str) -> Item:
     fingerprint = hashlib.sha256(body.encode("utf-8", "replace")).hexdigest()
     title = f"{turn.speaker}, {when:%Y-%m-%d %H:%M}" + (f" · {turn.session_title}" if turn.session_title else "")
     info = {"session": turn.session, "message": turn.message, "speaker": turn.speaker,
-            "time": when.isoformat(timespec="seconds")}
+            "time": when.isoformat(timespec="seconds"), "said": said_key(turn.text)}
     if turn.channel:
         info["channel"] = turn.channel
     if turn.session_title:

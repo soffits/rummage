@@ -131,3 +131,26 @@ def test_get_around_a_chat_turn_and_masked_output(tmp_path, monkeypatch, capsys)
     assert "hunter2hunter2" in out
     code, out = _run(capsys, "--config", str(cfg), "search", "wifi password", "--words-only", "--json")
     assert "hunter2" not in out
+
+
+def test_one_message_recorded_by_two_sources_is_one_hit(tmp_path, capsys):
+    logs = tmp_path / "logs"
+    (logs / "a").mkdir(parents=True)
+    (logs / "b").mkdir()
+    when = time.time() - 300
+    _lines(logs / "a" / "s1.jsonl", [{"role": "user", "content": "book the dentist for next Tuesday", "ts": when},
+                                     {"role": "assistant", "content": "Booked for 3 pm.", "ts": when + 2}])
+    _lines(logs / "b" / "s9.jsonl", [{"role": "user", "content": "[Web message from Alice]  Book the dentist for next "
+                                                                 "Tuesday", "ts": when + 1},
+                                     {"role": "assistant", "content": "Booked for 3 pm.", "ts": when + 3}])
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(f"data_dir = '{tmp_path / 'data'}'\n"
+                   f"[sources.harness]\ntype = 'jsonl-chat'\npaths = ['{logs / 'a' / '*.jsonl'}']\ntime = 'ts'\n"
+                   f"[sources.model]\ntype = 'jsonl-chat'\npaths = ['{logs / 'b' / '*.jsonl'}']\ntime = 'ts'\n",
+                   encoding="utf-8")
+    _run(capsys, "--config", str(cfg), "index", "--no-embed", "-q")
+    code, out = _run(capsys, "--config", str(cfg), "search", "dentist tuesday", "--words-only", "--json")
+    results = json.loads(out)["results"]
+    assert len(results) == 1 and len(results[0]["also"]) == 1
+    code, out = _run(capsys, "--config", str(cfg), "get", results[0]["id"], "--json")
+    assert json.loads(out)["also"] == results[0]["also"]

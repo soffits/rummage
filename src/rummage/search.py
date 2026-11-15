@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 from . import text as T
+from .chats import SAME_MESSAGE_SECONDS
 from .store import Scope, Store
 
 WORD_WEIGHT = 2.0
@@ -42,6 +43,7 @@ class Hit:
     date: str | None
     snippet: str
     info: dict
+    also: list[str] | None = None   # the same chat message as recorded by other sources (their refs)
 
     def as_dict(self) -> dict:
         d = asdict(self)
@@ -127,11 +129,17 @@ class Searcher:
         scored.sort(key=lambda s: (-s[0], s[1]))
 
         hits: list[Hit] = []
+        said: dict[str, tuple[Hit, float]] = {}
         for score, item in scored:
             if len(hits) >= limit:
                 break
             row = self.store.item_row(item)
             if row is None or (kinds and row["kind"] not in kinds):
+                continue
+            key = row["info"].get("said")
+            if key in said and abs((row["mtime"] or 0) - said[key][1]) <= SAME_MESSAGE_SECONDS:
+                kept = said[key][0]
+                kept.also = (kept.also or []) + [row["ref"]]   # one message seen by two sources: one hit
                 continue
             semantic = best.get(item)
             use_meaning = semantic is not None and (semantic[0] >= z_gate or item not in word_seg)
@@ -143,6 +151,8 @@ class Searcher:
                 score=score, z=semantic[0] if semantic else None, cosine=semantic[1] if semantic else None,
                 words=coverage.get(item, 0.0), segment=seg_kind, loc=loc, lines=lines,
                 date=_date(row["info"], row["mtime"]), snippet=T.snippet(seg_text or "", words), info=row["info"]))
+            if key:
+                said[key] = (hits[-1], row["mtime"] or 0)
         return hits
 
 
