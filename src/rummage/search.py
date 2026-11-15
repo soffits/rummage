@@ -45,15 +45,30 @@ class Hit:
 
 
 class Searcher:
-    def __init__(self, db: sqlite3.Connection, sources: list[str] | None = None):
+    def __init__(self, db: sqlite3.Connection, sources: list[str] | None = None, paths: list[str] | None = None,
+                 globs: list[str] | None = None):
+        """`sources`: only these sources. `paths`: only items whose ref starts with one of these prefixes. `globs`:
+        only items whose ref matches one of these patterns (`*` crosses folders, as in SQLite's GLOB)."""
         self.db = db
         self.sources = sources
+        self.paths = [p.rstrip("/") for p in paths or []]
+        self.globs = list(globs or [])
         self._loaded = False
 
     def _where(self, alias: str = "i") -> tuple[str, list]:
-        if not self.sources:
-            return "", []
-        return f" AND {alias}.source IN ({','.join('?' * len(self.sources))})", list(self.sources)
+        clauses, args = [], []
+        if self.sources:
+            clauses.append(f"{alias}.source IN ({','.join('?' * len(self.sources))})")
+            args += self.sources
+        if self.paths:
+            clauses.append("(" + " OR ".join(f"{alias}.ref = ? OR {alias}.ref LIKE ? ESCAPE '\\'"
+                                              for _ in self.paths) + ")")
+            for p in self.paths:
+                args += [p, p.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"]
+        if self.globs:
+            clauses.append("(" + " OR ".join(f"{alias}.ref GLOB ?" for _ in self.globs) + ")")
+            args += self.globs
+        return ("".join(f" AND {c}" for c in clauses), args)
 
     def _load(self) -> None:
         where, args = self._where()
