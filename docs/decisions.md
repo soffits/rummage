@@ -15,5 +15,6 @@
 
 ## Sources
 
+- `dsh-sessions` reads who wrote a message from `source.principal` first (DSH's field for the caller behind a user message, filled by dsh-oidc and dsh-telegram-bot as `{kind, channel, id, name?}`), then from the text tag or OIDC notice: structured data beats parsing, and old logs have only the text.
 - Chats: one item per message a person wrote plus the reply after it; the model reads the start of both, keyword search the full text.
 - Seafile: an account token with read-only shares; head commit per library, then file object ids; archives listed over HTTP range requests.
