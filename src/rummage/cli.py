@@ -1,10 +1,11 @@
-"""rummage: local hybrid search over notes, stickers, chats and file libraries.
+"""rummage: local search by meaning and exact words over your files.
 
     rummage setup                  fetch the pinned llama.cpp build and EmbeddingGemma 2 files
     rummage index [-s SOURCE]      bring the index up to date (incremental)
     rummage search QUERY [--json]  search by meaning and exact words
     rummage status [--json]        what's indexed, and how the last runs went
     rummage doctor [--json]        check runtime, vectors and source freshness; exit 1 on a problem
+    rummage sources                list the installed source types (core and plugins)
     rummage serve                  answer searches over HTTP (for an index kept on another machine)
 """
 
@@ -22,7 +23,7 @@ from . import config as C
 from . import runtime as R
 from .indexer import Busy, Embedders, index_source, lock
 from .search import Searcher
-from .sources import build
+from .sources import available, build
 from .store import Store, VersionMismatch
 
 REFERENCE_TEXTS = [
@@ -190,6 +191,16 @@ def cmd_search(cfg: C.Config, args) -> int:
     return 0
 
 
+def cmd_sources(cfg: C.Config, args) -> int:
+    types = available()
+    if args.json:
+        print(json.dumps({"types": types, "configured": {n: s.get("type") for n, s in cfg.sources.items()}}))
+        return 0
+    for name, target in sorted(types.items()):
+        print(f"{name:20} {target}")
+    return 0
+
+
 def cmd_serve(cfg: C.Config, args) -> int:
     from .serve import run
 
@@ -213,7 +224,11 @@ def cmd_doctor(cfg: C.Config, args) -> int:
     problems: list[str] = []
     notes: list[str] = []
     rt = _runtime(cfg)
-    media = any(s.get("type") == "telegram-stickers" for s in cfg.sources.values())
+    try:
+        media = any(build(n, s, cfg.data_dir).media for n, s in cfg.sources.items())
+    except ValueError as error:
+        problems.append(str(error))
+        media = False
     missing = rt.missing(media)
     if missing:
         problems.append("runtime files missing (run `rummage setup`): " + ", ".join(missing))
@@ -294,6 +309,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-remote", action="store_true", help="only the local index")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("sources", help="list the installed source types")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_sources)
 
     p = sub.add_parser("serve", help="answer searches over HTTP and keep the index current")
     p.add_argument("--host", default="127.0.0.1")

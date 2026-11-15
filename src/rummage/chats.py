@@ -10,9 +10,9 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .. import text as T
-from ..runtime import document_text
-from ..store import Item, Segment
+from . import text as T
+from .runtime import document_text
+from .store import Item, Segment
 
 HUMAN_EMBED_CHARS = 1200
 REPLY_EMBED_CHARS = 600

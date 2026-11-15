@@ -9,6 +9,8 @@ from rummage import extract as X
 from rummage import text as T
 from rummage.runtime import DIM
 from rummage.search import Searcher
+from rummage.sources import available, build
+from rummage.sources.files import FilesSource
 from rummage.sources.markdown import MarkdownSource, _frontmatter
 from rummage.store import Item, Segment, Store
 
@@ -47,7 +49,7 @@ def test_markdown_plan_and_load(tmp_path):
     (tmp_path / "a.md").write_text("---\naliases: [宠物]\n---\n# Cats\n\nOur cat sleeps on the sofa every afternoon.\n")
     (tmp_path / ".obsidian").mkdir()
     (tmp_path / ".obsidian" / "x.md").write_text("hidden")
-    src = MarkdownSource("notes", {"root": str(tmp_path)})
+    src = MarkdownSource("notes", {"root": str(tmp_path)}, tmp_path)
     plan = src.plan({}, {})
     items = list(plan.upserts)
     assert [i.key for i in items] == ["a.md"]
@@ -108,3 +110,31 @@ def test_store_replaces_segments(tmp_path):
     store.commit()
     assert store.db.execute("SELECT count(*) FROM items").fetchone()[0] == 0
     store.close()
+
+
+def test_entry_points_register_core_and_plugins(tmp_path):
+    types = available()
+    for name in ("markdown", "files", "seafile", "dsh-sessions", "hermes", "telegram-stickers"):
+        assert name in types
+    assert isinstance(build("n", {"type": "files", "root": str(tmp_path)}, tmp_path), FilesSource)
+
+
+def test_files_source_reads_each_kind(tmp_path):
+    (tmp_path / "a.md").write_text("---\ntitle: Pets\n---\nOur cat sleeps on the sofa every afternoon.\n")
+    (tmp_path / "b.txt").write_text("The train leaves at nine and we booked seats 14A and 14B together.")
+    with zipfile.ZipFile(tmp_path / "c.zip", "w") as z:
+        z.writestr("inner/report.pdf", b"x")
+    (tmp_path / "d.png").write_bytes(b"\x89PNG fake")
+    (tmp_path / "e.exe").write_bytes(b"MZ")
+    (tmp_path / ".hidden").mkdir()
+    (tmp_path / ".hidden" / "x.txt").write_text("secret")
+    src = FilesSource("f", {"root": str(tmp_path)}, tmp_path)
+    assert src.media
+    items = {i.key: i for i in src.plan({}, {}).upserts}
+    assert set(items) == {"a.md", "b.txt", "c.zip", "d.png", "e.exe"}
+    assert src.load(items["a.md"])[0].text.startswith("a.md Pets")
+    assert "14A" in src.load(items["b.txt"])[1].text
+    assert src.load(items["c.zip"])[1].text == "inner/report.pdf"
+    image = src.load(items["d.png"])
+    assert image[1].kind == "image" and image[1].image == b"\x89PNG fake"
+    assert len(src.load(items["e.exe"])) == 1

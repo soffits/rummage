@@ -10,10 +10,11 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from pathlib import Path
 
-from ..store import Item, Segment
-from . import Plan, Source
-from .chats import Turn, people_map, turn_item, turn_segments
+from rummage.store import Item, Segment
+from rummage.sources import Plan, Source
+from rummage.chats import Turn, people_map, turn_item, turn_segments
 
 DEFAULT_FRONTENDS = ["telegram", "desktop", "tui", "api_server"]
 # Injected by Hermes itself, not typed by a person.
@@ -24,7 +25,7 @@ DEFAULT_INJECTED = [
 
 
 class HermesSource(Source):
-    def __init__(self, name: str, spec: dict):
+    def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
         self.db_path = os.path.expanduser(spec["db"])
         self.frontends = list(spec.get("frontends", DEFAULT_FRONTENDS))

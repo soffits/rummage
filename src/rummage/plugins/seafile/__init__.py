@@ -15,11 +15,11 @@ import urllib.parse
 import urllib.request
 from pathlib import Path, PurePosixPath
 
-from .. import extract as X
-from .. import text as T
-from ..runtime import document_text
-from ..store import Item, Segment
-from . import Plan, Source
+from rummage import extract as X
+from rummage import text as T
+from rummage.runtime import document_text
+from rummage.store import Item, Segment
+from rummage.sources import Plan, Source
 
 
 class HTTPRangeFile(io.RawIOBase):
@@ -70,7 +70,7 @@ class HTTPRangeFile(io.RawIOBase):
 
 
 class SeafileSource(Source):
-    def __init__(self, name: str, spec: dict):
+    def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
         self.url = spec["url"].rstrip("/")
         self.internal_url = (spec.get("internal_url") or "").rstrip("/") or None
@@ -152,8 +152,8 @@ class SeafileSource(Source):
         name_line = f"{item.info['library']}{path}"
         segments = [Segment("name", name_line)]
         limit = self.limits.get(kind, 0)
-        if kind == "name" or (kind != "archive" and size > limit):
-            if kind != "name":
+        if kind in ("name", "image") or (kind != "archive" and size > limit):
+            if kind not in ("name", "image"):
                 item.info["skipped"] = f"over {limit} bytes"
             return segments
         url = self._download_url(repo_id, path)
