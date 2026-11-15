@@ -45,9 +45,6 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 
 ## Leftovers from the agent-history batch
 
-- **Same conversation in two sources.** When one harness drives another (a harness that runs Claude Code as its
-  model, say), the same messages land in both sources. Collapse hits whose person text is nearly the same and whose
-  times are minutes apart into one hit with the other refs as aliases; `get` shows both.
 - **OpenCode 1.x databases** (`session`, `message`, `part` tables) and its older JSON `storage/` folder.
 
 ## Next ideas, in this order unless benchmarks say otherwise

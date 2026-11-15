@@ -36,6 +36,7 @@ from . import runtime as R
 from . import text as T
 from .indexer import Busy, Embedders, embed_pending, index_source, lock
 from .search import Searcher
+from .chats import SAME_MESSAGE_SECONDS
 from .query import meaning_vector
 from .secrets import mask_value
 from .sources import available, build, load_type
@@ -343,6 +344,9 @@ def cmd_get(cfg: C.Config, args) -> int:
     try:
         row = store.find(args.ref)
         doc = store.item(row, args.loc)
+        also = store.same_message(row, SAME_MESSAGE_SECONDS)
+        if also:
+            doc["also"] = also
         if args.around is not None:
             doc["around"] = _around(cfg, store, row, doc, args.around)
     except Ambiguous as error:
@@ -369,7 +373,8 @@ def cmd_get(cfg: C.Config, args) -> int:
     if args.json:
         print(json.dumps(doc, ensure_ascii=False))
         return 0
-    print(f"{doc['id']}  [{doc['source']}] {doc['title']}  ({doc['ref']})\n")
+    print(f"{doc['id']}  [{doc['source']}] {doc['title']}  ({doc['ref']})"
+          + (f"\n  also recorded as: {', '.join(doc['also'])}" if doc.get("also") else "") + "\n")
     around = doc.get("around")
     if around and around.get("turns"):
         for turn in around["turns"]:

@@ -434,6 +434,16 @@ class Store:
                 break
         return out
 
+    def same_message(self, row: int, seconds: float) -> list[str]:
+        """Refs of the same chat message recorded by other sources (same `said` key, times within `seconds`)."""
+        info, mtime, source = self.db.execute("SELECT info, mtime, source FROM items WHERE id = ?", (row,)).fetchone()
+        said = json.loads(info or "{}").get("said")
+        if not said:
+            return []
+        return [ref for (ref,) in self.db.execute(
+            "SELECT ref FROM items WHERE json_extract(info, '$.said') = ? AND id != ? AND abs(mtime - ?) <= ?",
+            (said, row, mtime or 0, seconds))]
+
     def neighbours(self, row: int, around: int) -> list[dict]:
         """The chat turns around item `row` in its session, in time order (the item itself included)."""
         source, info = self.db.execute("SELECT source, info FROM items WHERE id = ?", (row,)).fetchone()
