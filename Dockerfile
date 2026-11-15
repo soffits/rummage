@@ -2,6 +2,10 @@
 # `rummage setup` on first start (checked by size and SHA-256), so the image stays small.
 FROM python:3.12-slim-bookworm
 
+LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+      org.opencontainers.image.source="https://github.com/soffits/rummage" \
+      org.opencontainers.image.description="Local search by meaning and exact words over your files"
+
 ARG LLAMA_TAG=b12387
 ARG LLAMA_SHA256=9c58ebcd5a704e879cfadf2bbcb1fb1ec8ad4a5bec761fc58b3515864dd5e37a
 
@@ -14,9 +18,9 @@ RUN apt-get update \
  && mkdir -p /opt/llama && tar -xzf /tmp/llama.tgz -C /opt/llama --strip-components=1 && rm /tmp/llama.tgz \
  && useradd --system --create-home --uid 10001 rummage
 
-COPY pyproject.toml README.md /src/
+COPY pyproject.toml README.md LICENSE NOTICE /src/
 COPY src /src/src
-RUN pip install --no-cache-dir "/src[server]" && rm -rf /src
+RUN pip install --no-cache-dir "/src[archives,seafile]" && rm -rf /src
 
 ENV RUMMAGE_DATA_DIR=/data RUMMAGE_LLAMA_SERVER=/opt/llama/llama-server
 USER rummage

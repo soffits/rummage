@@ -17,9 +17,9 @@ import os
 import re
 from pathlib import Path
 
-from ..store import Item, Segment
-from . import Plan, Source
-from .chats import Turn, people_map, turn_item, turn_segments
+from rummage.store import Item, Segment
+from rummage.sources import Plan, Source
+from rummage.chats import Turn, people_map, turn_item, turn_segments
 
 LOG_NAME = "session.v4.jsonl.zstd"
 _TG_TAG = re.compile(r"^\[Telegram message from .*?user id (\d+)\)\]")
@@ -54,7 +54,7 @@ def _text(data: dict) -> str:
 
 
 class DshSessionSource(Source):
-    def __init__(self, name: str, spec: dict):
+    def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
         home = Path(os.path.expanduser(spec.get("dsh_home") or os.environ.get("DSH_HOME") or "~/.dsh"))
         self.root = Path(os.path.expanduser(spec.get("sessions", str(home / "sessions"))))

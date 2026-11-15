@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import io
 import re
+import shutil
+import subprocess
 import tarfile
 import zipfile
 from html.parser import HTMLParser
@@ -20,15 +22,18 @@ TEXT = {".md", ".markdown", ".txt", ".text", ".rst", ".org", ".tex", ".csv", ".t
 HTML = {".html", ".htm", ".xhtml"}
 OFFICE = {".docx", ".pptx", ".xlsx", ".odt", ".odp", ".ods", ".sdoc"}
 PDF = {".pdf"}
+IMAGES = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".heic", ".heif", ".tif", ".tiff"}
+NATIVE_IMAGES = {".jpg", ".jpeg", ".png", ".bmp"}   # read by the model's own image loader as they are
 ARCHIVES = {".zip", ".7z", ".rar", ".tar", ".tgz", ".tar.gz", ".tbz2", ".tar.bz2", ".txz", ".tar.xz", ".jar", ".apk"}
 NAME_ONLY = {".exe", ".msi", ".dmg", ".pkg", ".iso", ".img", ".bin", ".dll", ".so", ".deb", ".rpm", ".appimage",
              ".vhd", ".vhdx", ".vmdk", ".qcow2", ".nsp", ".xci", ".nds", ".3ds", ".gba", ".sav", ".dat", ".db",
              ".sqlite", ".mp3", ".flac", ".wav", ".m4a", ".ogg", ".mp4", ".mkv", ".mov", ".avi", ".webm", ".jpg",
              ".jpeg", ".png", ".heic", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".raw", ".dng", ".psd", ".ttf",
-             ".otf", ".woff", ".woff2"}
+             ".otf", ".woff", ".woff2"} - IMAGES
 
 # Bytes read at most per kind (bigger files keep their name and, for archives, nothing more).
-LIMITS = {"text": 4 << 20, "html": 8 << 20, "office": 64 << 20, "pdf": 128 << 20, "tar": 256 << 20}
+LIMITS = {"text": 4 << 20, "html": 8 << 20, "office": 64 << 20, "pdf": 128 << 20, "tar": 256 << 20,
+          "image": 40 << 20}
 MAX_CHARS = 400_000
 MAX_NAMES = 5000
 
@@ -53,6 +58,8 @@ def kind_of(name: str) -> str:
         return "pdf"
     if s in ARCHIVES:
         return "archive"
+    if s in IMAGES:
+        return "image"
     return "name"
 
 
@@ -160,3 +167,19 @@ def archive_names(fh, name: str) -> list[str]:
 
 def names_text(names: list[str]) -> str:
     return "\n".join(names)
+
+
+def to_png(raw: bytes, ffmpeg: str | None = None, flatten: bool = True) -> bytes:
+    """The first frame of any image or video ffmpeg reads, as PNG, transparency flattened onto white."""
+    ffmpeg = ffmpeg or shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("this picture needs ffmpeg to be read")
+    graph = ("color=white,format=rgb24[bg];[bg][0:v]scale2ref[bg2][fg];[bg2][fg]overlay=shortest=1,format=rgb24"
+             if flatten else "format=rgb24")
+    run = subprocess.run(
+        [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-filter_complex", graph,
+         "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
+        input=raw, capture_output=True, timeout=120)
+    if run.returncode != 0 or not run.stdout:
+        raise RuntimeError(f"ffmpeg could not read the picture: {run.stderr[:200]!r}")
+    return run.stdout

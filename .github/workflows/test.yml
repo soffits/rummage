@@ -3,7 +3,9 @@ name: test
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**"]
 
 jobs:
   test:
@@ -11,4 +13,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv run --with pytest --extra server pytest -q
+      - run: uv run --with pytest --extra archives --extra dsh-sessions pytest -q

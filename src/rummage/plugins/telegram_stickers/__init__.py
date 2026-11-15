@@ -12,14 +12,14 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from ..runtime import document_text
-from ..store import Item, Segment
-from . import Plan, Source
+from rummage import extract as X
+from rummage.runtime import document_text
+from rummage.store import Item, Segment
+from rummage.sources import Plan, Source
 
 API = "https://api.telegram.org"
 
@@ -112,7 +112,7 @@ class StickerSource(Source):
             raw, ext = self._file(entry["fileId"])
         else:
             return None
-        png = self._flatten(raw)
+        png = X.to_png(raw, self.ffmpeg)
         self.cache.mkdir(parents=True, exist_ok=True, mode=0o700)
         partial = target.with_suffix(".part")
         partial.write_bytes(png)
@@ -129,17 +129,6 @@ class StickerSource(Source):
         path = meta["result"]["file_path"]
         with urllib.request.urlopen(f"{API}/file/bot{self.token}/{path}", timeout=60) as r:
             return r.read(), Path(path).suffix
-
-    def _flatten(self, raw: bytes) -> bytes:
-        """First frame, transparency flattened onto white, as PNG (the model's image reader takes PNG/JPEG)."""
-        graph = "color=white,format=rgb24[bg];[bg][0:v]scale2ref[bg2][fg];[bg2][fg]overlay=shortest=1,format=rgb24"
-        run = subprocess.run(
-            [self.ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-filter_complex", graph,
-             "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
-            input=raw, capture_output=True, timeout=60)
-        if run.returncode != 0 or not run.stdout:
-            raise RuntimeError(f"ffmpeg could not read the sticker: {run.stderr[:200]!r}")
-        return run.stdout
 
 
 def _safe(sid: str) -> str:

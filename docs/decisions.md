@@ -15,6 +15,12 @@
 
 ## Sources
 
+- Source types are entry points in the `rummage.sources` group, so services are plugins and third parties can add their own; the core keeps only generic folder sources.
+- Bundled plugins live in `rummage.plugins.*` with extras for their packages, rather than separate distributions: one install and one image, while the core never imports them.
 - `dsh-sessions` reads who wrote a message from `source.principal` first (DSH's field for the caller behind a user message, filled by dsh-oidc and dsh-telegram-bot as `{kind, channel, id, name?}`), then from the text tag or OIDC notice: structured data beats parsing, and old logs have only the text.
 - Chats: one item per message a person wrote plus the reply after it; the model reads the start of both, keyword search the full text.
 - Seafile: an account token with read-only shares; head commit per library, then file object ids; archives listed over HTTP range requests.
+
+## Licence
+
+- AGPL-3.0-or-later from 0.3.0: `serve` makes it a network service, and modified hosted versions should share their source.
