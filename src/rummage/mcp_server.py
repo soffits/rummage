@@ -15,6 +15,7 @@ from . import config as C
 from . import daemon as D
 from . import envelope as E
 from . import runtime as R
+from .query import FALLBACK_ERRORS, reason_for
 from .search import Searcher
 from .secrets import mask_value
 from .store import Store
@@ -63,14 +64,20 @@ def build(cfg: C.Config):
         try:
             store.check_version()
             index_empty = store.item_count() == 0
-            vector = None if words_only or index_empty else query_vector(query)
+            vector, degraded = None, None
+            if not (words_only or index_empty):
+                try:
+                    vector = query_vector(query)
+                except FALLBACK_ERRORS as error:
+                    degraded = reason_for(error)
             hits = Searcher(store, sources, paths, globs).search(query, vector, limit=limit)
         finally:
             store.close()
         args = SimpleNamespace(query=query, limit=limit, source=sources, kind=None, words_only=words_only,
                                truncate=truncate, path=paths, glob=globs)
         results = [shown(h.as_dict(), show_secrets) for h in hits]
-        return E.build(args, E.truncate(results, truncate), [], time.monotonic() - started, index_empty)
+        return E.mark_degraded(E.build(args, E.truncate(results, truncate), [], time.monotonic() - started,
+                                       index_empty), degraded)
 
     @server.tool(annotations=read_only)
     def get(ref: str, loc: str | None = None, head: int | None = None, around: int | None = None,

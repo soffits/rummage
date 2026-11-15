@@ -85,7 +85,9 @@ failed or any item failed, with one line per problem on stderr, so a scheduler t
   index busy, and keeps one `--embed-only` process running while vectors are pending; the scheduled hourly run is
   the backstop for anything a watcher missed.
 
-`rummage search` loads the text model for the query (~1 s), or nothing with `--words-only`.
+`rummage search` takes the query vector from a running daemon, or loads the text model (~1 s), or nothing with
+`--words-only`. When the model can't be had (files missing, the server not ready within 20 s, an error while
+embedding), every front end searches by words and reports `degraded_reason` instead of failing (`query.py`).
 
 ## Life cycle
 

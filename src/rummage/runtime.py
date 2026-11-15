@@ -198,7 +198,7 @@ class Embedder:
     """
 
     def __init__(self, runtime: Runtime, media: bool, threads: int = 2, nice: int = 10, log_path: Path | None = None,
-                 die_with_parent: bool = True):
+                 die_with_parent: bool = True, ready_timeout: float = 120):
         missing = runtime.missing(media)
         if missing:
             raise RuntimeMissing("missing " + ", ".join(missing) + ": run `rummage setup`")
@@ -209,6 +209,7 @@ class Embedder:
         self.log_path = log_path
         # PR_SET_PDEATHSIG follows the starting *thread*: a server that starts it from a request thread opts out.
         self.die_with_parent = die_with_parent
+        self.ready_timeout = ready_timeout
         self.port = 0
         self.process: subprocess.Popen | None = None
         self.marker: str | None = None
@@ -246,7 +247,7 @@ class Embedder:
                                         preexec_fn=_die_with_parent if self.die_with_parent and os.name == "posix" else None)
         if log is not subprocess.DEVNULL:
             log.close()
-        deadline = time.monotonic() + 120
+        deadline = time.monotonic() + self.ready_timeout
         while True:
             if self.process.poll() is not None:
                 raise EmbedError(f"llama-server exited with {self.process.returncode} while loading"
@@ -259,7 +260,7 @@ class Embedder:
                 pass
             if time.monotonic() > deadline:
                 self.stop()
-                raise EmbedError("llama-server did not become ready in 120 s")
+                raise EmbedError(f"llama-server did not become ready in {self.ready_timeout:g} s")
             time.sleep(0.05)
         if self.media:
             self.marker = self._get("/props").get("media_marker")

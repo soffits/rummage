@@ -36,6 +36,7 @@ from . import runtime as R
 from . import text as T
 from .indexer import Busy, Embedders, embed_pending, index_source, lock
 from .search import Searcher
+from .query import meaning_vector
 from .secrets import mask_value
 from .sources import available, build, load_type
 from .store import Ambiguous, NotFound, Store, VersionMismatch
@@ -188,6 +189,7 @@ def cmd_search(cfg: C.Config, args) -> int:
     local_sources = [s for s in (args.source or []) if s in cfg.sources] if args.source else None
     index_empty = True
     pending = 0
+    degraded = None
     if not cfg.index_path.exists() and not cfg.remotes:
         return _fail(args, "index_missing", E.INDEX_MISSING, "no index yet: run `rummage index`",
                      [{"intent": "build_index", "reason": "Nothing is indexed yet.", "command": ["rummage", "index"]}])
@@ -198,10 +200,7 @@ def cmd_search(cfg: C.Config, args) -> int:
             index_empty = store.item_count() == 0
             vector = None
             if not args.words_only and not index_empty:
-                vector = None if args.no_daemon else D.query_vector(cfg.data_dir, args.query)
-                if vector is None:
-                    with R.embedder(_runtime(cfg), media=False, threads=cfg.threads, nice=0) as e:
-                        vector = e.query(args.query)
+                vector, degraded = meaning_vector(cfg, args.query, use_daemon=not args.no_daemon)
             searcher = Searcher(store, local_sources, args.path, args.glob)
             hits += [_show(cfg, args, h.as_dict()) for h in searcher.search(
                 args.query, vector, limit=args.limit, kinds=set(args.kind) if args.kind else None)]
@@ -210,14 +209,6 @@ def cmd_search(cfg: C.Config, args) -> int:
             return _fail(args, "index_invalid", E.INDEX_MISSING, str(error),
                          [{"intent": "rebuild_index", "reason": "The index was made with other vectors.",
                            "command": ["rummage", "index", "--rebuild"]}])
-        except R.RuntimeMissing as error:
-            return _fail(args, "model_missing", E.MODEL_MISSING, str(error),
-                         [{"intent": "fetch_model", "reason": "The model files aren't here yet.",
-                           "command": ["rummage", "setup"]},
-                          {"intent": "search_words_only", "reason": "Keyword search needs no model.",
-                           "command": ["rummage", "search", args.query, "--json", "--words-only"]}])
-        except R.EmbedError as error:
-            errors.append(str(error))
         finally:
             store.close()
     for name, spec in cfg.remotes.items():
@@ -233,6 +224,7 @@ def cmd_search(cfg: C.Config, args) -> int:
     hits = E.truncate(hits[: args.limit], args.truncate)
     doc = E.build(args, hits, errors, time.monotonic() - started, index_empty)
     doc["summary"]["pending_vectors"] = pending
+    E.mark_degraded(doc, degraded)
     for error in errors:
         _eprint("warning:", error)
     if args.files:
@@ -245,6 +237,8 @@ def cmd_search(cfg: C.Config, args) -> int:
             doc = E.fit(doc, args.budget_tokens)
         print(json.dumps(doc, ensure_ascii=False))
         return E.OK if doc["status"] != "error" else E.FAILED
+    if degraded:
+        _eprint(f"note: {degraded}")
     if not hits:
         print("nothing found" if doc["status"] != "empty_index" else "nothing indexed yet: run `rummage index`")
         return E.OK if doc["status"] != "error" else E.FAILED
