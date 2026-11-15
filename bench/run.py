@@ -103,8 +103,8 @@ def dir_size(path: Path) -> int:
 def run_rummage(corpus: Path, queries: dict, home: Path, runtime_dir: Path | None, threads: int) -> tuple:
     data = home / "rummage-data"
     config = home / "rummage.toml"
-    config.write_text(f'data_dir = "{data}"\n[runtime]\nthreads = {threads}\nnice = 10\n'
-                      f'[sources.corpus]\ntype = "files"\nroot = "{corpus}"\nimages = false\n', encoding="utf-8")
+    config.write_text(f"""data_dir = '{data}'\n[runtime]\nthreads = {threads}\nnice = 10\n"""
+                      f"""[sources.corpus]\ntype = "files"\nroot = '{corpus}'\nimages = false\n""", encoding="utf-8")
     if runtime_dir and not (data / "runtime").exists():
         data.mkdir(parents=True, exist_ok=True)
         (data / "runtime").symlink_to(runtime_dir.resolve())
@@ -203,7 +203,7 @@ def main() -> int:
                     "threads": args.threads})
     out = corpus.parent / "results" / f"{args.engine}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(summary, indent=2))
+    out.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary))
     return 0
 

@@ -1,0 +1,36 @@
+# Installs rummage the way a user would, fetches the pinned runtime and model, and runs a real index and search on
+# each system. Weekly, on release tags, and by hand: it downloads ~330 MB per system.
+name: install
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv tool install .
+      - name: index and search a small folder
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/notes"
+          printf 'The lease allows one dog with written consent from the landlord.\n' > "$RUNNER_TEMP/notes/lease.md"
+          printf 'The train to Montreal leaves Union Station at nine on Friday.\n' > "$RUNNER_TEMP/notes/trip.md"
+          printf 'Grocery list: rice, eggs, spinach, tofu and green tea for the week.\n' > "$RUNNER_TEMP/notes/food.md"
+          export RUMMAGE_CONFIG="$RUNNER_TEMP/rummage.toml"
+          printf "[sources.notes]\ntype = 'files'\nroot = '%s'\n" "$RUNNER_TEMP/notes" > "$RUMMAGE_CONFIG"
+          rummage setup
+          rummage index
+          rummage search "can I have a pet in my apartment" --json > out.json
+          python -c "import json; d = json.load(open('out.json')); print(d['results'][0]); assert d['results'][0]['ref'] == 'lease.md'"
+          rummage doctor

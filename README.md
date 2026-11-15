@@ -25,8 +25,8 @@ $ rummage search "INV-20931" --words-only --json
 
 ## Install
 
-Needs Python 3.11+. On Linux x86-64, `rummage setup` downloads the pinned llama.cpp build and the model files and
-checks their SHA-256; elsewhere, point `runtime.llama_server` at a `llama-server` you built.
+Needs Python 3.11+. On Linux, macOS and Windows (x64 or ARM), `rummage setup` downloads the pinned llama.cpp build
+and the model files and checks their SHA-256; elsewhere, point `runtime.llama_server` at a `llama-server` you built.
 
 ```sh
 uv tool install 'git+https://github.com/soffits/rummage'          # core
@@ -36,10 +36,12 @@ rummage setup            # ~330 MB text model; ~880 MB with the image encoder
 
 ## Configure
 
-`~/.config/rummage/config.toml` (or `$RUMMAGE_CONFIG`). Each source has a name you choose and a `type`:
+`~/.config/rummage/config.toml` (Windows: `%APPDATA%\rummage\config.toml`; or `$RUMMAGE_CONFIG`). Each source has a
+name you choose and a `type`. On Windows, write paths in single quotes (`root = 'C:\Users\me\Documents'`), which
+TOML reads without escapes:
 
 ```toml
-data_dir = "~/.local/share/rummage"   # index, runtime files, logs
+data_dir = "~/.local/share/rummage"   # index, runtime files, logs (Windows default: %LOCALAPPDATA%\rummage)
 
 [runtime]
 threads = 2                           # CPU threads for llama.cpp
