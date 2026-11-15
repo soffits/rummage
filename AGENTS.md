@@ -14,7 +14,7 @@ User docs: `README.md`. Design and the reasons behind it: `docs/design.md`, `doc
   endpoint embedder. `switch.py`: a model switch's record and phases; `calibrate.py`: per-model thresholds;
   `compare.py`: `rummage models compare`.
 - `store.py` (SQLite schema), `text.py` (normalisation, CJK tokens, chunking), `search.py` (ranking), `indexer.py`
-  (one run, per-item commits, lock), `cli.py`, `serve.py` (HTTP API), `extract.py` (file bytes to text).
+  (one run, per-item commits, lock), `cli.py`, `daemon.py` (the query daemon), `extract.py` (file bytes to text).
 - `sources/`: the source base and entry-point discovery (`rummage.sources` group), the core types `markdown` and `files`
   (folder walking in `folder.py`). `plugins/<name>/`: service-specific source types (seafile, dsh-sessions, hermes,
   telegram-stickers), each registered as an entry point in `pyproject.toml`, with its own extra when it needs packages.
@@ -32,11 +32,13 @@ User docs: `README.md`. Design and the reasons behind it: `docs/design.md`, `doc
 
 ## Checks and releases
 
-- `uv run --with pytest --extra archives --extra dsh-sessions --extra mcp --extra watch --extra dates pytest -q` runs the tests (no model needed). CI runs them on pushes
+- `uv run --with pytest --extra archives --extra dsh-sessions --extra watch pytest -q` runs the tests (no model needed). CI runs them on pushes
   to `main` and on pull requests.
 - A real run needs the model: `rummage setup`, then `rummage index` and `rummage search` against a small config.
 - Release: update `CHANGELOG.md`, bump `version` in `pyproject.toml` and `src/rummage/__init__.py`, merge to `main`,
-  then push the tag `vX.Y.Z`; the `image` workflow publishes `ghcr.io/soffits/rummage:X.Y.Z` and `X.Y`.
+  then push the tag `vX.Y.Z`; the `install` workflow then installs it on each system and runs a real index and search.
+- Scope: rummage reads, finds, opens and says what it left out; judgment (next query, time phrases, duplicates,
+  contradictions, people) is the calling agent's. Reasons in `docs/decisions.md`, "Scope".
 
 ## Working on the project
 

@@ -29,33 +29,3 @@ A second backend implements these against another engine; `Searcher`, the indexe
 input as JSONL, the active model's vectors as raw little-endian float16 rows, the model version and its thresholds in
 `manifest.json`), and `rummage import DIR` fills an empty index from them. Nothing is embedded again, so this is how
 an index moves to another machine or engine. Vectors only mix with others of the same model version.
-
-## Postgres with pgvector
-
-Worth it when the index is shared (a server answering several people or machines), when it outgrows an exact scan
-(millions of segments), or when it should live next to other data in a database that's already run and backed up.
-For one person's notes and chats it adds a server and gains nothing.
-
-What such a backend would hold:
-
-| Table | Columns |
-|---|---|
-| `items` | `id bigserial`, `source text`, `key text`, `kind`, `title`, `ref`, `mtime double precision`, `fingerprint`, `info jsonb`, unique (`source`, `key`) |
-| `segments` | `id bigserial`, `item bigint references items on delete cascade`, `kind`, `loc`, `text`, `lines`, `input jsonb`, `search tsvector` |
-| `vectors` | `segment bigint references segments on delete cascade`, `model text`, `vector halfvec`, `hash text`, primary key (`model`, `segment`) |
-| `source_state`, `runs`, `meta` | as in SQLite |
-
-- **Meaning:** `halfvec` keeps the float16 storage; an HNSW index is built per model (a partial index on
-  `model = ...`, with that model's dimension), so a switch builds the new one beside the old. rummage scores every vector and puts the scores on one
-  scale per query (z-scores per modality), which needs the mean and spread over all of them; with an exact scan
-  that's one pass. An HNSW index (`halfvec_cosine_ops`) only returns the nearest k, so the backend would take the
-  top few thousand by cosine and estimate mean and spread from a fixed random sample of segments instead. Below
-  about a million segments an exact scan in Postgres is still fine.
-- **Words:** `segments.search` as `to_tsvector('simple', title_weighted || text)` over the text rummage already
-  normalized, with a GIN index; `simple` doesn't stem or drop stopwords, which matches what FTS5's `unicode61` does
-  here. CJK needs no special tokenizer because each character is already a separate token; pg_bigm or zhparser
-  would only be needed if the backend tokenized raw text itself. Ranking would use `ts_rank_cd` in place of
-  bm25, with the title weighted through `setweight`.
-- **Concurrency:** Postgres gives row-level writes, so the two locks would become advisory locks
-  (`pg_try_advisory_lock`) with the same meaning: one reader of sources and one vector maker at a time.
-- **Moving:** `rummage export` from SQLite, `import` into the new backend.

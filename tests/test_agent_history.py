@@ -7,7 +7,6 @@ import sqlite3
 from rummage.plugins.claude_code import ClaudeCodeSource
 from rummage.plugins.codex import CodexSource
 from rummage.plugins.gemini_cli import GeminiCliSource
-from rummage.plugins.jsonl_chat import JsonlChatSource
 from rummage.plugins.opencode import OpenCodeSource
 
 
@@ -168,17 +167,3 @@ def test_opencode_v2_database(tmp_path):
     assert "position static" in turns["ses_a:m1"] and "think" not in turns["ses_a:m1"]
     assert "same rule" in turns["ses_a:m4"]
     assert src.plan({k: "x" for k in turns}, plan.state).upserts == []
-
-
-def test_jsonl_chat_mapping(tmp_path):
-    log = tmp_path / "logs" / "chat-1.jsonl"
-    log.parent.mkdir()
-    _lines(log, [
-        {"ts": 1794700000, "msg": {"from": "human", "body": "remind me about the dentist"}, "sid": "x1"},
-        {"ts": 1794700001, "msg": {"from": "bot", "body": [{"type": "text", "text": "Tuesday at 3 pm."}]}},
-    ])
-    src = JsonlChatSource("mine", {"paths": [str(tmp_path / "logs" / "*.jsonl")], "role": "msg.from",
-                                   "user_role": "human", "assistant_role": "bot", "text": "msg.body", "time": "ts",
-                                   "session": "sid"})
-    items = list(src.plan({}, {}).upserts)
-    assert len(items) == 1 and items[0].key.startswith("x1:") and "Tuesday" in src.load(items[0])[1].text

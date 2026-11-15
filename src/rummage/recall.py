@@ -1,16 +1,16 @@
 """`rummage recall`: a few cited passages for a prompt, for agents' prompt hooks.
 
 Hooks run on every message, so recall is strict and quiet: with `--hook` it skips greetings and one-word replies,
-and it prints nothing when nothing clearly matches, keeps to a size budget, and never loads the model itself unless asked (it uses the query
-daemon when one runs, exact words otherwise).
+and it prints nothing when nothing clearly matches, keeps to a size budget, and never loads the model itself unless
+asked (it uses the query daemon when one runs, exact words otherwise).
 
 Input is the query as an argument, the text on stdin, or with `--hook` the JSON a prompt hook receives (its
 `prompt` and `session_id` fields; Claude Code and Codex `UserPromptSubmit` send them). Output is a plain-text block,
 `--json`, or with `--hook` the hook's JSON reply carrying the block as `additionalContext`.
 
-Besides matches from the whole index, recall adds what was said minutes ago in other chat sessions when the prompt
-shares words with it or refers back to something ("just now", "as I said"): someone who opens a new chat to go on
-with another one gets that context, even before its vectors are made. Credentials are masked in all output unless
+Besides matches from the whole index, recall adds what was said minutes ago in other chat sessions that shares words
+with the prompt: someone who opens a new chat to go on with another one gets that context, even before its vectors
+are made. Credentials are masked in all output unless
 `--show-secrets` or a source switches masking off.
 """
 
@@ -23,24 +23,12 @@ import time
 from . import config as C
 from . import text as T
 from .query import meaning_vector
-from .when import understand
 from .search import Hit, Searcher, gate_for
 from .limits import describe
 from .secrets import masked_total, shown
 from .store import Store
 
 HOOK_EVENT = "UserPromptSubmit"
-
-# Phrases that point back at something said a moment ago, in the languages people commonly mix in chats.
-REFER_BACK = (
-    "just now", "as i said", "as i mentioned", "like i said", "we just", "you just", "earlier today",
-    "the other chat", "the other window", "where were we", "that thing",
-    "刚才", "刚刚", "前面说", "之前说", "上面说", "那个", "剛才", "剛剛", "前面說", "之前說",
-    "さっき", "先ほど", "前に言った", "さっきの", "아까", "방금", "앞에서 말한", "그거",
-    "tout à l'heure", "comme je disais", "vorhin", "wie gesagt", "hace un momento", "como dije",
-    "há pouco", "como eu disse", "только что", "как я говорил",
-)
-
 
 def worth_recalling(prompt: str) -> bool:
     """For hooks, which see every message: skip greetings and one-word replies, which have nothing to look up.
@@ -54,6 +42,8 @@ def pick(hits: list[Hit], min_z: float, min_words: float, max_items: int, max_ch
     vector, word matches alone decide; with one, a word match must not be far below the rest in meaning."""
     chosen, used = [], 0
     for hit in hits:
+        if len(chosen) >= max_items:
+            break
         by_meaning = (hit.z or 0) >= min_z
         by_words = hit.words >= min_words and (words_only or (hit.z or 0) >= 0)
         if not (by_meaning or by_words):
@@ -63,8 +53,6 @@ def pick(hits: list[Hit], min_z: float, min_words: float, max_items: int, max_ch
             break
         chosen.append(hit)
         used += len(line)
-        if len(chosen) >= max_items:
-            break
     return chosen
 
 
@@ -101,15 +89,9 @@ def render(results: list[dict], recent: list[dict], degraded: str | None = None)
     return "\n".join(lines)
 
 
-def refers_back(prompt: str) -> bool:
-    low = prompt.lower()
-    return any(cue in low for cue in REFER_BACK)
-
-
 def recent_turns(cfg: C.Config, prompt: str, exclude: list[str], minutes: float, max_items: int,
                  skip_ids: set[str]) -> list[dict]:
-    """Chat turns from the last `minutes` in other sessions that share words with the prompt, or the latest ones
-    when the prompt refers back."""
+    """Chat turns from the last `minutes` in other sessions that share words with the prompt."""
     if not cfg.index_path.exists() or minutes <= 0 or max_items <= 0:
         return []
     store = Store(cfg.index_path)
@@ -120,14 +102,13 @@ def recent_turns(cfg: C.Config, prompt: str, exclude: list[str], minutes: float,
         store.close()
     words = set(T.terms(prompt))
     shared = [i for i in items if words & set(T.terms(i["text"]))]
-    chosen = shared or (items if refers_back(prompt) else [])
     out = []
-    for i in chosen[:max_items]:
+    for i in shared[:max_items]:
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(i["mtime"] or 0))
         out.append({"id": i["id"], "source": i["source"], "ref": i["ref"], "title": i["title"], "date": when,
                     "info": i["info"], "lines": None, "snippet": T.snippet_head(i["text"], 300),
                     "pending_vectors": i["pending_vectors"],
-                    "why": "recent, shares words" if i in shared else "recent, prompt refers back"})
+                    "why": "recent, shares words"})
     return out
 
 
@@ -142,7 +123,7 @@ def recall(cfg: C.Config, query: str, sources: list[str] | None, paths: list[str
         version = store.model
         vector, degraded = meaning_vector(cfg, version, query, load=allow_model_load)
         searcher = Searcher(store, sources, paths, model=version)
-        hits = searcher.search(query, vector, limit=limit, when=understand(query))
+        hits = searcher.search(query, vector, limit=limit)
         count = searcher.vector_count()
     finally:
         store.close()

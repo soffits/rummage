@@ -6,7 +6,7 @@ question, and does it stay silent when the history has no answer?
 
 LoCoMo (10 long two-person conversations, ~2,000 questions; category 5 are questions the conversation can't
 answer) and LongMemEval-S (500 questions, each over its own history of ~50 chat sessions; ids ending in `_abs`
-can't be answered). Every session is written as a JSONL chat log and indexed once with the `jsonl-chat` source;
+can't be answered). Every session is written as a Claude Code session log and indexed once with that source;
 each question then searches only its own history. Recall's own selection decides what would be injected.
 
 Measures: hit rate (an injected item is an evidence turn, LoCoMo, or from an answer session, LongMemEval), the
@@ -46,16 +46,24 @@ def _when(text: str, form: str) -> float:
         return 0.0
 
 
-def _write(path: Path, rows: list[dict]) -> None:
-    if not path.exists():
-        path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+REF_PREFIX = "claude-code:"   # refs of the indexed turns: claude-code:<session>#<id>
+
+
+def _write(path: Path, turns: list[tuple[str, str, str, str]]) -> None:
+    """A session as a Claude Code log: (id, role, text, time) per turn, role `user` or `assistant`."""
+    if path.exists():
+        return
+    records = [{"type": "user", "uuid": mid, "timestamp": time, "message": {"content": text}} if role == "user"
+               else {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+               for mid, role, text, time in turns]
+    path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records), encoding="utf-8")
 
 
 def locomo(work: Path) -> tuple[Path, list[dict]]:
     """One JSONL log per session (every line a person's turn, id = its dia_id); questions with the sessions they
     may search and the ids of their evidence turns."""
     data = json.loads(_fetch(LOCOMO, work / "raw" / "locomo10.json").read_text(encoding="utf-8"))
-    logs = work / "logs"
+    logs = work / "logs" / "sessions"
     logs.mkdir(parents=True, exist_ok=True)
     questions = []
     for sample in data:
@@ -65,9 +73,8 @@ def locomo(work: Path) -> tuple[Path, list[dict]]:
         for key in sessions:
             name = f"{sample['sample_id']}-{key}"
             names.append(name)
-            _write(logs / f"{name}.jsonl", [{"session": name, "id": t["dia_id"], "role": "user",
-                                             "content": f"{t['speaker']}: {t['text']}",
-                                             "time": conv.get(f"{key}_date_time", "")} for t in conv[key]])
+            _write(logs / f"{name}.jsonl", [(t["dia_id"], "user", f"{t['speaker']}: {t['text']}",
+                                             conv.get(f"{key}_date_time", "")) for t in conv[key]])
         dates = {f"{sample['sample_id']}-{k}": _when(conv.get(f"{k}_date_time", ""), "%I:%M %p on %d %B, %Y")
                  for k in sessions}
         for q in sample["qa"]:
@@ -79,13 +86,12 @@ def locomo(work: Path) -> tuple[Path, list[dict]]:
 
 def longmemeval(work: Path) -> tuple[Path, list[dict]]:
     data = json.loads(_fetch(LONGMEMEVAL, work / "raw" / "longmemeval_s.json").read_text(encoding="utf-8"))
-    logs = work / "logs"
+    logs = work / "logs" / "sessions"
     logs.mkdir(parents=True, exist_ok=True)
     questions = []
     for q in data:
         for sid, session in zip(q["haystack_session_ids"], q["haystack_sessions"]):
-            _write(logs / f"{sid}.jsonl", [{"session": sid, "id": str(n), "role": t["role"], "content": t["content"]}
-                                           for n, t in enumerate(session)])
+            _write(logs / f"{sid}.jsonl", [(str(n), t["role"], t["content"], "") for n, t in enumerate(session)])
         questions.append({"question": q["question"], "sessions": list(q["haystack_session_ids"]),
                           "dates": {sid: _when(d, "%Y/%m/%d (%a) %H:%M")
                                     for sid, d in zip(q["haystack_session_ids"], q["haystack_dates"])},
@@ -99,8 +105,7 @@ def build(work: Path, logs: Path, embedder_url: str | None, runtime_dir: Path | 
     config = work / "rummage.toml"
     remote = f"[embedder]\nurl = '{embedder_url}'\n" if embedder_url else ""
     config.write_text(f"data_dir = '{data}'\n[runtime]\nthreads = {threads}\nnice = 15\n{remote}"
-                      f"[sources.mem]\ntype = 'jsonl-chat'\npaths = ['{logs}/*.jsonl']\nsession = 'session'\n"
-                      f"id = 'id'\ntime = 'time'\nuser_role = 'user'\nassistant_role = 'assistant'\n", encoding="utf-8")
+                      f"[sources.mem]\ntype = 'claude-code'\nroot = '{logs.parent}'\n", encoding="utf-8")
     if runtime_dir and not (data / "runtime").exists():
         data.mkdir(parents=True, exist_ok=True)
         (data / "runtime").symlink_to(runtime_dir.resolve())
@@ -136,7 +141,7 @@ def evaluate(config: Path, questions: list[dict], embedder_url: str | None, thre
     try:
         for q in questions:
             vector = embedder.query(q["question"])
-            searcher = Searcher(store, globs=[f"mem:{s}#*" for s in q["sessions"]])
+            searcher = Searcher(store, globs=[f"{REF_PREFIX}{s}#*" for s in q["sessions"]])
             hits = searcher.search(q["question"], vector, limit=20)
 
             def good(hit, q=q):

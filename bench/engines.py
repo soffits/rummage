@@ -77,7 +77,7 @@ def run_rummage(corpus: Path, queries: dict, home: Path, runtime_dir: Path | Non
         time.sleep(5)
         for qid, text in queries.items():
             t = time.monotonic()
-            out = subprocess.run(["rummage", "search", text, "--json", "--no-dates", "-n", str(DEPTH)],
+            out = subprocess.run(["rummage", "search", text, "--json", "-n", str(DEPTH)],
                                  capture_output=True, text=True, env=env)
             latencies.append(time.monotonic() - t)
             ranked[qid] = [Path(r["ref"]).name for r in json.loads(out.stdout)["results"]]

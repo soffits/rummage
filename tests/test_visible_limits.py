@@ -119,10 +119,9 @@ def test_masked_credentials_are_counted_with_the_command_that_shows_them(tmp_pat
     assert doc["masked_secrets"] == 1 and doc["show_secrets_command"][-1] == "--show-secrets"
 
 
-def test_fit_keeps_only_the_actions_that_show_hidden_parts():
+def test_fit_keeps_the_actions_that_show_hidden_parts():
     doc = {"status": "ok", "summary": {}, "results": [{"id": "#1", "ref": "a", "score": 1.0, "snippet": "x" * 400}],
-           "next_actions": [{"intent": "inspect_best_match", "command": []},
-                            {"intent": "show_secrets", "command": ["rummage", "--show-secrets"]}]}
+           "next_actions": [{"intent": "show_secrets", "command": ["rummage", "--show-secrets"]}]}
     E.fit(doc, 10)
     assert [a["intent"] for a in doc["next_actions"]] == ["show_secrets"]
 

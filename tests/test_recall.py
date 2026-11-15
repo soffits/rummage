@@ -49,6 +49,10 @@ def test_recall_hook_reply_and_silence(tmp_path, capsys, monkeypatch):
     assert reply["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
     assert "lease.md" in context and "trip.md" not in context
 
+    assert main(["--config", str(cfg), "recall", "--max-items", "0", "--recent-items", "0",
+                 "does the lease allow a cat in flat 12"]) == 0
+    assert capsys.readouterr().out == ""
+
     assert main(["--config", str(cfg), "recall", "hello"]) == 0
     assert capsys.readouterr().out == ""
     assert main(["--config", str(cfg), "recall", "zebras painting murals underwater tonight"]) == 0

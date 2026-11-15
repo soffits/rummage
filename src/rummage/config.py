@@ -52,10 +52,7 @@ class Config:
     daemon_idle_minutes: float = 20
     model: str = DEFAULT_MODEL
     models: dict[str, dict] = field(default_factory=dict)
-    people: dict[str, dict] = field(default_factory=dict)
-    serve: dict = field(default_factory=dict)
     sources: dict[str, dict] = field(default_factory=dict)
-    remotes: dict[str, dict] = field(default_factory=dict)
 
     @property
     def index_path(self) -> Path:
@@ -106,10 +103,7 @@ def load(path: Path | None = None) -> Config:
         daemon_idle_minutes=float((data.get("daemon") or {}).get("idle_minutes", 20)),
         model=(data.get("embedder") or {}).get("model") or DEFAULT_MODEL,
         models=dict(data.get("models", {})),
-        people=dict(data.get("people", {})),
-        serve=dict(data.get("serve", {})),
         sources=dict(data.get("sources", {})),
-        remotes=dict(data.get("remotes", {})),
     )
 
 

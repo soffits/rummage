@@ -14,10 +14,8 @@ import numpy as np
 from . import text as T
 from .store import Scope, Store, same_message_key
 from .switch import calibration
-from .when import TimeRange, without
 
 WORD_WEIGHT = 2.0
-TIME_WEIGHT = 1.5      # bonus for an item from the time range the query names
 OPENED_WEIGHT = 0.4    # bonus per time an item was opened after a search with mostly the same words (max 2)
 
 
@@ -115,12 +113,11 @@ class Searcher:
         return scores, z
 
     def search(self, query: str, vector: np.ndarray | None, limit: int = 10, kinds: set[str] | None = None,
-               z_gate: float | None = None, when: TimeRange | None = None) -> list[Hit]:
-        """`when`: the time range the query names; items from it rank higher, and its phrase isn't matched as
-        words. `z_gate`: how far a meaning match must stand out (default: the model's calibrated gate)."""
+               z_gate: float | None = None) -> list[Hit]:
+        """`z_gate`: how far a meaning match must stand out (default: the model's calibrated gate)."""
         r = self.ranking
         z_gate = self.calibration.gate if z_gate is None else z_gate
-        words = T.terms(without(query, when), cjk_pairs=r.cjk_pairs) if r.words else []
+        words = T.terms(query, cjk_pairs=r.cjk_pairs) if r.words else []
         vector = vector if r.meaning else None
         best: dict[int, tuple[float, float, int]] = {}
         if vector is not None:
@@ -148,18 +145,13 @@ class Searcher:
 
         lookup = T.is_lookup(words)
         meaning_weight, words_weight = (0.5, WORD_WEIGHT * 2) if lookup else (1.0, WORD_WEIGHT)
-        in_range = self.store.items_between(set(best) | set(coverage), when.start, when.end) if when else set()
         candidates = {i for i, (zz, _, _) in best.items() if zz >= z_gate or not r.gate}
         candidates |= {i for i, share in coverage.items() if share >= 0.5}
-        # From the time asked about, a weaker match is enough.
-        candidates |= {i for i in in_range if best.get(i, (0.0,))[0] >= z_gate / 2 or coverage.get(i, 0) > 0}
         opened = self.store.opened_for(words, candidates)
         scored = []
         for item in candidates:
             zz = best.get(item, (0.0, 0.0, 0))[0]
             score = meaning_weight * max(zz, 0.0) + words_weight * coverage.get(item, 0.0) ** 1.5
-            if item in in_range:
-                score += TIME_WEIGHT
             score += OPENED_WEIGHT * min(opened.get(item, 0), 2)
             scored.append((score, item))
         scored.sort(key=lambda s: (-s[0], s[1]))
