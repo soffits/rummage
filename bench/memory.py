@@ -96,7 +96,13 @@ def build(work: Path, logs: Path, embedder_url: str | None, runtime_dir: Path | 
     return config
 
 
+MIN_Z = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0]
+MIN_WORDS = [0.5, 0.67, 0.8, 1.0, None]   # None: words alone never inject
+
+
 def evaluate(config: Path, questions: list[dict], embedder_url: str | None, threads: int) -> dict:
+    """Recall's selection at its defaults (`rummage recall`: min z 3, words 0.67, 4 items, 1,500 characters), then
+    the same selection over a grid of the two thresholds, to show what a stricter setting trades away."""
     from rummage import config as C
     from rummage import runtime as R
     from rummage.recall import pick
@@ -105,37 +111,61 @@ def evaluate(config: Path, questions: list[dict], embedder_url: str | None, thre
 
     cfg = C.load(config)
     if embedder_url:
-        embedder = R.RemoteEmbedder(embedder_url)
-        embedder.start()
+        embedder = R.RemoteEmbedder(embedder_url, timeout=30)
     else:
         embedder = R.Embedder(R.Runtime(cfg.data_dir, cfg.llama_server), media=False, threads=threads, nice=15)
-        embedder.start()
+    embedder.start()
     store = Store(cfg.index_path)
-    rows = []
+    asked = []
     try:
         for q in questions:
             vector = embedder.query(q["question"])
             searcher = Searcher(store, globs=[f"mem:{s}#*" for s in q["sessions"]])
             hits = searcher.search(q["question"], vector, limit=20)
-            chosen = pick(hits, gate_for(3.0, searcher.vector_count()), 0.67, 4, 1500, False)
-            def good(hit):
+
+            def good(hit, q=q):
                 session, _, message = hit.ref.split(":", 1)[1].partition("#")
                 return message in q["evidence"] if "evidence" in q else session in q["answer_sessions"]
-            rows.append({"answerable": q["answerable"], "category": q["category"], "injected": len(chosen),
-                         "hit": any(good(h) for h in chosen), "top10": any(good(h) for h in hits[:10])})
+            asked.append((q, hits, [good(h) for h in hits], searcher.vector_count()))
     finally:
         store.close()
         if not embedder_url:
             embedder.stop()
+
+    def score(min_z: float, min_words: float | None, by_category: bool = False) -> dict:
+        rows = []
+        for q, hits, goods, count in asked:
+            chosen = pick(hits, gate_for(min_z, count), min_words if min_words is not None else 9.0, 4, 1500, False)
+            flags = [goods[hits.index(h)] for h in chosen]
+            rows.append({"answerable": q["answerable"], "category": q["category"], "injected": len(chosen),
+                         "good_items": sum(flags), "hit": any(flags), "top10": any(goods[:10])})
+        return summarize(rows, by_category)
+
+    defaults = score(3.0, 0.67, by_category=True)
+    defaults["sweep"] = [{"min_z": z, "min_words": w, **score(z, w)} for z in MIN_Z for w in MIN_WORDS]
+    return defaults
+
+
+def summarize(rows: list[dict], by_category: bool = False) -> dict:
     answerable = [r for r in rows if r["answerable"]]
     unanswerable = [r for r in rows if not r["answerable"]]
     rate = lambda rs, key: round(statistics.fmean(1.0 if r[key] else 0.0 for r in rs), 4) if rs else None
-    return {"questions": len(rows), "answerable": len(answerable), "unanswerable": len(unanswerable),
-            "recall_hit_rate": rate(answerable, "hit"),
-            "recall_silent_when_answerable": rate([dict(r, s=r["injected"] == 0) for r in answerable], "s"),
-            "false_injection_rate": rate([dict(r, f=r["injected"] > 0) for r in unanswerable], "f"),
-            "search_top10_evidence": rate(answerable, "top10"),
-            "mean_items_injected": round(statistics.fmean(r["injected"] for r in rows), 2) if rows else None}
+    injected = sum(r["injected"] for r in answerable)
+    out = {"questions": len(rows), "answerable": len(answerable), "unanswerable": len(unanswerable),
+           "recall_hit_rate": rate(answerable, "hit"),
+           "recall_silent_when_answerable": rate([dict(r, s=r["injected"] == 0) for r in answerable], "s"),
+           "false_injection_rate": rate([dict(r, f=r["injected"] > 0) for r in unanswerable], "f"),
+           # share of injected items, on answerable questions, that are an evidence turn / answer session
+           "injection_precision": round(sum(r["good_items"] for r in answerable) / injected, 4) if injected else None,
+           # on unanswerable questions that still carry an evidence turn (LoCoMo's adversarial ones name the
+           # other speaker): how often what was injected is that turn
+           "unanswerable_injected_evidence": rate([r for r in unanswerable if r["injected"]], "hit"),
+           "search_top10_evidence": rate(answerable, "top10"),
+           "mean_items_injected": round(statistics.fmean(r["injected"] for r in rows), 2) if rows else None}
+    if by_category:
+        out["by_category"] = {str(c): summarize([r for r in rows if r["category"] == c])
+                              for c in sorted({r["category"] for r in rows}, key=str)}
+    return out
 
 
 def main() -> int:
@@ -145,7 +175,7 @@ def main() -> int:
     parser.add_argument("--embedder-url")
     parser.add_argument("--runtime-dir", type=Path)
     parser.add_argument("--threads", type=int, default=2)
-    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--force", action="store_true", help="evaluate again (the index is reused)")
     args = parser.parse_args()
     work = args.work / args.dataset
     target = work / "results" / "rummage-recall.json"

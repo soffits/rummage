@@ -4,6 +4,12 @@ What a careful evaluation of rummage would measure, on which data, and what it c
 [benchmarks.md](benchmarks.md) are a first look on smaller slices; this plan is for results meant to hold up
 under review.
 
+## Focus
+
+rummage is an agent's extended memory: it finds what the user and the agent said and wrote, which no model knows.
+The memory sets (LongMemEval, LoCoMo) and a private vault set carry the main evidence; BEIR and MIRACL check that
+the retriever underneath is sound, since a language model already knows most of what they ask.
+
 ## Questions
 
 1. **Retrieval quality against other local tools,** on full public sets, same queries, same corpora.
@@ -11,7 +17,11 @@ under review.
    tools with the same model, where they allow it, separates the two.
 3. **Which of rummage's own parts matter,** by turning each off.
 4. **Recall for agents:** how often `rummage recall` injects the right context into a conversation, and how often it
-   correctly says nothing.
+   correctly says nothing, across recall's thresholds, so the automatic setting can be chosen for precision.
+5. **Does the method carry over to other models?** rummage's ranking against plain cosine with each of several
+   embedding models; a gain that holds for one model only is reported as such.
+6. **Agent and retriever together** (a separate category, never mixed into the retriever tables): an LLM rewriting
+   queries and reranking, and end-to-end answers when an agent may call rummage several times.
 
 ## Data
 
@@ -33,12 +43,19 @@ as published, with their test or dev splits; no query is dropped.
 ## Systems
 
 - **rummage** as shipped (EmbeddingGemma 2 Q8_0, 512 dimensions, hybrid ranking).
-- **qmd** in its three modes: `search` (BM25), `vsearch` (vectors), `query` (hybrid with its LLM reranker); once with
-  its default model and once with `QMD_EMBED_MODEL` pointed at the same EmbeddingGemma 2 GGUF rummage uses.
+- **qmd** in its three modes: `search` (BM25), `vsearch` (vectors, with its query expansion), `query` (hybrid with its
+  LLM reranker), with its default model, EmbeddingGemma 1 (300M Q8_0). qmd's llama.cpp binding can't load
+  EmbeddingGemma 2 (`unknown model architecture: 'gemma-embedding2'`), so the same-model comparison runs the other
+  way: rummage over EmbeddingGemma 1.
 - **fidx** with its default profile. Its models come from an allowlist, so a same-model run isn't possible; it is
   reported as is.
-- Baselines: BM25 alone (rummage `--words-only`) and EmbeddingGemma 2 vectors alone (plain cosine top-k, no gating,
-  no word bonus), so every system's gain is measured against the same floor.
+- Baselines: BM25 alone (rummage `--words-only`) and, for every model, plain dense retrieval (`bench/dense_check.py`:
+  one vector per document, cosine top-k, none of rummage's code), so every system's gain is measured against the
+  same floor.
+- **Other models** (`--model`, prompts from each model card through `bench/model_proxy.py`): EmbeddingGemma 1 (qmd's),
+  harrier-oss-v1-270m and harrier-oss-v1-0.6b, on SciFact, NFCorpus and MIRACL zh/ko, each as plain dense and
+  through rummage's ranking, with CPU embedding time per passage. rummage keeps 512 dimensions for every model, so
+  the dense baseline is scored at 512 and at the model's full width.
 
 ## Ablations of rummage
 
@@ -59,8 +76,14 @@ Each switched off alone, on every retrieval set:
 - Cost: indexing time, index size, query latency p50/p95 with the model loaded, peak memory.
 - Recall (LoCoMo, LongMemEval): for each question, whether the injected block contains a passage that holds the
   answer (hit rate), how often it injects something for questions whose answer isn't in the history (false
-  injection rate), and block size in tokens. The answer itself isn't graded: that measures the model reading the
-  block, not rummage.
+  injection rate), the share of injected items that hold the answer (precision), and the same over a grid of the
+  meaning and word thresholds. LoCoMo's "unanswerable" questions are adversarial (a real event put on the other
+  speaker), so each still has an evidence turn; for them the share of injections that are that turn is reported
+  too. LongMemEval's abstention questions are the cleaner test of saying nothing.
+- Agent and retriever (separate tables): on a fixed random 100 queries each of NFCorpus and FiQA, rummage with one
+  query, with an LLM's 2-3 rewritten queries and a hypothetical passage fused, and with an LLM rerank of the top
+  30, with tokens and cost per query; on LongMemEval, answer accuracy for an agent that may call rummage several
+  times against one recall injection.
 
 ## Compute
 
