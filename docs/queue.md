@@ -25,10 +25,8 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
    claudegrep eval, obsidian-rag-mcp, ruggiio/semfind's table).
 10. **Optional reranking.** A small local cross-encoder over the top ~40, opt-in, through llama.cpp's rerank
     endpoint so it needs no second runtime (fidx `--rerank`, claudegrep).
-11. **Agent integration.** A `recall` command made for prompt hooks (query in, a short block of cited context out,
-    within a size budget, silent when nothing relevant passes the gate), hook snippets for the agents named above,
-    an Agent Skill `SKILL.md`, and an optional stdio MCP server exposing `search`, `get` and `status` (qmd, fidx,
-    grepai, obsidian-rag-mcp).
+11. **MCP server.** An optional stdio MCP server exposing `search`, `get` and `status`, for agents that only speak
+    MCP (qmd, fidx, grepai, obsidian-rag-mcp).
 12. **Packaging.** PyPI releases, an install CI matrix on Linux, macOS and Windows, and pinned llama.cpp builds for
     macOS arm64 and Windows in `runtime.py` (fidx install matrix and wheels).
 13. **File watching.** A debounced watcher that indexes new and changed files within seconds (grepai,
