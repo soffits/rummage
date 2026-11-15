@@ -21,8 +21,11 @@ DEFAULT_EXCLUDE = [".*", "node_modules", "__pycache__", "$RECYCLE.BIN", "System 
 # source sets `read_secret_files = true`. Matched against the name in lower case.
 SECRET_EXTENSIONS = (".pem", ".key", ".p12", ".pfx", ".keystore", ".jks", ".ppk", ".kdbx", ".gpg", ".asc", ".crt",
                      ".cer", ".der", ".p8", ".mobileprovision")
-SECRET_PREFIXES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".env", "secret", "credential", ".netrc", ".npmrc",
-                   ".pypirc", "htpasswd", ".htpasswd")
+SECRET_PREFIXES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".env", ".netrc", ".npmrc", ".pypirc", "htpasswd",
+                   ".htpasswd")
+# "secrets.yaml", "credentials.json": a store of secrets only as a config file; "secrets.py" or "secret-santa.md" is not.
+SECRET_STORES = ("secret", "credential")
+CONFIG_SUFFIXES = ("", ".json", ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg", ".xml", ".properties", ".env")
 SECRET_FOLDERS = (".ssh", ".gnupg", ".password-store", ".aws")
 
 
@@ -30,7 +33,13 @@ def is_secret(name: str, folder: bool = False) -> bool:
     lower = name.lower()
     if folder:
         return lower in SECRET_FOLDERS
-    return lower.endswith(SECRET_EXTENSIONS) or lower.startswith(SECRET_PREFIXES)
+    if lower.endswith(SECRET_EXTENSIONS) or lower.startswith(SECRET_PREFIXES):
+        return True
+    return lower.startswith(SECRET_STORES) and os.path.splitext(lower)[1] in CONFIG_SUFFIXES
+
+
+# A private key itself: the PEM header followed by its base64 body (code that only names the header doesn't count).
+PRIVATE_KEY = re.compile(rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----\r?\n[A-Za-z0-9+/=]{40,}")
 
 
 _ISO_DAY = re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)")

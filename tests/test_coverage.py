@@ -101,18 +101,23 @@ def test_key_files_are_never_read(tmp_path):
     (tmp_path / "keys" / "id_ed25519").write_text("k")
     (tmp_path / "server.pem").write_text("k")
     (tmp_path / ".env.local").write_text("TOKEN=1")
-    (tmp_path / "notes.txt").write_text("hello\n-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n")
+    (tmp_path / "notes.txt").write_text("hello\n-----BEGIN OPENSSH PRIVATE KEY-----\n" + "b3BlbnNzaC1rZXk" * 6 + "\n")
     (tmp_path / "plan.txt").write_text("the plan")
+    (tmp_path / "credentials.json").write_text("{}")
+    (tmp_path / "secrets.py").write_text('KEY = r"-----BEGIN [A-Z ]*PRIVATE KEY-----"')   # code about keys is read
+    (tmp_path / "secret-santa.md").write_text("Gift ideas for the office secret santa.")
     src = FilesSource("f", {"root": str(tmp_path), "exclude": []}, tmp_path)
     plan = src.plan({}, {})
-    assert sorted(i.key for i in plan.upserts) == ["notes.txt", "plan.txt"]
+    assert sorted(i.key for i in plan.upserts) == ["notes.txt", "plan.txt", "secret-santa.md", "secrets.py"]
     left = plan.state["left_out"]["skipped as keys or passwords"]
-    assert left["count"] == 4 and left["setting"] == "sources.f.read_secret_files"
+    assert left["count"] == 5 and left["setting"] == "sources.f.read_secret_files"
     notes = next(i for i in plan.upserts if i.key == "notes.txt")
     assert [s.kind for s in src.load(notes)] == ["name"] and "private key" in notes.info["partial"][0]["reason"]
     assert "read_secret_files" in src.not_indexed("keys/id_ed25519")
+    code = next(i for i in plan.upserts if i.key == "secrets.py")
+    assert [s.kind for s in src.load(code)][1:] == ["text"] and "partial" not in code.info
     opened = FilesSource("f", {"root": str(tmp_path), "exclude": [], "read_secret_files": True}, tmp_path)
-    assert len(opened.plan({}, {}).upserts) == 6
+    assert len(opened.plan({}, {}).upserts) == 9
 
 
 def test_frame_size_fills_the_budget_like_the_reference():
