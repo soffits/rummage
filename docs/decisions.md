@@ -5,6 +5,7 @@
 - EmbeddingGemma 2, first 512 of 768 dimensions, float16 storage: near-lossless on MTEB, a third less storage and compute.
 - llama.cpp `llama-server` with ggml-org's Q8_0 GGUF: one runtime for text and images, official prebuilt CPU builds, the same files DigUp checked against the reference. ONNX int8 was ~25% faster on text but needs our own image preprocessing.
 - The server runs as a child for one run on 127.0.0.1 and a free port; no resident daemon except under `rummage serve`.
+- Passages are cut by characters (~1800), but the server's limit is tokens, which no character count bounds (a byte-fallback tokenizer spends a token per byte on invisible and rare characters). So the embedder owns the limit: it measures any text that could exceed a micro-batch with the server's tokenizer, embeds it in halves until each fits, and averages the vectors by token count. One passage stays one vector, and no source has to know the tokenizer.
 
 ## Index and ranking
 
