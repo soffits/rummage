@@ -13,6 +13,7 @@ import numpy as np
 
 from . import text as T
 from .runtime import DIM
+from .store import item_id
 
 WORD_WEIGHT = 2.0
 Z_GATE = 2.0
@@ -20,6 +21,7 @@ Z_GATE = 2.0
 
 @dataclass
 class Hit:
+    id: str
     source: str
     kind: str
     title: str
@@ -127,7 +129,7 @@ class Searcher:
         for score, item in scored:
             if len(hits) >= limit:
                 break
-            row = self.db.execute("SELECT source, kind, title, ref, info FROM items WHERE id = ?", (item,)).fetchone()
+            row = self.db.execute("SELECT source, kind, title, ref, info, key FROM items WHERE id = ?", (item,)).fetchone()
             if row is None or (kinds and row[1] not in kinds):
                 continue
             semantic = best.get(item)
@@ -140,7 +142,7 @@ class Searcher:
                     "SELECT text FROM segments WHERE item = ? AND kind = 'text' ORDER BY id LIMIT 1", (item,)).fetchone()
                 seg_text = other[0] if other else seg_text
             hits.append(Hit(
-                source=row[0], kind=row[1], title=row[2] or "", ref=row[3] or "", score=score,
+                id="#" + item_id(row[0], row[5]), source=row[0], kind=row[1], title=row[2] or "", ref=row[3] or "", score=score,
                 z=semantic[0] if semantic else None, cosine=semantic[1] if semantic else None,
                 words=coverage.get(item, 0.0), segment=seg_kind, loc=loc,
                 snippet=T.snippet(seg_text or "", words), info=json.loads(row[4] or "{}")))
