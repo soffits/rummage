@@ -97,22 +97,33 @@ class Space:
         return known_item(self.matrix[self.text], self.items[self.text], np.asarray(queries, np.float32), items)
 
 
-def tails(space: Space, queries: np.ndarray, items: list[int], segments: list[int], cal: Calibration) -> dict:
-    """The share of unrelated scores at or above each of `cal`'s thresholds."""
+def _scores(space: Space, queries: np.ndarray, items: list[int], segments: list[int]) -> dict[str, np.ndarray]:
     z = space.unrelated_z(queries, items)
     cos = space.neighbour_cosines(segments)
-    out = {k: float((z >= getattr(cal, k)).mean()) if len(z) else 0.0 for k in _GATES}
-    out |= {k: float((cos >= getattr(cal, k)).mean()) if len(cos) else 0.0 for k in _COSINES}
-    return out
+    return {k: z for k in _GATES} | {k: cos for k in _COSINES}
 
 
-def matched(space: Space, queries: np.ndarray, items: list[int], segments: list[int], shares: dict) -> Calibration:
-    """The thresholds at which `space` lets through `shares` of unrelated scores."""
-    z = space.unrelated_z(queries, items)
-    cos = space.neighbour_cosines(segments)
-    values = {k: float(np.quantile(z, 1 - shares[k])) for k in _GATES}
-    values |= {k: float(np.quantile(cos, 1 - shares[k])) for k in _COSINES}
+def matched(old: dict[str, np.ndarray], new: dict[str, np.ndarray], cal: Calibration) -> Calibration:
+    """New thresholds that let through the same share of unrelated scores as `cal`'s did of `old`'s. Where that
+    share can't be measured (nothing, or everything, of the sample passes), the threshold keeps its distance from
+    the mean in standard deviations instead."""
+    values = {}
+    for key, threshold in cal.as_dict().items():
+        a, b = old[key], new[key]
+        if not len(a) or not len(b):
+            values[key] = threshold
+            continue
+        share = float((a >= threshold).mean())
+        if 1 / len(a) <= share <= 1 - 1 / len(a):
+            values[key] = float(np.quantile(b, 1 - share))
+        else:
+            values[key] = float(b.mean() + (threshold - a.mean()) / (a.std() or 1.0) * b.std())
     return Calibration(**values)
+
+
+def shares(scores: dict[str, np.ndarray], cal: Calibration) -> dict:
+    """The share of unrelated scores at or above each of `cal`'s thresholds."""
+    return {k: float((scores[k] >= v).mean()) if len(scores[k]) else 0.0 for k, v in cal.as_dict().items()}
 
 
 def calibrate(store: Store, model: str, queries: np.ndarray, sample: list[tuple[int, int, str]],
@@ -126,8 +137,10 @@ def calibrate(store: Store, model: str, queries: np.ndarray, sample: list[tuple[
     if len(space) < MIN_VECTORS or len(sample) < 20:
         kept = reference[1] if reference else Calibration()
         return kept, f"kept ({len(space)} passages are too few to measure)"
+    new = _scores(space, queries, items, segments)
     if reference is None:
-        return matched(space, queries, items, segments, ANCHOR_TAILS), "matched to the default model's shares"
+        values = {k: float(np.quantile(new[k], 1 - ANCHOR_TAILS[k])) for k in ANCHOR_TAILS}
+        return Calibration(**values), "matched to the default model's shares"
     old_model, old_cal, old_queries = reference
-    shares = tails(Space(store, old_model), old_queries, items, segments, old_cal)
-    return matched(space, queries, items, segments, shares), f"matched to {old_model} on this index"
+    old = _scores(Space(store, old_model), old_queries, items, segments)
+    return matched(old, new, old_cal), f"matched to {old_model} on this index"
