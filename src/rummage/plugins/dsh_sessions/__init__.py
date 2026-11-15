@@ -1,8 +1,9 @@
 """Chats in DeepSeek Harness session logs (`<sessions>/<project>/<session>/session.v4.jsonl.zstd`), read-only.
 
-Only top-level sessions are read (subagents are the agent talking to itself). A person's message is a
-`user/message` event with source kind "user" that a client sent (it has an rpcId, a sender principal, or a Telegram
-sender tag); the turn runs until the next one and collects the assistant's visible text.
+Only top-level sessions are read (subagents are the agent talking to itself). A person's message is a message
+with source kind "user" that a client sent (it has an rpcId, a sender principal, or a Telegram sender tag), either a
+`user/message` event or one an inbox splice inserted while a turn ran (`delivered`); the turn runs until the next one
+and collects the assistant's visible text.
 
 Who wrote it comes first from `source.principal`, DSH's field for the caller behind a user message, which
 dsh-oidc (`oidc-user`) and dsh-telegram-bot (`telegram-user`) fill with `{kind, channel, id, name?, ...}`. Older
@@ -17,9 +18,9 @@ import os
 import re
 from pathlib import Path
 
-from rummage.store import Item, Segment
-from rummage.sources import Plan, Source
-from rummage.chats import Turn, keep_chars, people_map, turn_item, turn_segments
+from rummage.store import Item
+from rummage.sources import Plan
+from rummage.chats import Turn, keep_chars, people_map, turn_item, ChatSource
 
 LOG_NAME = "session.v4.jsonl.zstd"
 _TG_TAG = re.compile(r"^\[Telegram message from .*?user id (\d+)\)\]")
@@ -48,12 +49,24 @@ def principal_of(data: dict) -> dict | None:
     return None
 
 
+def delivered(event: dict) -> list[dict]:
+    """The messages an event puts into the conversation: a message event's own data, or the messages an inbox
+    splice inserts (one sent while a turn was running, delivered at the next step or turn). DSH usually logs a
+    spliced message again as a message event with the same id when its turn starts, but not always."""
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return []
+    if isinstance(data.get("inserted"), list):
+        return [m for m in data["inserted"] if isinstance(m, dict) and m.get("role") == "user"]
+    return [data] if event.get("type") == "user/message" else []
+
+
 def _text(data: dict) -> str:
     return "\n".join(p.get("text", "") for p in data.get("content") or []
                      if isinstance(p, dict) and p.get("type") == "text").strip()
 
 
-class DshSessionSource(Source):
+class DshSessionSource(ChatSource):
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
         self.keep_chars = keep_chars(spec)
@@ -110,22 +123,33 @@ class DshSessionSource(Source):
         title = ""
         oidc: str | None = None
         turns: list[Turn] = []
+        logged = {data.get("id") for event in events if event.get("type") == "user/message"
+                  for data in [event.get("data") or {}] if data.get("id")}
+        seen: set = set()
         for event in events:
             kind = event.get("type")
             data = event.get("data") or {}
             if kind == "session/title":
                 title = data.get("title") or title
-            elif kind == "user/message":
-                source = data.get("source") or {}
+            elif kind == "assistant/message" and turns:
+                reply = _text(data.get("message") or {})
+                if reply:
+                    turns[-1].replies.append(reply)
+            for n, msg in enumerate(delivered(event)):
+                mid = msg.get("id")
+                if kind != "user/message" and mid and (mid in logged or mid in seen):
+                    continue  # a queued copy: the message is read where the log records it (or first queued)
+                seen.add(mid)
+                source = msg.get("source") or {}
                 if source.get("kind") == "oidc-sender":
                     oidc = source.get("subject") or None
                     continue
                 subject, oidc = oidc, None
-                text = _text(data)
+                text = _text(msg)
                 rpc_id = str(source.get("rpcId") or "")
                 if source.get("kind") != "user" or not text or text.startswith(self.skip_prefixes):
                     continue
-                principal = principal_of(data)
+                principal = principal_of(msg)
                 if not rpc_id and not _TG_TAG.match(text) and principal is None:
                     continue
                 speaker = self._speaker(text, rpc_id, subject, principal)
@@ -134,12 +158,9 @@ class DshSessionSource(Source):
                 else:
                     channel = "telegram" if _TG_TAG.match(text) or rpc_id.startswith("telegram") else "web"
                 body = text.split("\n", 1)[1] if _TG_TAG.match(text) and "\n" in text else text
-                turns.append(Turn(sid, str(event.get("seq")), (event.get("time") or 0) / 1000, speaker, body.strip(),
+                at = str(event.get("seq")) + (f".{n}" if n else "")
+                turns.append(Turn(sid, at, (event.get("time") or 0) / 1000, speaker, body.strip(),
                                   "", channel, project=project))
-            elif kind == "assistant/message" and turns:
-                reply = _text(data.get("message") or {})
-                if reply:
-                    turns[-1].replies.append(reply)
         for turn in turns:
             turn.session_title = title
         return turns
@@ -170,6 +191,3 @@ class DshSessionSource(Source):
                     upserts.append(item)
         removed = [k for k in known if k.split(":", 1)[0] not in sessions_now]
         return Plan(upserts, removed, {"stats": seen}, len(upserts))
-
-    def load(self, item: Item) -> list[Segment]:
-        return turn_segments(item, self.keep_chars)

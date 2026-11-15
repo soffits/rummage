@@ -57,3 +57,38 @@ def test_older_messages_fall_back_to_tags_and_notices(tmp_path):
     assert [(t.speaker, t.channel) for t in turns] == [
         ("Ana", "telegram"), ("Mara", "web"), ("Ana", "web"), ("Bot (sent)", "telegram"),
     ]
+
+
+def splice(seq, *messages, target="next-step"):
+    return {"type": "agent/inbox/spliced", "seq": seq, "time": seq * 1000,
+            "data": {"target": target, "start": 0, "inserted": [m["data"] for m in messages]}}
+
+
+def reply(text, seq):
+    return {"type": "assistant/message", "seq": seq, "time": seq * 1000,
+            "data": {"message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}}
+
+
+def test_messages_sent_while_a_turn_runs_are_read_once(tmp_path):
+    logged_later = message("[Telegram message from Someone (user id 100)]\nalso the invoice", 3, TG)
+    only_spliced = message("还有发票那件事", 6, {**TG, "rpcId": "telegram:100:12"})
+    notice = message("[Web message from mara (oidc sub sub-m)]", 7, {"kind": "oidc-sender", "subject": "sub-m"})
+    from_web = message("and the receipt", 8, WEB)
+    source = source_for(tmp_path, [
+        message("[Telegram message from Someone (user id 100)]\ncheck the backup", 1, TG),
+        splice(2, logged_later, message("job prompt", 0, {"kind": "schedule"}), target="next-turn"),
+        {**logged_later, "seq": 4},
+        reply("Backup checked; the invoice is filed.", 5),
+        splice(9, only_spliced, notice, from_web),
+        splice(10, only_spliced, notice, from_web),   # the inbox is spliced again with the same messages
+        {"type": "session/title-llm-request", "seq": 11,
+         "data": {"messages": [{"role": "user", "content": [{"type": "text", "text": "title this"}]}]}},
+        reply("好的，发票和收据都看了。", 12),
+    ])
+    turns = source.turns(tmp_path / "sessions" / "proj" / "s1" / LOG_NAME)
+    assert [(t.message, t.speaker, t.text, t.reply) for t in turns] == [
+        ("1", "Ana", "check the backup", ""),
+        ("4", "Ana", "also the invoice", "Backup checked; the invoice is filed."),
+        ("9", "Ana", "还有发票那件事", ""),
+        ("9.2", "Mara", "and the receipt", "好的，发票和收据都看了。"),
+    ]

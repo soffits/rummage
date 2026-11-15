@@ -217,7 +217,8 @@ def index_source(store: Store, source: Source, embedders: list[Embedders], log, 
     elif again:
         plan = source.plan({key: (None if key in again else value) for key, value in known.items()}, {})
     else:
-        plan = source.plan(known, store.state(source.name))
+        state = store.state(source.name)
+        plan = source.plan(known, state if state.get("reader", 0) == getattr(source, "reader", 0) else {})
     for key in plan.removed:
         store.remove(source.name, key)
         counts["removed"] += 1
@@ -259,7 +260,7 @@ def index_source(store: Store, source: Source, embedders: list[Embedders], log, 
         if total and total > 25 and (done % 100 == 0 or done == total):
             log(f"{source.name}: read {done}/{total}")
     if complete and counts["failed"] == 0 and counts["held"] == 0 and plan.state is not None:
-        store.set_state(source.name, plan.state)
+        store.set_state(source.name, {**plan.state, "reader": getattr(source, "reader", 0)})
         store.commit()
     if complete:
         _finish_media(store, source, read, log, deadline)

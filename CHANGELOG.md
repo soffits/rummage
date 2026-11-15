@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.0
+
+- A reply that quotes another message is found by what it quotes: the quote is its own passage (with the reply's words after it), so a search for the quoted topic finds the reply, while the reply's own passage still holds only the person's words and a long quote can't drown a short answer. A note right under a quote (such as where to read more) counts as part of it.
+- Messages sent while a turn is running are read: DSH's inbox splices (a message that never got logged on its own was missing) and Claude Code's queued prompts. A message logged both ways is read once.
+- When chat sources read their logs differently, every chat log is planned once more on the next run; only turns whose text changed are read again.
+
 ## 0.18.0
 
 - Newer matches come first among comparable ones: search and recall add a recency bonus that halves with every three days an item is older than the newest match (a message's own time, else the file's date). On LongMemEval-S's knowledge-update and temporal questions the newest answer session is now first for 0.607 of them, up from 0.446, with recall's hit rate unchanged; SciFact is unchanged.

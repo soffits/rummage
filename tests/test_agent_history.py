@@ -26,6 +26,12 @@ def _cc_user(uuid, text, ts, **extra):
             "message": {"role": "user", "content": text}, **extra}
 
 
+def _cc_queued(uuid, prompt, ts, mode="prompt"):
+    return {"parentUuid": "x", "isSidechain": False, "type": "attachment", "uuid": uuid, "timestamp": ts,
+            "cwd": "/home/me/proj", "sessionId": "s1",
+            "attachment": {"type": "queued_command", "prompt": prompt, "commandMode": mode, "timestamp": ts}}
+
+
 def _cc_assistant(uuid, blocks, ts, sidechain=False):
     return {"parentUuid": "x", "isSidechain": sidechain, "type": "assistant", "uuid": uuid, "timestamp": ts,
             "cwd": "/home/me/proj", "sessionId": "s1",
@@ -65,16 +71,21 @@ def test_claude_code_reads_turns_and_then_only_new_lines(tmp_path):
     _lines(session, [
         _cc_assistant("a5", [{"type": "text", "text": "Moving rotation to 01:00 fixes it."}], "2026-11-14T10:01:00Z"),
         _cc_user("u4", "and the log retention?", "2026-11-14T10:02:00Z"),
+        # typed while the turn ran: Claude Code delivers it as a queued command, not a user record
+        _cc_queued("q1", [{"type": "text", "text": "ログの保存期間は30日で"}], "2026-11-14T10:02:10Z"),
+        _cc_queued("q2", "ls -la", "2026-11-14T10:02:11Z", mode="bash"),
+        _cc_assistant("a6", [{"type": "text", "text": "Retention set to 30 days."}], "2026-11-14T10:02:20Z"),
     ], mode="a")
     second = src.plan(known, state)
     turns = _turns(second, src)
-    assert set(turns) == {"11111111-2222:u1", "11111111-2222:u4"}  # the open turn grew, one new turn
+    assert set(turns) == {"11111111-2222:u1", "11111111-2222:u4", "11111111-2222:q1"}  # open turn grew, new turns
     assert "01:00" in turns["11111111-2222:u1"]
+    assert turns["11111111-2222:q1"] == "user: ログの保存期間は30日で\n\nClaude: Retention set to 30 days."
     assert second.state["files"][str(session)]["resume"] > state["files"][str(session)]["resume"]
 
     session.unlink()
-    gone = src.plan({**known, "11111111-2222:u4": "x"}, second.state)
-    assert set(gone.removed) == {"11111111-2222:u1", "11111111-2222:u4"}
+    gone = src.plan({**known, "11111111-2222:u4": "x", "11111111-2222:q1": "x"}, second.state)
+    assert set(gone.removed) == {"11111111-2222:u1", "11111111-2222:u4", "11111111-2222:q1"}
 
 
 def test_codex_rollout(tmp_path):

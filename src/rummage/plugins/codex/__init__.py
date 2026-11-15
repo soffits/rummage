@@ -13,16 +13,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from rummage.chats import AppendOnlyLogs, Turn, iso_time, keep_chars, session_files, turn_segments
-from rummage.sources import Plan, Source
-from rummage.store import Item, Segment
+from rummage.chats import AppendOnlyLogs, Turn, iso_time, keep_chars, session_files, ChatSource
+from rummage.sources import Plan
 
 
 def default_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
 
-class CodexSource(Source):
+class CodexSource(ChatSource):
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
         self.keep_chars = keep_chars(spec)
@@ -67,6 +66,3 @@ class CodexSource(Source):
     def plan(self, known: dict[str, str | None], state: dict) -> Plan:
         files = session_files(self.watch_roots(), ["**/rollout-*.jsonl", "**/rollout-*.jsonl.zst"])
         return self.logs.plan(files, known, state)
-
-    def load(self, item: Item) -> list[Segment]:
-        return turn_segments(item, self.keep_chars)

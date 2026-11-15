@@ -12,9 +12,9 @@ import os
 import sqlite3
 from pathlib import Path
 
-from rummage.store import Item, Segment
-from rummage.sources import Plan, Source
-from rummage.chats import Turn, keep_chars, people_map, turn_item, turn_segments
+from rummage.store import Item
+from rummage.sources import Plan
+from rummage.chats import Turn, keep_chars, people_map, turn_item, ChatSource
 
 DEFAULT_FRONTENDS = ["telegram", "desktop", "tui", "api_server"]
 # Injected by Hermes itself, not typed by a person.
@@ -33,7 +33,7 @@ def hermes_home() -> Path:
     return Path.home() / ".hermes"
 
 
-class HermesSource(Source):
+class HermesSource(ChatSource):
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
         self.keep_chars = keep_chars(spec)
@@ -104,6 +104,3 @@ class HermesSource(Source):
         if since == 0:
             removed += [k for k in known if k not in current and k not in removed]
         return Plan(upserts, removed, {"max_id": top}, len(upserts))
-
-    def load(self, item: Item) -> list[Segment]:
-        return turn_segments(item, self.keep_chars)

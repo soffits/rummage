@@ -1,7 +1,7 @@
 """Claude Code sessions: `~/.claude/projects/<project>/<session>.jsonl` (`$CLAUDE_CONFIG_DIR/projects`), read-only.
 
 A person's message is a `user` record that isn't a tool result, a meta or compact-summary record or a sidechain
-(subagent) record; text Claude Code injects (`<system-reminder>` blocks, slash-command echoes) is left out. The
+(subagent) record, or a prompt queued while a turn ran (`person_words`); text Claude Code injects (`<system-reminder>` blocks, slash-command echoes) is left out. The
 turn collects the text blocks of the `assistant` records after it; tool calls, tool results and thinking are
 skipped. Subagent transcripts (in each session's folder) are not read.
 """
@@ -13,19 +13,34 @@ import re
 from pathlib import Path
 
 from rummage.chats import (
-    AppendOnlyLogs, Turn, iso_time, keep_chars, session_files, text_blocks, turn_segments)
-from rummage.sources import Plan, Source
-from rummage.store import Item, Segment
+    AppendOnlyLogs, Turn, iso_time, keep_chars, session_files, text_blocks, ChatSource)
+from rummage.sources import Plan
 
 _REMINDER = re.compile(r"<system-reminder>[\s\S]*?</system-reminder>")
 DEFAULT_SKIP = ["<command-", "<local-command-", "Caveat: The messages below", "[Request interrupted"]
+
+
+def person_words(record: dict):
+    """The content a person sent in a record, or None: a `user` record's message (not a tool result, meta or
+    compact summary), or a prompt typed while a turn ran, which Claude Code delivers as a `queued_command`
+    attachment instead of a `user` record."""
+    kind = record.get("type")
+    if kind == "user":
+        if record.get("isMeta") or record.get("isCompactSummary") or "toolUseResult" in record:
+            return None
+        return (record.get("message") or {}).get("content")
+    queued = record.get("attachment") if kind == "attachment" else None
+    if isinstance(queued, dict) and queued.get("type") == "queued_command" and \
+            queued.get("commandMode", "prompt") == "prompt":
+        return queued.get("prompt")
+    return None
 
 
 def default_root() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
 
 
-class ClaudeCodeSource(Source):
+class ClaudeCodeSource(ChatSource):
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
         self.keep_chars = keep_chars(spec)
@@ -48,19 +63,21 @@ class ClaudeCodeSource(Source):
             if kind == "custom-title":
                 ctx["title"] = r.get("customTitle") or ctx.get("title", "")
                 continue
-            if kind not in ("user", "assistant") or r.get("isSidechain"):
+            if r.get("isSidechain"):
+                continue
+            said = person_words(r)
+            if said is not None:
+                text = _REMINDER.sub("", text_blocks(said, ("text",))).strip()
+                if text and not text.startswith(self.skip):
+                    turns.append(Turn(ctx.get("session", ""), r.get("uuid") or str(offset),
+                                      iso_time(r.get("timestamp")), self.person, text, offset=offset))
+                ctx["project"] = r.get("cwd") or ctx.get("project", "")
+                continue
+            if kind != "assistant":
                 continue
             ctx["project"] = r.get("cwd") or ctx.get("project", "")
             message = r.get("message") or {}
-            if kind == "user":
-                if r.get("isMeta") or r.get("isCompactSummary") or "toolUseResult" in r:
-                    continue
-                text = _REMINDER.sub("", text_blocks(message.get("content"), ("text",))).strip()
-                if not text or text.startswith(self.skip):
-                    continue
-                turns.append(Turn(ctx.get("session", ""), r.get("uuid") or str(offset), iso_time(r.get("timestamp")),
-                                  self.person, text, offset=offset))
-            elif turns:
+            if turns:
                 reply = text_blocks(message.get("content"), ("text",))
                 if reply:
                     turns[-1].replies.append(reply)
@@ -71,6 +88,3 @@ class ClaudeCodeSource(Source):
 
     def plan(self, known: dict[str, str | None], state: dict) -> Plan:
         return self.logs.plan(session_files([self.root], ["*/*.jsonl"]), known, state)
-
-    def load(self, item: Item) -> list[Segment]:
-        return turn_segments(item, self.keep_chars)
