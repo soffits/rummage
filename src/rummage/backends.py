@@ -1,6 +1,7 @@
 """Which llama.cpp build embeds on this machine. `rummage setup` tries the platform's GPU build (Vulkan on Linux and
 Windows, Metal on macOS) and keeps it only when it sees a GPU, embeds a fixed sample clearly faster than the CPU
-build, and makes the model's reference vectors; otherwise the CPU build stays. As DigUp does
+build, and makes the model's reference vectors; otherwise the CPU build stays. Each GPU is timed on its own and the
+fastest that agrees is pinned, so a machine with an integrated and a discrete GPU uses the faster one only. As DigUp does
 (github.com/ARahim3/DigUp, MIT): the GPU only when a quick check finds it faster and giving the same results.
 """
 
@@ -88,25 +89,35 @@ def choose(runtime: Runtime, profile: Profile, threads: int, log=print, open_emb
     found = devices(runtime, backend)
     if not found:
         return keep_cpu(f"the {backend} build sees no GPU")
-    log(f"checking the {backend} build on {found[0]}")
     try:
         with open_embedder(runtime, profile, threads=threads, nice=0, backend="cpu") as cpu:
             cpu_seconds, cpu_reference = _timed(cpu)
-        with open_embedder(runtime, profile, threads=threads, nice=0, backend=backend) as gpu:
-            gpu_seconds, _ = _timed(gpu)
-            expected = list(profile.reference) or cpu_reference.tolist()
-            agreement = reference_agreement(gpu, expected)
     except (EmbedError, RuntimeMissing, OSError) as error:
-        return keep_cpu(f"the {backend} build failed: {error}", devices=found)
-    facts = {"devices": found, "cpu_seconds": round(cpu_seconds, 3), "gpu_seconds": round(gpu_seconds, 3),
-             "agreement": round(agreement, 5)}
-    if agreement < REFERENCE_COSINE:
-        return keep_cpu(f"the {backend} build's vectors differ from the model's (cosine {agreement:.4f})", **facts)
-    if gpu_seconds > cpu_seconds * FASTER:
-        return keep_cpu(f"the {backend} build isn't faster ({gpu_seconds:.2f} s against {cpu_seconds:.2f} s)",
+        return keep_cpu(f"the CPU build failed: {error}", devices=found)
+    expected = list(profile.reference) or cpu_reference.tolist()
+    tried = []
+    for line in found:
+        name = line.split(":", 1)[0]
+        log(f"checking the {backend} build on {line}")
+        try:
+            with open_embedder(runtime, profile, threads=threads, nice=0, backend=backend, device=name) as gpu:
+                seconds, _ = _timed(gpu)
+                agreement = reference_agreement(gpu, expected)
+        except (EmbedError, RuntimeMissing, OSError) as error:
+            tried.append({"device": line, "error": str(error)[:200]})
+            continue
+        tried.append({"device": line, "seconds": round(seconds, 3), "agreement": round(agreement, 5)})
+    facts = {"cpu_seconds": round(cpu_seconds, 3), "devices": tried}
+    agreeing = [t for t in tried if t.get("agreement", 0) >= REFERENCE_COSINE]
+    if not agreeing:
+        return keep_cpu(f"no {backend} device gives the model's vectors or runs", **facts)
+    best = min(agreeing, key=lambda t: t["seconds"])
+    if best["seconds"] > cpu_seconds * FASTER:
+        return keep_cpu(f"the {backend} build isn't faster ({best['seconds']:.2f} s against {cpu_seconds:.2f} s)",
                         **facts)
-    record = {"backend": backend, "reason": f"{cpu_seconds / max(gpu_seconds, 1e-6):.1f}x faster than the CPU, "
-                                            f"same vectors", **facts}
+    record = {"backend": backend, "device": best["device"].split(":", 1)[0],
+              "reason": f"{best['device'].split(' (')[0]}: {cpu_seconds / max(best['seconds'], 1e-6):.1f}x faster "
+                        f"than the CPU, same vectors", **facts}
     runtime.choose_backend(record)
-    log(f"llama.cpp runs on {found[0]} ({backend}): {record['reason']}")
+    log(f"llama.cpp runs on {record['reason']}")
     return record

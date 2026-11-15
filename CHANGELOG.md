@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.3
+
+- Setup times each GPU on its own and pins the fastest one that gives the model's vectors (`--device`), so a machine with an integrated and a discrete GPU no longer splits the model across both. Run `rummage setup --backend auto` to check again.
+
 ## 0.11.2
 
 - Agent integrations: this repository is a Claude Code and Codex plugin marketplace (recall hook plus the rummage skill), with an OpenCode 2 plugin in `integrations/opencode` (published as `@soffits/opencode-rummage`) and a Hermes Agent plugin in `integrations/hermes`.

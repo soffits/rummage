@@ -107,6 +107,12 @@ class Runtime:
             return Path(self._llama_server)
         return self.llama_dir(backend) / SERVER_NAME
 
+    @property
+    def device(self) -> str | None:
+        """The one GPU the backend check chose (`Vulkan1`), so a machine with several never splits the model
+        across them; None on the CPU."""
+        return None if self._llama_server or self.backend == "cpu" else self.backend_record.get("device")
+
     def gpu_layers(self, backend: str | None = None) -> int | None:
         """Layers to offload: all on a GPU backend, none on the CPU; None for a llama-server of one's own."""
         if self._llama_server:
@@ -330,9 +336,10 @@ class LocalEmbedder(Embedder):
 
     def __init__(self, runtime: Runtime, profile: Profile, media: bool = False, threads: int = 2, nice: int = 10,
                  log_path: Path | None = None, die_with_parent: bool = True, ready_timeout: float = 120,
-                 backend: str | None = None):
+                 backend: str | None = None, device: str | None = None):
         media = media and profile.media
         self.backend = backend or runtime.backend
+        self.device = device if backend else runtime.device
         missing = runtime.missing(profile, media, self.backend)
         if missing:
             raise RuntimeMissing("missing " + ", ".join(missing) + ": run `rummage setup`")
@@ -374,6 +381,7 @@ class LocalEmbedder(Embedder):
             "-c", str(n * 2), "-b", str(n), "-ub", str(n), "-np", "2",
             "--host", "127.0.0.1", "--port", str(self.port), "--no-webui",
             *(["-ngl", str(layers)] if layers is not None else []),
+            *(["--device", self.device] if self.device and self.backend != "cpu" else []),
         ]
         if self.media:
             args += ["--mmproj", str(files[1])]
