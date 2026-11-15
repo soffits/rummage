@@ -3,15 +3,42 @@ size first, then by content hash."""
 
 from __future__ import annotations
 
+import datetime as dt
 import fnmatch
 import hashlib
 import os
+import re
 from pathlib import Path
 
 from ..store import Item
 from . import Plan, Source
 
 DEFAULT_EXCLUDE = [".*", "node_modules", "__pycache__", "$RECYCLE.BIN", "System Volume Information"]
+
+
+_ISO_DAY = re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)")
+_ISO_WEEK = re.compile(r"(?<!\d)(\d{4})-W(\d{2})(?!\d)")
+_ISO_MONTH = re.compile(r"(?<!\d)(\d{4})-(\d{2})(?![\d-])")
+
+
+def path_dates(rel: str) -> dict:
+    """The time a file's path names, if any (`2026-10-15`, `2026-W44`, `2026-10`), as `when` and `when_end` in
+    epoch seconds: notes of a dated series are about that time whenever they were last edited."""
+    try:
+        if m := _ISO_DAY.search(rel):
+            start = dt.datetime(int(m[1]), int(m[2]), int(m[3]))
+            end = start + dt.timedelta(days=1)
+        elif m := _ISO_WEEK.search(rel):
+            start = dt.datetime.fromisocalendar(int(m[1]), int(m[2]), 1)
+            end = start + dt.timedelta(days=7)
+        elif m := _ISO_MONTH.search(rel):
+            start = dt.datetime(int(m[1]), int(m[2]), 1)
+            end = (start + dt.timedelta(days=32)).replace(day=1)
+        else:
+            return {}
+    except ValueError:
+        return {}
+    return {"when": start.timestamp(), "when_end": end.timestamp()}
 
 
 class FolderSource(Source):
@@ -70,7 +97,8 @@ class FolderSource(Source):
                     continue
             if known.get(rel) == fingerprint:
                 continue
+            info = path_dates(rel)
             upserts.append(Item(self.name, rel, self.kind, Path(rel).stem, rel, st.st_mtime, fingerprint,
-                                {"path": rel, "size": st.st_size}))
+                                {"path": rel, "size": st.st_size, **info}))
         removed = [key for key in known if key not in seen]
         return Plan(upserts, removed, {"stats": seen}, len(upserts))
