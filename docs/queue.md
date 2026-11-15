@@ -52,8 +52,6 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 
 ## Speed (high)
 
-- **Load-aware threads:** use more llama.cpp threads (up to cores − 1) while the 1-minute load is low and drop
-  back to the configured count when other work shows up; `nice` stays. Measure items/s at 2 and 4 threads first.
 - **Remote embedder:** `[embedder] url = "http://<gpu-box>:<port>"`, a `llama-server` with the same pinned GGUF on
   a GPU machine, used for big backfills when it answers, with the local CPU runtime as the fallback. `doctor`
   compares reference vectors from both and refuses the remote one when they differ beyond tolerance (same

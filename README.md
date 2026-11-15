@@ -45,6 +45,7 @@ data_dir = "~/.local/share/rummage"   # index, runtime files, logs (Windows defa
 
 [runtime]
 threads = 2                           # CPU threads for llama.cpp
+# max_threads = "auto"                # while indexing, use up to cores - 1 when the machine is otherwise idle
 nice = 10
 
 [sources.documents]

@@ -74,7 +74,7 @@ def cmd_index(cfg: C.Config, args) -> int:
     report: dict = {}
     deadline = time.monotonic() + args.max_minutes * 60 if args.max_minutes else None
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
-    embedders = Embedders(_runtime(cfg), cfg.threads, cfg.nice, cfg.log_dir / "llama-server.log")
+    embedders = Embedders(_runtime(cfg), cfg.threads, cfg.nice, cfg.log_dir / "llama-server.log", cfg.max_threads)
     try:
         if not args.embed_only:
             try:
