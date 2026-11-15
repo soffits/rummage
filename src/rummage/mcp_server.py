@@ -54,7 +54,7 @@ def build(cfg: C.Config):
         store = Store(cfg.index_path)
         try:
             store.check_version()
-            index_empty = store.db.execute("SELECT count(*) FROM items").fetchone()[0] == 0
+            index_empty = store.item_count() == 0
             vector = None if words_only or index_empty else query_vector(query)
             hits = Searcher(store.db, sources, paths, globs).search(query, vector, limit=limit)
         finally:

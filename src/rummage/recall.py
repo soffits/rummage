@@ -5,23 +5,40 @@ and it prints nothing when nothing clearly matches, keeps to a size budget, and 
 daemon when one runs, exact words otherwise).
 
 Input is the query as an argument, the text on stdin, or with `--hook` the JSON a prompt hook receives (its
-`prompt` field; Claude Code and Codex `UserPromptSubmit` send it). Output is a plain-text block, `--json`, or with
-`--hook` the hook's JSON reply carrying the block as `additionalContext`.
+`prompt` and `session_id` fields; Claude Code and Codex `UserPromptSubmit` send them). Output is a plain-text block,
+`--json`, or with `--hook` the hook's JSON reply carrying the block as `additionalContext`.
+
+Besides matches from the whole index, recall adds what was said minutes ago in other chat sessions when the prompt
+shares words with it or refers back to something ("just now", "as I said"): someone who opens a new chat to go on
+with another one gets that context, even before its vectors are made. Credentials are masked in all output unless
+`--show-secrets` or a source switches masking off.
 """
 
 from __future__ import annotations
 
 import json
 import sys
+import time
 
 from . import config as C
 from . import daemon as D
 from . import runtime as R
 from . import text as T
 from .search import Hit, Searcher, gate_for
+from .secrets import mask_value
 from .store import Store
 
 HOOK_EVENT = "UserPromptSubmit"
+
+# Phrases that point back at something said a moment ago, in the languages people commonly mix in chats.
+REFER_BACK = (
+    "just now", "as i said", "as i mentioned", "like i said", "we just", "you just", "earlier today",
+    "the other chat", "the other window", "where were we", "that thing",
+    "刚才", "刚刚", "前面说", "之前说", "上面说", "那个", "剛才", "剛剛", "前面說", "之前說",
+    "さっき", "先ほど", "前に言った", "さっきの", "아까", "방금", "앞에서 말한", "그거",
+    "tout à l'heure", "comme je disais", "vorhin", "wie gesagt", "hace un momento", "como dije",
+    "há pouco", "como eu disse", "только что", "как я говорил",
+)
 
 
 def worth_recalling(prompt: str) -> bool:
@@ -59,17 +76,53 @@ def why(hit: Hit) -> str:
     return ", ".join(parts) or "weak"
 
 
-def render_item(hit: Hit) -> str:
-    where = hit.ref + (f":{hit.lines}" if hit.lines else "")
-    head = " · ".join(filter(None, [hit.id, hit.source, where, hit.date, f'"{hit.title}"', why(hit)]))
-    return f"- {head}\n  {hit.snippet}"
+def render_item(hit: Hit | dict) -> str:
+    h = hit.as_dict() if isinstance(hit, Hit) else hit
+    where = h["ref"] + (f":{h['lines']}" if h.get("lines") else "")
+    reason = h.get("why") or why(hit)
+    head = " · ".join(filter(None, [h["id"], h["source"], where, h.get("date"), f'"{h["title"]}"', reason]))
+    return f"- {head}\n  {h['snippet']}"
 
 
-def render(hits: list[Hit]) -> str:
+def render(results: list[dict], recent: list[dict]) -> str:
     lines = ["Recalled from the user's own files by rummage; each line is #id · source · where (path:lines, or "
-             "chat session#message) · date · title · why it matched. Open one with `rummage get <#id>`."]
-    lines += [render_item(h) for h in hits]
+             "chat session#message) · date · title · why it matched. Open one with `rummage get <#id>` "
+             "(`--around 3` for the turns around a chat message)."]
+    lines += [render_item(h) for h in results]
+    if recent:
+        lines.append("Said minutes ago in another session:")
+        lines += [render_item(h) for h in recent]
     return "\n".join(lines)
+
+
+def refers_back(prompt: str) -> bool:
+    low = prompt.lower()
+    return any(cue in low for cue in REFER_BACK)
+
+
+def recent_turns(cfg: C.Config, prompt: str, exclude: list[str], minutes: float, max_items: int,
+                 skip_ids: set[str]) -> list[dict]:
+    """Chat turns from the last `minutes` in other sessions that share words with the prompt, or the latest ones
+    when the prompt refers back."""
+    if not cfg.index_path.exists() or minutes <= 0 or max_items <= 0:
+        return []
+    store = Store(cfg.index_path)
+    try:
+        items = [i for i in store.recent(time.time() - minutes * 60, exclude_sessions=exclude, limit=30)
+                 if i["kind"] == "chat" and i["id"] not in skip_ids]
+    finally:
+        store.close()
+    words = set(T.terms(prompt))
+    shared = [i for i in items if words & set(T.terms(i["text"]))]
+    chosen = shared or (items if refers_back(prompt) else [])
+    out = []
+    for i in chosen[:max_items]:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(i["mtime"] or 0))
+        out.append({"id": i["id"], "source": i["source"], "ref": i["ref"], "title": i["title"], "date": when,
+                    "info": i["info"], "lines": None, "snippet": T.snippet_head(i["text"], 300),
+                    "pending_vectors": i["pending_vectors"],
+                    "why": "recent, shares words" if i in shared else "recent, prompt refers back"})
+    return out
 
 
 def recall(cfg: C.Config, query: str, sources: list[str] | None, paths: list[str] | None, limit: int,
@@ -93,11 +146,20 @@ def recall(cfg: C.Config, query: str, sources: list[str] | None, paths: list[str
     return hits, "meaning" if vector is not None else "words", count
 
 
+def _masked(cfg: C.Config, args, value: dict) -> dict:
+    if args.show_secrets or not C.masks_secrets(cfg, value.get("source", "")):
+        return value
+    return mask_value(value)
+
+
 def run(cfg: C.Config, args) -> int:
     raw = args.query if args.query else sys.stdin.read()
+    session = args.session
     if args.hook:
         try:
-            prompt = str(json.loads(raw or "{}").get("prompt") or "")
+            event = json.loads(raw or "{}")
+            prompt = str(event.get("prompt") or "")
+            session = session or event.get("session_id")
         except ValueError:
             prompt = raw
     else:
@@ -107,20 +169,25 @@ def run(cfg: C.Config, args) -> int:
         return 0
     try:
         hits, mode, count = recall(cfg, prompt, args.source, args.path, 20, args.allow_model_load)
+        # Exact words alone are weaker evidence than a meaning match: ask for more of them.
+        min_words = args.min_words if mode == "meaning" else max(args.min_words, 0.75)
+        chosen = pick(hits, gate_for(args.min_z, count), min_words, args.max_items, args.max_chars, mode == "words")
+        results = [_masked(cfg, args, {**h.as_dict(), "why": why(h)}) for h in chosen]
+        recent = [_masked(cfg, args, r) for r in recent_turns(
+            cfg, prompt, [session] if session else [], args.recent_minutes, args.recent_items,
+            {r["id"] for r in results})]
     except Exception as error:  # a hook must never break the agent
         print(f"rummage recall: {type(error).__name__}: {error}", file=sys.stderr)
         return 0
-    # Exact words alone are weaker evidence than a meaning match: ask for more of them.
-    min_words = args.min_words if mode == "meaning" else max(args.min_words, 0.75)
-    chosen = pick(hits, gate_for(args.min_z, count), min_words, args.max_items, args.max_chars, mode == "words")
-    if not chosen:
+    if not results and not recent:
         return 0
     if args.json:
-        print(json.dumps({"schema": "rummage.recall.v1", "query": prompt, "mode": mode,
-                          "results": [{**h.as_dict(), "why": why(h)} for h in chosen]}, ensure_ascii=False))
+        print(json.dumps({"schema": "rummage.recall.v1", "query": prompt, "mode": mode, "results": results,
+                          "recent": recent}, ensure_ascii=False))
     elif args.hook:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": HOOK_EVENT,
-                                                 "additionalContext": render(chosen)}}, ensure_ascii=False))
+                                                 "additionalContext": render(results, recent)}},
+                         ensure_ascii=False))
     else:
-        print(render(chosen))
+        print(render(results, recent))
     return 0

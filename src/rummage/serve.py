@@ -53,7 +53,7 @@ class Service:
         store = Store(self.cfg.index_path)
         try:
             store.check_version()
-            index_empty = store.db.execute("SELECT count(*) FROM items").fetchone()[0] == 0
+            index_empty = store.item_count() == 0
             vector = None if words_only or index_empty else self.query_vector(q)
             hits = Searcher(store.db, sources or None, paths, globs).search(q, vector, limit=limit,
                                                                             kinds=set(kinds) or None)
