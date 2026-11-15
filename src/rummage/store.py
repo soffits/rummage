@@ -285,6 +285,19 @@ class Store:
             seen.setdefault(item, seg)
         return list(seen.items())
 
+    def segment_rows(self, segments: list[int]) -> dict[int, dict]:
+        """For each segment id: its text, where it is (loc, lines) and its item's id, source, ref and title."""
+        out = {}
+        for chunk in range(0, len(segments), 500):
+            part = segments[chunk:chunk + 500]
+            for seg, text, loc, lines, row, source, key, ref, title, mtime in self.db.execute(
+                    f"SELECT s.id, s.text, s.loc, s.lines, i.id, i.source, i.key, i.ref, i.title, i.mtime "
+                    f"FROM segments s JOIN items i ON i.id = s.item WHERE s.id IN ({','.join('?' * len(part))})",
+                    part):
+                out[seg] = {"item": row, "id": "#" + item_id(source, key), "source": source, "ref": ref,
+                            "title": title, "loc": loc, "lines": lines, "text": text or "", "mtime": mtime}
+        return out
+
     def item_row(self, row: int) -> dict | None:
         found = self.db.execute("SELECT source, kind, title, ref, info, key, mtime FROM items WHERE id = ?",
                                 (row,)).fetchone()
