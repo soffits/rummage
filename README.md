@@ -166,6 +166,12 @@ settings for the speaker labels.
 A plugin of your own is a class registered in the `rummage.sources` entry-point group; the docstring of
 `rummage.sources` describes the interface.
 
+## Quality
+
+On public retrieval slices rummage ranks the right document first more often than fidx and qmd's keyword mode:
+SciFact nDCG@10 0.92 (fidx 0.83), Korean MIRACL 0.80 (fidx 0.46). Setup, every number and what they don't show:
+[docs/benchmarks.md](docs/benchmarks.md).
+
 ## Speed
 
 On a desktop CPU (Intel i5-13400, 2 threads): ~1.35 s per passage of ~500 tokens while indexing, ~2 s per picture,
