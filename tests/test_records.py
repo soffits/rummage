@@ -80,3 +80,10 @@ def test_records_are_indexed_as_items_and_follow_edits(tmp_path):
     key = store.db.execute("SELECT key FROM items WHERE title = 'Cork mat'").fetchone()[0]
     assert "Cork mat" in source.original(key)["text"]
     store.close()
+
+
+def test_titles_skip_dates_and_numbers():
+    found = R.parse("x.csv", b"order_time,qty,item\n2026-01-02 10:00:00,2,Tea tin\n2026-01-03 11:00:00,1,Jam jar\n")
+    assert [r.title for r in found] == ["Tea tin", "Jam jar"]
+    found = R.parse("y.csv", b"when,count,place\n2026-01-02,3,Lisbon\n2026-01-04,4,Porto\n")
+    assert [r.title for r in found] == ["Lisbon", "Porto"]

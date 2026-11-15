@@ -16,7 +16,7 @@ from . import extract as X
 
 SUFFIXES = {".json", ".jsonl", ".ndjson", ".csv", ".tsv"}
 MIN_RECORDS = 2
-TITLE_KEYS = ("title", "name", "subject", "summary", "headline", "description", "label")
+TITLE_KEYS = ("title", "name", "subject", "item", "product", "summary", "headline", "description", "label")
 TITLE_CHARS = 120
 SEPARATOR = "#"
 
@@ -111,12 +111,17 @@ def _flatten(value, label: str = ""):
 def _title(row: dict, lines: list[tuple[str, str]], name: str) -> str:
     for wanted in TITLE_KEYS:
         for label, value in lines:
-            if label.rsplit(".", 1)[-1].lower() == wanted and not value.replace(".", "", 1).isdigit():
+            if label.rsplit(".", 1)[-1].lower() == wanted and _is_text(value):
                 return value[:TITLE_CHARS]
     for label, value in lines:
-        if not value.replace(".", "", 1).replace("-", "").isdigit():
+        if _is_text(value):
             return value[:TITLE_CHARS]
     return lines[0][1][:TITLE_CHARS] if lines else name
+
+
+def _is_text(value: str) -> bool:
+    """Words rather than a number, an id made of digits or a date."""
+    return not value.replace(".", "", 1).replace("-", "").isdigit() and _parse_time(value) is None
 
 
 def _when(row: dict) -> tuple[float | None, float | None]:
