@@ -1,6 +1,6 @@
 [project]
 name = "rummage"
-version = "0.14.0"
+version = "0.15.0"
 description = "Local search by meaning and exact words over your files, on your own machine, with EmbeddingGemma 2 on llama.cpp"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -30,6 +30,7 @@ codex = "rummage.plugins.codex:CodexSource"
 gemini-cli = "rummage.plugins.gemini_cli:GeminiCliSource"
 opencode = "rummage.plugins.opencode:OpenCodeSource"
 mail = "rummage.plugins.mail:MailSource"
+memory-export = "rummage.plugins.memory_export:MemoryExportSource"
 
 [project.scripts]
 rummage = "rummage.cli:main"

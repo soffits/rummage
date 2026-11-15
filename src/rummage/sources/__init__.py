@@ -74,6 +74,26 @@ def load_type(kind: str) -> type[Source]:
                          f"install its extra, e.g. `rummage[{kind}]`") from error
 
 
+def detected() -> dict[str, dict]:
+    """Source types that read another program's data, with the settings to use, when that data is on this machine."""
+    out = {}
+    for kind in sorted(available()):
+        try:
+            cls = load_type(kind)
+        except Exception:
+            continue
+        spec = cls.detect()
+        if spec:
+            out[kind] = spec
+    return out
+
+
+def found(sources: dict[str, dict]) -> dict[str, dict]:
+    """Detected sources that none of the configured `sources` reads yet, with the settings to use."""
+    configured_types = {s.get("type") for s in sources.values()}
+    return {k: spec for k, spec in detected().items() if k not in sources and k not in configured_types}
+
+
 def build(name: str, spec: dict, data_dir: Path) -> Source:
     try:
         cls = load_type(spec.get("type"))
