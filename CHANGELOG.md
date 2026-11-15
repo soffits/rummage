@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.1
+
+- Fixed: files named like `secrets.py` or `secret-santa.md` were skipped as key files, and code or notes that only mention a private-key header went in by name only. A name with "secret" or "credential" now counts only for config files (`credentials.json`, `secrets.yaml`), and only a real PEM key block (header plus key body) keeps a text file out.
+
 ## 0.16.0
 
 - Claude Code: `/rummage:pause` and `/rummage:resume`, answered by a hook without a model turn; the plugin's hooks
