@@ -710,6 +710,13 @@ def cmd_status(cfg: C.Config, args) -> int:
     if args.line:
         # For status bars and prompt hooks, run often: reads only the progress file, never the index.
         info = P.state(cfg.data_dir)
+        held = memory.load(cfg.data_dir)
+        here = os.getcwd()
+        pause = memory.active(held, "recall", here) or memory.active(held, "index", here)
+        info["paused_memory"] = memory.describe_pause(pause) if pause else None
+        if pause:
+            rest = info["line"].removeprefix("rummage: ")
+            info["line"] = memory.pause_line(pause) + (f"; {rest}" if rest else "")
         if args.json:
             print(json.dumps(info, ensure_ascii=False))
         elif info["line"]:

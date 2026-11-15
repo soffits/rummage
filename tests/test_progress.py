@@ -24,7 +24,8 @@ def test_nothing_written_means_complete(tmp_path):
 def test_reading_then_embedding(tmp_path):
     read = P.Run(tmp_path, "read")
     read.source("notes", phase="planning")
-    assert P.state(tmp_path)["line"] == "rummage: checking folders"
+    assert P.state(tmp_path)["state"] == "complete"           # a quick re-check says nothing
+    assert P.state(tmp_path, now=time.time() + P.QUIET_READ + 1)["line"] == "rummage: checking folders"
     read.source("notes", phase="reading", done=120, total=900)
     read.save(force=True)
     info = P.state(tmp_path)
@@ -257,3 +258,32 @@ def test_agents_and_people_follow_a_real_index_run(tmp_path, capsys, monkeypatch
         assert json.loads(run("status", "--json")[1])["progress"]["state"] == "complete"
     finally:
         server.shutdown()
+
+
+def test_status_line_puts_a_covering_pause_first(tmp_path, capsys, monkeypatch):
+    from rummage import memory
+    from rummage.cli import main
+
+    config = tmp_path / "config.toml"
+    config.write_text(f"data_dir = '{(tmp_path / 'data').as_posix()}'\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    memory.pause(tmp_path / "data", "recall", 3600, str(tmp_path), None, False)
+    embed = P.Run(tmp_path / "data", "embed")
+    embed.vectors({"notes": (10, 100)})
+    embed.save(force=True)
+    assert main(["--config", str(config), "status", "--line"]) == 0
+    line = capsys.readouterr().out.strip()
+    assert line.startswith("rummage: recall paused under ") and line.endswith("; indexing 90/100")
+    assert main(["--config", str(config), "status", "--line", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["paused_memory"]["what"] == "recall"
+
+
+def test_the_notice_names_what_ensure_just_started():
+    from rummage.recall import notice
+
+    assert notice(None) is None and notice({"added": []}) is None
+    told = notice({"added": ["proj-a", "claude-code"], "project": {"folder": "/w/a", "added": True},
+                   "history": {"harness": "claude-code", "source": "claude-code"}})
+    assert "this project (/w/a" in told and "claude-code's own chat history" in told and "rummage pause" in told
+    assert "this project" not in notice({"added": ["claude-code"], "project": {"folder": "/w/a", "added": False},
+                                         "history": {"harness": "claude-code", "source": "claude-code"}})

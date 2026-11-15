@@ -1,0 +1,17 @@
+{
+  "name": "rummage",
+  "description": "Recall from your own files before each prompt, and a skill for searching them with the rummage CLI.",
+  "author": {
+    "name": "Sakina"
+  },
+  "homepage": "https://github.com/soffits/rummage",
+  "repository": "https://github.com/soffits/rummage",
+  "license": "AGPL-3.0-or-later",
+  "keywords": [
+    "memory",
+    "recall",
+    "search",
+    "local"
+  ],
+  "hooks": "./hooks/codex.json"
+}
