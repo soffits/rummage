@@ -119,6 +119,13 @@ def message_segments(item: Item) -> list[Segment]:
     return segments
 
 
+def _logout(imap) -> None:
+    try:
+        imap.logout()
+    except Exception:
+        pass
+
+
 class MailSource(Source):
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
@@ -210,10 +217,16 @@ class MailSource(Source):
         return [name for flags, name in listed if not any(f in flags for f in skip_flags)
                 and not any(fnmatch.fnmatch(name.lower(), pat) for pat in SKIP_FOLDER_NAMES)]
 
-    def _plan_imap(self, known: dict[str, str | None], state: dict) -> Plan:
+    def _connect(self):
         imap = imaplib.IMAP4_SSL(self.spec["imap_host"], int(self.spec.get("imap_port", 993)))
         self.login(imap)
-        upserts, removed, new_state = [], [], {}
+        return imap
+
+    def _plan_imap(self, known: dict[str, str | None], state: dict) -> Plan:
+        """Lists what is new first (UIDs only), then fetches messages one at a time as the indexer asks for them,
+        so a large mailbox never sits in memory."""
+        imap = self._connect()
+        removed, new_state, todo = [], {}, []
         try:
             for folder in self._folders(imap):
                 typ, _ = imap.select(f'"{folder}"', readonly=True)
@@ -232,22 +245,29 @@ class MailSource(Source):
                     typ, data = imap.uid("SEARCH", "ALL")
                     present = {f"{prefix}{int(u)}" for u in (data[0] or b"").split()}
                     removed += [k for k in known if k.startswith(f"{folder}/") and k not in present]
-                for uid in uids:
-                    key = f"{prefix}{uid}"
-                    if key in known:
-                        continue
-                    typ, data = imap.uid("FETCH", str(uid), "(BODY.PEEK[])")
-                    raw = next((d[1] for d in data if isinstance(d, tuple)), None)
-                    if raw:
-                        upserts.append(message_item(self.name, key, f"mail:{self.spec['imap_user']}/{key}", raw,
-                                                    folder))
+                todo += [(folder, uid, f"{prefix}{uid}") for uid in uids if f"{prefix}{uid}" not in known]
                 new_state[folder] = {"validity": validity, "uid": max(uids + [old.get("uid", 0) if start > 1 else 0])}
         finally:
+            _logout(imap)
+
+        def upserts():
+            connection, selected = None, None
             try:
-                imap.logout()
-            except Exception:
-                pass
-        return Plan(upserts, removed, new_state, len(upserts))
+                for folder, uid, key in todo:
+                    if connection is None:
+                        connection = self._connect()
+                    if folder != selected:
+                        connection.select(f'"{folder}"', readonly=True)
+                        selected = folder
+                    typ, data = connection.uid("FETCH", str(uid), "(BODY.PEEK[])")
+                    raw = next((d[1] for d in data if isinstance(d, tuple)), None)
+                    if raw:
+                        yield message_item(self.name, key, f"mail:{self.spec['imap_user']}/{key}", raw, folder)
+            finally:
+                if connection is not None:
+                    _logout(connection)
+
+        return Plan(upserts(), removed, new_state, len(todo))
 
     def load(self, item: Item) -> list[Segment]:
         return message_segments(item)
