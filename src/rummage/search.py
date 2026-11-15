@@ -19,7 +19,7 @@ from .switch import calibration
 WORD_WEIGHT = 2.0
 OPENED_WEIGHT = 0.4    # bonus per time an item was opened after a search with mostly the same words (max 2)
 RECENCY_WEIGHT = 1.0   # bonus of the newest plausible match; older ones get less, halving every RECENCY_HALF_LIFE
-RECENCY_HALF_LIFE = 14 * 86400.0
+RECENCY_HALF_LIFE = 3 * 86400.0
 
 
 def recency(times: dict[int, float], half_life: float) -> dict[int, float]:

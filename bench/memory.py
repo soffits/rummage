@@ -11,7 +11,8 @@ each question then searches only its own history. Recall's own selection decides
 
 Measures: hit rate (an injected item is an evidence turn, LoCoMo, or from an answer session, LongMemEval), the
 false-injection rate on questions with no answer, how often recall injected nothing on answerable questions, and
-evidence found in the top 10 of plain search (what a reader asking `rummage search` would see).
+evidence found in the top 10 of plain search (what a reader asking `rummage search` would see), and where plain search
+puts the newest answer session; each for every ranking in `RANKINGS`.
 """
 
 from __future__ import annotations
@@ -131,8 +132,8 @@ RANKINGS = {
     "recency-0.5": {"recency": 0.5},
     "recency-2": {"recency": 2.0},
     "recency-3": {"recency": 3.0},
-    "half-life-3d": {"half_life": 3 * 86400.0},
-    "half-life-60d": {"half_life": 60 * 86400.0},
+    "half-life-1d": {"half_life": 86400.0},
+    "half-life-14d": {"half_life": 14 * 86400.0},
 }
 
 

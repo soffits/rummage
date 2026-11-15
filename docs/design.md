@@ -18,7 +18,8 @@ words. Sources are plugins: the core reads folders, plugins add services. It is 
 - **Ranking: adapted from DigUp's `Searcher`** (MIT). Each query's cosines are put on one scale (z-scores, with a
   per-modality mean so pictures and passages compare), only segments 2 deviations above the rest count as meaning
   matches, and a word-coverage bonus brings in names, IDs and numbers. Queries made of IDs or long numbers weigh
-  words double and meaning half.
+  words double and meaning half. The word bonus shrinks to the share of meaning matches in the query's script, so
+  meaning decides across languages, and a recency bonus puts the newer of comparable matches first.
 - **Keyword index: SQLite FTS5** with every CJK character stored as its own token, so two-character CJK words
   match (qmd's trick; trigram can't match them).
 - **Not adopted:** DigUp itself (a desktop app; its engine is Swift and crawls local folders only), qmd (its

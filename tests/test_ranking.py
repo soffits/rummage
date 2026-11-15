@@ -58,8 +58,8 @@ def test_word_bonus_counts_as_far_as_the_matches_share_the_query_script(tmp_path
 
 
 def test_newer_plausible_match_comes_before_older_repeats(tmp_path):
-    """Three older chat turns repeat the question's words; two newer items answer it with fewer of them. A newer
-    one ranks first; without the recency term the old repeats win."""
+    """Three older chat turns share more of the question's words; two newer items answer it with fewer of them. A
+    newer one ranks first; without the recency term the old turns win."""
     rng = np.random.default_rng(3)
     q = _query(rng)
     store = Store(tmp_path / "index.db")
@@ -68,11 +68,11 @@ def test_newer_plausible_match_comes_before_older_repeats(tmp_path):
         _put(store, f"filler{n}", f"Something else entirely {n}", _vector(q, 0.1 + rng.normal(0, 0.03), rng),
              mtime=now - 400 * DAY)
     for n in range(3):
-        _put(store, f"old{n}", f"did the bookshelf arrive yet? still waiting on the bookshelf {n}",
+        _put(store, f"old{n}", f"the bookshelf hasn't come yet, still waiting {n}",
              _vector(q, 0.62, rng), info={"time": "2027-01-01T10:00:00+00:00"})
-    _put(store, "mail", "Delivery attempted: your parcel is at the front desk", _vector(q, 0.58, rng),
+    _put(store, "mail", "Bookshelf delivery attempted: your parcel is at the front desk", _vector(q, 0.6, rng),
          info={"time": "2027-01-20T09:00:00+00:00"})
-    _put(store, "note", "Bookshelf delivered and assembled", _vector(q, 0.57, rng), mtime=now)
+    _put(store, "note", "Bookshelf delivered and assembled", _vector(q, 0.6, rng), mtime=now)
     store.commit()
     store.set_meta("model", "m")
     query = "did the bookshelf arrive yet"

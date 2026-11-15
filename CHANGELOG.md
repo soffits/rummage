@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.18.0
+
+- Newer matches come first among comparable ones: search and recall add a recency bonus that halves with every three days an item is older than the newest match (a message's own time, else the file's date). On LongMemEval-S's knowledge-update and temporal questions the newest answer session is now first for 0.607 of them, up from 0.446, with recall's hit rate unchanged; SciFact is unchanged.
+- Across languages, meaning decides more: the exact-word bonus is weighed by how many of the meaning matches are in the query's script (CJK as one family, else Latin, Cyrillic, Greek...), since words can only match text in the query's own script. Each passage's script is stored with it; an existing index fills it in the first time it is opened.
+- `bench/memory.py` writes each turn with its session's date, compares rankings side by side and reports where plain search puts the newest answer session; `--category` limits LongMemEval-S to some question types.
+
 ## 0.17.1
 
 - Fixed: a `files` index made before 0.17.0 kept data files as one item until they changed; the next run now reads them as records.
