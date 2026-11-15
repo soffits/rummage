@@ -28,6 +28,7 @@ import time
 
 from pathlib import Path
 
+from . import backends
 from . import config as C
 from . import daemon as D
 from . import envelope as E
@@ -60,8 +61,14 @@ def _media(cfg: C.Config) -> bool:
 
 def cmd_setup(cfg: C.Config, args) -> int:
     profile = M.by_name(cfg.models, args.model or cfg.model)
-    _runtime(cfg).setup(profile, media=_media(cfg) or args.media, log=_eprint)
-    _eprint(f"runtime ready for {profile.name}:", _runtime(cfg).root)
+    rt = _runtime(cfg)
+    rt.setup(profile, media=_media(cfg) or args.media, log=_eprint)
+    if profile.local and rt.backend != "custom":
+        if args.backend == "cpu":
+            rt.choose_backend({"backend": "cpu", "reason": "chosen with `rummage setup --backend cpu`"})
+        elif args.backend == "auto" or "reason" not in rt.backend_record:
+            backends.choose(rt, profile, cfg.threads, log=_eprint)
+    _eprint(f"runtime ready for {profile.name} on {rt.backend}:", rt.root)
     return 0
 
 
@@ -632,6 +639,7 @@ def cmd_status(cfg: C.Config, args) -> int:
             lines.append(f"  the config asks for {cfg.model}: the next index run starts the switch")
         lines += switch.describe(out["switch"])
     out["configured_sources"] = list(cfg.sources)
+    out["backend"] = _runtime(cfg).backend_record if not cfg.llama_server else {"backend": "custom"}
     out["daemon"] = {"running": D.running(cfg.data_dir), "socket": str(D.socket_path(cfg.data_dir)),
                      "idle_minutes": cfg.daemon_idle_minutes}
     out["notes"] = limit_notes(out.get("sources") or {})
@@ -769,6 +777,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("setup", help="fetch the pinned runtime and model files")
     p.add_argument("--media", action="store_true", help="also fetch the image/audio encoders")
     p.add_argument("--model", help="this model profile instead of the configured one")
+    p.add_argument("--backend", choices=["auto", "cpu"],
+                   help="auto: check the GPU build again; cpu: use the CPU build (default: check once)")
     p.set_defaults(func=cmd_setup)
 
     models_cli.add_parser(sub)

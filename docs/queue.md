@@ -107,3 +107,12 @@ data, tests.
    search has in its top 10-20, and injects about as often on unanswerable questions as on answerable ones. If its
    output is pointers for an agent to open, lower thresholds and a few newest-related items fit better; measure
    with `bench/memory.py`'s lead metrics before changing the defaults.
+
+## GPU backend
+
+- The backend check compares text vectors only; with the image and audio encoders on the GPU too, a picture's vector
+  isn't checked against a CPU one. A reference picture in the profile would close that.
+- Queries run on the chosen backend like indexing; DigUp keeps searches on the CPU so a sleeping GPU never delays
+  one. Worth measuring on a real GPU before changing.
+- Not run on a machine with a GPU here (CI and this box have none): the device listing, the download and the
+  fall-back-to-CPU path ran for real against the Vulkan build, the GPU-wins path only with stand-ins.

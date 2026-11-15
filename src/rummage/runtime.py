@@ -52,7 +52,20 @@ LLAMA_BUILDS = {
     ("Windows", "ARM64"): _build("win-cpu-arm64.zip", 13_466_926,
                                  "d77e3fae0f188e2232b481eda455fca3b43f869ef3a6589e3499964f8df62358"),
 }
+# GPU builds per platform. macOS's own builds already run on Metal, so there the GPU backend needs no download.
+GPU_BUILDS = {
+    ("Linux", "x86_64"): ("vulkan", _build("ubuntu-vulkan-x64.tar.gz", 36_191_448,
+                                           "e75a1996f918e94515c6e2f156693c310dd7b0666f635252e8a32d8bb8b9a382")),
+    ("Linux", "aarch64"): ("vulkan", _build("ubuntu-vulkan-arm64.tar.gz", 29_472_885,
+                                            "a30d146ce6178481f66d40f2e9f87cf3ef47d254fcbd5e4d9f330f2f8ae40711")),
+    ("Windows", "AMD64"): ("vulkan", _build("win-vulkan-x64.zip", 38_119_681,
+                                            "68462280e0801af67a5a02617cf155a0fa8018fd5f805b2285157b771c10da12")),
+    ("Windows", "ARM64"): ("vulkan", _build("win-vulkan-arm64.zip", 26_052_045,
+                                            "d82aab38a46ebaeb174e85487febbc7774da57538adb94c82d57861b674145d1")),
+    ("Darwin", "arm64"): ("metal", None),
+}
 SERVER_NAME = "llama-server.exe" if platform.system() == "Windows" else "llama-server"
+BACKEND_FILE = "backend.json"
 
 
 class RuntimeMissing(RuntimeError):
@@ -64,7 +77,8 @@ class EmbedError(RuntimeError):
 
 
 class Runtime:
-    """Where the pinned files live (`<data>/runtime`), and how to fetch them."""
+    """Where the pinned files live (`<data>/runtime`), how to fetch them, and which llama.cpp build runs: the CPU
+    build, or the GPU build `rummage setup` found faster and agreeing (`backends.choose`, kept in `backend.json`)."""
 
     def __init__(self, data_dir: Path, llama_server: str | None = None):
         self.root = data_dir / "runtime"
@@ -72,14 +86,32 @@ class Runtime:
         self._llama_server = llama_server
 
     @property
-    def llama_dir(self) -> Path:
-        return self.root / f"llama-{LLAMA_TAG}"
+    def backend_record(self) -> dict:
+        """What the last backend check chose, for this llama.cpp build; `{"backend": "cpu"}` when none ran."""
+        try:
+            record = json.loads((self.root / BACKEND_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"backend": "cpu"}
+        return record if record.get("llama") == LLAMA_TAG else {"backend": "cpu"}
 
     @property
-    def server_binary(self) -> Path:
+    def backend(self) -> str:
+        return "custom" if self._llama_server else self.backend_record.get("backend", "cpu")
+
+    def llama_dir(self, backend: str | None = None) -> Path:
+        backend = backend or self.backend
+        return self.root / (f"llama-{LLAMA_TAG}-{backend}" if backend == "vulkan" else f"llama-{LLAMA_TAG}")
+
+    def server_binary(self, backend: str | None = None) -> Path:
         if self._llama_server:
             return Path(self._llama_server)
-        return self.llama_dir / SERVER_NAME
+        return self.llama_dir(backend) / SERVER_NAME
+
+    def gpu_layers(self, backend: str | None = None) -> int | None:
+        """Layers to offload: all on a GPU backend, none on the CPU; None for a llama-server of one's own."""
+        if self._llama_server:
+            return None
+        return 0 if (backend or self.backend) == "cpu" else 999
 
     def model_path(self, pinned: Pinned) -> Path:
         return self.models / pinned.name
@@ -92,46 +124,59 @@ class Runtime:
             return [Path(profile.path).expanduser()]
         return [self.model_path(p) for p in (profile.gguf, profile.mmproj if media else None) if p]
 
-    def missing(self, profile: Profile, media: bool) -> list[str]:
+    def missing(self, profile: Profile, media: bool, backend: str | None = None) -> list[str]:
         if not profile.local:
             return []
-        missing = [] if self.server_binary.exists() else [str(self.server_binary)]
+        server = self.server_binary(backend)
+        missing = [] if server.exists() else [str(server)]
         return missing + [str(f) for f in self.files(profile, media) if not f.exists()]
 
+    def install(self, backend: str, log=print) -> None:
+        """Fetches the pinned llama.cpp build of `backend` ("cpu" or a GPU backend of this platform)."""
+        if self._llama_server or self.server_binary(backend).exists():
+            return
+        key = (platform.system(), platform.machine())
+        build = LLAMA_BUILDS.get(key) if backend in ("cpu", "metal") else (GPU_BUILDS.get(key) or (None, None))[1]
+        if build is None:
+            raise RuntimeMissing(
+                f"no pinned llama.cpp {backend} build for {platform.system()} {platform.machine()}: "
+                "set runtime.llama_server in the config to a llama-server binary"
+            )
+        self.root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=self.root) as tmp:
+            archive = Path(tmp) / build.name
+            _download(build, archive, log)
+            unpacked = Path(tmp) / "unpacked"
+            if build.name.endswith(".zip"):
+                with zipfile.ZipFile(archive) as z:
+                    z.extractall(unpacked)
+            else:
+                with tarfile.open(archive) as tar:
+                    tar.extractall(unpacked, filter="data")
+            server = next(unpacked.rglob(SERVER_NAME), None)
+            if server is None:
+                raise RuntimeMissing(f"{build.name} has no {SERVER_NAME}")
+            server.parent.rename(self.llama_dir(backend))
+
     def setup(self, profile: Profile, media: bool, log=print) -> None:
-        """Fetches whatever `profile` needs and is missing, checks each file's size and SHA-256, and drops older
-        llama.cpp builds."""
+        """Fetches whatever `profile` needs and is missing (the CPU build always, as the fallback; the chosen GPU
+        build when there is one), checks each file's size and SHA-256, and drops older llama.cpp builds."""
         if not profile.local:
             return
         self.models.mkdir(parents=True, exist_ok=True)
-        if not self._llama_server and not self.server_binary.exists():
-            build = LLAMA_BUILDS.get((platform.system(), platform.machine()))
-            if build is None:
-                raise RuntimeMissing(
-                    f"no pinned llama.cpp build for {platform.system()} {platform.machine()}: "
-                    "set runtime.llama_server in the config to a llama-server binary"
-                )
-            self.root.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(dir=self.root) as tmp:
-                archive = Path(tmp) / build.name
-                _download(build, archive, log)
-                unpacked = Path(tmp) / "unpacked"
-                if build.name.endswith(".zip"):
-                    with zipfile.ZipFile(archive) as z:
-                        z.extractall(unpacked)
-                else:
-                    with tarfile.open(archive) as tar:
-                        tar.extractall(unpacked, filter="data")
-                server = next(unpacked.rglob(SERVER_NAME), None)
-                if server is None:
-                    raise RuntimeMissing(f"{build.name} has no {SERVER_NAME}")
-                server.parent.rename(self.llama_dir)
+        self.install("cpu", log)
+        if self.backend not in ("cpu", "custom"):
+            self.install(self.backend, log)
         for old in self.root.glob("llama-b*"):
-            if old != self.llama_dir and old.is_dir():
+            if not old.name.startswith(f"llama-{LLAMA_TAG}") and old.is_dir():
                 shutil.rmtree(old)
         for pinned in (profile.gguf, profile.mmproj if media else None):
             if pinned and not self.model_path(pinned).exists():
                 _download(pinned, self.model_path(pinned), log)
+
+    def choose_backend(self, record: dict) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        (self.root / BACKEND_FILE).write_text(json.dumps({**record, "llama": LLAMA_TAG}, indent=2), encoding="utf-8")
 
 
 def _download(pinned: Pinned, target: Path, log) -> None:
@@ -279,13 +324,16 @@ class Embedder:
 class LocalEmbedder(Embedder):
     """A llama-server child bound to 127.0.0.1 on a free port, started for one run and stopped with it.
 
-    `media`: also load the profile's image and audio encoders.
+    `media`: also load the profile's image and audio encoders. `backend`: run this llama.cpp build instead of the
+    one setup chose.
     """
 
     def __init__(self, runtime: Runtime, profile: Profile, media: bool = False, threads: int = 2, nice: int = 10,
-                 log_path: Path | None = None, die_with_parent: bool = True, ready_timeout: float = 120):
+                 log_path: Path | None = None, die_with_parent: bool = True, ready_timeout: float = 120,
+                 backend: str | None = None):
         media = media and profile.media
-        missing = runtime.missing(profile, media)
+        self.backend = backend or runtime.backend
+        missing = runtime.missing(profile, media, self.backend)
         if missing:
             raise RuntimeMissing("missing " + ", ".join(missing) + ": run `rummage setup`")
         self.runtime = runtime
@@ -314,8 +362,9 @@ class LocalEmbedder(Embedder):
 
     def start(self) -> None:
         self.port = _free_port()
-        binary = self.runtime.server_binary
+        binary = self.runtime.server_binary(self.backend)
         files = self.runtime.files(self.profile, self.media)
+        layers = self.runtime.gpu_layers(self.backend)
         # A non-causal input must fit one micro-batch: `texts` embeds what could be longer than that in pieces.
         n = self.max_tokens
         args = [
@@ -324,6 +373,7 @@ class LocalEmbedder(Embedder):
             "-t", str(self.threads), "-tb", str(self.threads),
             "-c", str(n * 2), "-b", str(n), "-ub", str(n), "-np", "2",
             "--host", "127.0.0.1", "--port", str(self.port), "--no-webui",
+            *(["-ngl", str(layers)] if layers is not None else []),
         ]
         if self.media:
             args += ["--mmproj", str(files[1])]

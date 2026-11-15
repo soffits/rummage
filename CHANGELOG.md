@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.1
+
+- `rummage setup` tries llama.cpp's GPU build (Vulkan on Linux and Windows, Metal on macOS) and uses it only when it sees a GPU, embeds clearly faster than the CPU build and gives the model's reference vectors; otherwise the CPU build stays. `rummage status` shows the backend and why; `rummage setup --backend auto|cpu` checks again or stays on the CPU.
+
 ## 0.11.0
 
 rummage is now a smaller memory add-on: it reads, finds, opens and says what it left out, and leaves judgment to the agent calling it. Reasons in `docs/decisions.md`, "Scope".

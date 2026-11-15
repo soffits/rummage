@@ -27,6 +27,9 @@ $ rummage search "INV-20931" --words-only --json
 
 Needs Python 3.11+. On Linux, macOS and Windows (x64 or ARM), `rummage setup` downloads the pinned llama.cpp build
 and the model files and checks their SHA-256; elsewhere, point `runtime.llama_server` at a `llama-server` you built.
+When the machine has a GPU (Vulkan on Linux and Windows, Metal on macOS), setup also tries llama.cpp's GPU build once
+and keeps it only if it embeds clearly faster than the CPU and gives the model's reference vectors; `rummage status`
+shows which one runs and why. `rummage setup --backend auto` checks again, `--backend cpu` stays on the CPU.
 
 ```sh
 uv tool install 'git+https://github.com/soffits/rummage'          # core
