@@ -174,3 +174,14 @@ def test_path_and_glob_scoping(tmp_path):
     assert refs(globs=["*.pdf"]) == ["housing/lease.pdf", "housing_old/lease.pdf"]
     assert refs(paths=["housing/"], globs=["*.md"]) == ["housing/notes.md"]
     store.close()
+
+
+def test_tiny_index_still_finds_by_meaning(tmp_path):
+    store = Store(tmp_path / "index.db")
+    target = _vec(5)
+    for n, vec in enumerate([target, _vec(6), _vec(7)]):
+        store.put(Item("s", f"k{n}", "note", f"n{n}", f"r{n}"), [Segment("text", f"words {n}", loc="0", vector=vec)])
+    store.commit()
+    hits = Searcher(store.db).search("query with no shared words", target, limit=3)
+    assert hits and hits[0].ref == "r0"
+    store.close()
