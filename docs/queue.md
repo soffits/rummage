@@ -50,6 +50,13 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
   purchase, a delivery, a reminder), query in Chinese; expected the English passage in the top 3. Measure the word
   weight against meaning when the query and the best passage are in different languages (CJK and Latin scripts
   both ways) before changing ranking; `rummage-ablations` with a cross-language set is the place.
+- **Recall ignores how recent a lead is.** `recall "漏水传感器到了没有"` (have the leak sensors arrived) returned three
+  chat turns from the day before, not that morning's "delivery attempted" mails or the support-chat summary, which
+  answer it. Recall ranks plausible matches by meaning and words only, and a fresh item that is a weaker match
+  loses. First check where the fresh items fall out (outside the top 20 that recall reads, or below its gates),
+  then try a configurable time-decay term or slots kept for the newest plausible matches. Repro: one topic, three
+  older chat turns that repeat the query's words, two newer items (a mail, a note) that answer it with fewer of
+  them; expected at least one newer item among the recalled. Measure on `bench/memory.py` before changing defaults.
 - `get --original` reads files of folder sources only; for a Seafile item it could download the file the same way
   indexing does.
 - The query daemon a search starts isn't used on systems without Unix sockets (Windows); they keep loading the
