@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.16.0
 
 - Claude Code: `/rummage:pause` and `/rummage:resume`, answered by a hook without a model turn; the plugin's hooks
   name their harness (`--harness claude-code`, and `--harness codex` through Codex's own `.codex-plugin/plugin.json`).
