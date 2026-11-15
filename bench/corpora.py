@@ -60,7 +60,8 @@ def _miracl_parts(dataset: str, lang: str, raw: Path):
 
 def _load_miracl(dataset: str, lang: str, raw: Path):
     read, parts = _miracl_parts(dataset, lang, raw)
-    queries = {q["_id"]: q["text"] for q in read(f"{lang}-queries/dev-00000-of-00001.parquet")}
+    ident = lambda row: row.get("_id", row.get("id"))   # the MTEB copies name it either way
+    queries = {ident(q): q["text"] for q in read(f"{lang}-queries/dev-00000-of-00001.parquet")}
     judged: dict[str, dict[str, int]] = {}
     for row in read(f"{lang}-qrels/dev-00000-of-00001.parquet"):
         judged.setdefault(row["query-id"], {})[row["corpus-id"]] = int(row["score"])
@@ -68,7 +69,7 @@ def _load_miracl(dataset: str, lang: str, raw: Path):
     def documents():
         for part in parts:
             for doc in read(part):
-                yield doc["_id"], doc.get("title") or "", doc["text"]
+                yield ident(doc), doc.get("title") or "", doc["text"]
     return documents, queries, judged
 
 
