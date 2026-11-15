@@ -71,10 +71,13 @@ class Segment:
     vector: np.ndarray | None = None
     embed_text: str | None = None   # what the model reads, when it differs from `text`
     image: bytes | None = None      # PNG/JPEG bytes for an image segment (not stored)
+    known_hash: str | None = None   # the hash of a vector brought in whole (an import), when neither input is here
 
     @property
     def embed_hash(self) -> str | None:
         """What the vector depends on: the model's input text, or the picture's bytes."""
+        if self.known_hash:
+            return self.known_hash
         if self.image:
             return "i:" + hashlib.sha256(self.image).hexdigest()
         if self.embed_text:
@@ -97,6 +100,31 @@ class Item:
 def item_id(source: str, key: str) -> str:
     """A short id that stays the same for an item across runs and machines (shown as `#<id>`)."""
     return hashlib.sha1(f"{source}\0{key}".encode("utf-8")).hexdigest()[:10]
+
+
+@dataclass
+class Scope:
+    """Which items a search looks at: `sources`, refs starting with one of `paths` (a folder or file), refs
+    matching one of `globs` (`*` crosses folders, as in SQLite's GLOB). Empty means no limit."""
+    sources: list[str] | None = None
+    paths: list[str] | None = None
+    globs: list[str] | None = None
+
+    def where(self, alias: str = "i") -> tuple[str, list]:
+        clauses, args = [], []
+        if self.sources:
+            clauses.append(f"{alias}.source IN ({','.join('?' * len(self.sources))})")
+            args += self.sources
+        paths = [p.rstrip("/") for p in self.paths or []]
+        if paths:
+            clauses.append("(" + " OR ".join(f"{alias}.ref = ? OR {alias}.ref LIKE ? ESCAPE '\\'"
+                                              for _ in paths) + ")")
+            for p in paths:
+                args += [p, p.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"]
+        if self.globs:
+            clauses.append("(" + " OR ".join(f"{alias}.ref GLOB ?" for _ in self.globs) + ")")
+            args += list(self.globs)
+        return ("".join(f" AND {c}" for c in clauses), args)
 
 
 class NotFound(LookupError):
@@ -230,6 +258,52 @@ class Store:
                 self.db.execute("INSERT INTO fts(rowid, title, body) VALUES(?, ?, ?)",
                                 (seg_id, title, T.for_index(seg.text or "")))
 
+    # what search reads
+
+    def vectors(self, scope: Scope) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Every stored vector in scope: segment ids, their items, their kinds, and the vectors (float16 rows)."""
+        where, args = scope.where()
+        rows = self.db.execute(
+            f"SELECT s.id, s.item, s.kind, s.vector FROM segments s JOIN items i ON i.id = s.item "
+            f"WHERE s.vector IS NOT NULL{where}", args).fetchall()
+        matrix = (np.frombuffer(b"".join(r[3] for r in rows), np.float16).reshape(len(rows), DIM) if rows
+                  else np.zeros((0, DIM), np.float16))
+        return (np.array([r[0] for r in rows], np.int64), np.array([r[1] for r in rows], np.int64),
+                np.array([r[2] for r in rows]), matrix)
+
+    def match_words(self, pattern: str, scope: Scope, limit: int = 2000) -> list[tuple[int, int]]:
+        """Items whose segments match an FTS5 `pattern`, best first, each with its best segment."""
+        where, args = scope.where()
+        try:
+            rows = self.db.execute(
+                f"SELECT s.item, s.id FROM fts JOIN segments s ON s.id = fts.rowid JOIN items i ON i.id = s.item "
+                f"WHERE fts MATCH ?{where} ORDER BY bm25(fts, 3.0, 1.0) LIMIT ?", [pattern, *args, limit]).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        seen: dict[int, int] = {}
+        for item, seg in rows:
+            seen.setdefault(item, seg)
+        return list(seen.items())
+
+    def item_row(self, row: int) -> dict | None:
+        found = self.db.execute("SELECT source, kind, title, ref, info, key, mtime FROM items WHERE id = ?",
+                                (row,)).fetchone()
+        if found is None:
+            return None
+        source, kind, title, ref, info, key, mtime = found
+        return {"id": "#" + item_id(source, key), "source": source, "kind": kind, "title": title or "",
+                "ref": ref or "", "info": json.loads(info or "{}"), "key": key, "mtime": mtime}
+
+    def segment(self, segment: int) -> tuple[str | None, str | None, str, str | None]:
+        """(kind, loc, text, lines) of a segment."""
+        found = self.db.execute("SELECT kind, loc, text, lines FROM segments WHERE id = ?", (segment,)).fetchone()
+        return found if found else (None, None, "", None)
+
+    def first_text(self, row: int) -> str:
+        found = self.db.execute("SELECT text FROM segments WHERE item = ? AND kind = 'text' ORDER BY id LIMIT 1",
+                                (row,)).fetchone()
+        return found[0] if found else ""
+
     # vectors that wait for the model: keyword search has the segment already
 
     def pending(self, sources: list[str] | None = None, limit: int = 64) -> list[tuple[int, str]]:
@@ -277,6 +351,9 @@ class Store:
                     "SELECT s.kind, s.loc, s.text, s.vector FROM segments s JOIN items i ON i.id = s.item "
                     "WHERE i.source = ? AND i.key = ? AND s.vector IS NOT NULL AND s.embed_hash IS NULL",
                     (source, key))}
+
+    def rollback(self) -> None:
+        self.db.rollback()
 
     def commit(self) -> None:
         self.db.commit()
@@ -369,6 +446,21 @@ class Store:
         ids = [r[0] for r in rows]
         at = ids.index(row)
         return [self.item(r) for r in ids[max(0, at - around): at + around + 1]]
+
+    def dump(self):
+        """Every item with its segments, for export: `(item dict, [segment dicts with the vector as bytes])`."""
+        for row, source, key, kind, title, ref, mtime, fingerprint, info in self.db.execute(
+                "SELECT id, source, key, kind, title, ref, mtime, fingerprint, info FROM items ORDER BY id").fetchall():
+            segments = [{"kind": k, "loc": loc, "text": text, "lines": lines, "embed_hash": h, "pending": pending,
+                         "vector": vector}
+                        for k, loc, text, lines, h, pending, vector in self.db.execute(
+                            "SELECT kind, loc, text, lines, embed_hash, pending, vector FROM segments WHERE item = ? "
+                            "ORDER BY id", (row,))]
+            yield ({"source": source, "key": key, "kind": kind, "title": title, "ref": ref, "mtime": mtime,
+                    "fingerprint": fingerprint, "info": json.loads(info or "{}")}, segments)
+
+    def states(self) -> dict[str, dict]:
+        return {source: json.loads(value) for source, value in self.db.execute("SELECT source, value FROM source_state")}
 
     def summary(self) -> dict:
         out: dict = {"path": str(self.path), "vector_version": self.vector_version,

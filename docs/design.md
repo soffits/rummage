@@ -96,9 +96,12 @@ failed or any item failed, with one line per problem on stderr, so a scheduler t
   index made with another version refuses to be used until `rummage index --rebuild`. `rummage doctor` re-embeds
   three reference texts stored at the first run and compares (cosine ≥ 0.999), so a llama.cpp bump that changes
   vectors is caught before results quietly degrade.
-- **Watching:** run `rummage watch` for changes within seconds, and schedule `rummage index -q` (hourly is plenty)
+- **Watching:** run `rummage watch` for changes within seconds (`rummage service install` puts it under systemd,
+  launchd or Task Scheduler), and schedule `rummage index -q` (hourly is plenty)
   and `rummage doctor` (daily); both exit 1 with a
   reason when something's wrong. `rummage status --json` shows counts, the last run per source, and failures.
+- **Moving:** `rummage export` / `import` carry the index, vectors included, to another machine or storage
+  engine; see `docs/backends.md`.
 - **Removal:** uninstall the tool, delete `data_dir` and the config file. Nothing is written anywhere else.
 - **Server deployment** (file libraries indexed next to the file server): a container with the same CLI, its
   data dir on a volume, run on a schedule; it answers searches over HTTP for the machine that asks. See

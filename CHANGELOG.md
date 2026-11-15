@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `rummage export DIR` / `rummage import DIR`: the index as plain files (`rummage.export.v1`: JSONL items and segments, raw float16 vectors, the vector version stamped), so it moves to another machine or storage engine without embedding again. An import gives the same search results as the original.
+- Storage behind one seam: only `rummage.store` touches the index's SQL. `docs/backends.md` says what a Postgres/pgvector backend would implement and when it's worth it.
+- `rummage service install|uninstall|show`: runs `rummage watch` at login under systemd (user unit), launchd or Task Scheduler.
+- `rummage watch` re-plans every source each `--poll-minutes`, watched ones too, in case a file event was missed.
+
 ## 0.7.0
 
 - Agent session histories as sources: `claude-code`, `codex`, `gemini-cli` and `opencode`, plus `jsonl-chat` for any other JSONL chat log mapped by settings. One item per message a person wrote with the visible reply after it, the session, project folder, model and time; tool calls, tool output, thinking and subagents are left out. Logs are read as append-only, from where the last read stopped.
