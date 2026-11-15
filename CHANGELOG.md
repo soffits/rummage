@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A date in a file's path (`2026-10-15`, `2026-W44`, `2026-10`) counts as the file's time for time phrases in queries, besides its modification time: notes of a dated series are about that time whenever they were edited.
+- `rummage export` / `import` carry the feedback records too.
 - Implicit feedback: opening a result with `get` within 10 minutes of the search that found it counts for that item, and later searches with mostly the same words rank it a little higher (at most twice). Kept in the index, per source and key, so it survives re-indexing.
 - `serve` takes extra tokens scoped to sources (`[serve.tokens.<label>]` with `token_env` or `token_file` and `sources`): a scoped token's searches, `get` and `status` see only its sources, so several homes can share one server; the main token still sees everything.
 - `rummage about <name>`: everything that mentions a person across sources, newest first: notes, mails and files that name them and chat messages they wrote. Other names come from `--alias`, `[people."Name"] aliases` in the config, and the aliases of an indexed note titled with the name.

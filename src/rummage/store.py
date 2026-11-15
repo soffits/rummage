@@ -313,8 +313,9 @@ class Store:
         for chunk in range(0, len(rows), 500):
             part = rows[chunk:chunk + 500]
             out |= {r for (r,) in self.db.execute(
-                f"SELECT id FROM items WHERE id IN ({','.join('?' * len(part))}) AND mtime >= ? AND mtime < ?",
-                [*part, start, end])}
+                f"SELECT id FROM items WHERE id IN ({','.join('?' * len(part))}) AND ((mtime >= ? AND mtime < ?) "
+                f"OR (json_extract(info, '$.when') < ? AND json_extract(info, '$.when_end') > ?))",
+                [*part, start, end, end, start])}
         return out
 
     def known_names(self, name: str) -> set[str]:
@@ -542,6 +543,13 @@ class Store:
                             "ORDER BY id", (row,))]
             yield ({"source": source, "key": key, "kind": kind, "title": title, "ref": ref, "mtime": mtime,
                     "fingerprint": fingerprint, "info": json.loads(info or "{}")}, segments)
+
+    def opened_rows(self) -> list[dict]:
+        return [{"terms": t, "source": s, "key": k, "at": a}
+                for t, s, k, a in self.db.execute("SELECT terms, source, key, at FROM opened ORDER BY rowid")]
+
+    def add_opened(self, rows: list[dict]) -> None:
+        self.db.executemany("INSERT INTO opened(terms, source, key, at) VALUES(:terms, :source, :key, :at)", rows)
 
     def states(self) -> dict[str, dict]:
         return {source: json.loads(value) for source, value in self.db.execute("SELECT source, value FROM source_state")}
