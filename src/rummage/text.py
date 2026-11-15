@@ -37,9 +37,9 @@ def for_index(text: str) -> str:
     return _CJK_CHAR.sub(lambda m: f" {m.group(0)} ", normalize(text))
 
 
-def terms(query: str) -> list[str]:
+def terms(query: str, cjk_pairs: bool = True) -> list[str]:
     """The content words of a query, normalized: stopwords out, Latin words of one letter out, duplicates out. A CJK
-    run longer than two characters becomes its overlapping character pairs."""
+    run longer than two characters becomes its overlapping character pairs (unless `cjk_pairs` is off)."""
     seen: list[str] = []
 
     def add(word: str) -> None:
@@ -48,7 +48,7 @@ def terms(query: str) -> list[str]:
 
     for word in _WORD.findall(normalize(query)):
         if _CJK_RUN.fullmatch(word):
-            if len(word) <= 2:
+            if len(word) <= 2 or not cjk_pairs:
                 add(word)
             else:
                 for i in range(len(word) - 1):

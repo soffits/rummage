@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Benchmarks: `bench/run.py` adds `rummage-ablations` (ranking variants over one index), qmd's `vsearch` and `query` modes with an optional same-model run, fidx profiles, MIRACL with MTEB's hard negatives, recall@100 and a bootstrap interval for nDCG@10, and resumes finished runs; `bench/memory.py` measures recall on LoCoMo and LongMemEval-S. Search's signals can be switched off one by one for this (`search.Ranking`); the defaults are unchanged.
+
 ## 0.9.1
 
 - Every request rummage makes to another machine (JMAP, Seafile, Telegram, remotes, runtime downloads, a remote embedder) sends one User-Agent, `rummage/<version>`; some servers refused Python's default and answered 403.

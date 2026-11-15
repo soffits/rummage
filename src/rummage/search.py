@@ -29,6 +29,18 @@ def gate_for(base: float, count: int) -> float:
     return min(base, 0.75 * math.sqrt(max(count - 1, 1)))
 
 
+@dataclass(frozen=True)
+class Ranking:
+    """How search combines its signals. The defaults are rummage's; the other settings exist to measure what each
+    part is worth (`bench/run.py --engine rummage-ablations`)."""
+    meaning: bool = True        # vectors
+    words: bool = True          # keyword matches and their coverage bonus
+    zscore: bool = True         # cosines on one scale per query and modality (off: raw cosine)
+    gate: bool = True           # only vectors that stand out count (off: every top vector is a candidate)
+    fixed_cosine: float = 0.0   # with zscore off: the raw cosine a vector needs
+    cjk_pairs: bool = True      # CJK query runs matched by character pairs (off: the whole run as one phrase)
+
+
 @dataclass
 class Hit:
     id: str
@@ -58,11 +70,13 @@ class Hit:
 
 class Searcher:
     def __init__(self, store: Store, sources: list[str] | None = None, paths: list[str] | None = None,
-                 globs: list[str] | None = None, since: float | None = None, until: float | None = None):
+                 globs: list[str] | None = None, since: float | None = None, until: float | None = None,
+                 ranking: Ranking = Ranking()):
         """`sources`: only these sources. `paths`: only items whose ref starts with one of these prefixes. `globs`:
         only items whose ref matches one of these patterns (`*` crosses folders, as in SQLite's GLOB)."""
         self.store = store
         self.scope = Scope(sources, paths, globs, since, until)
+        self.ranking = ranking
         self._loaded = False
 
     def _load(self) -> None:
@@ -99,11 +113,15 @@ class Searcher:
                z_gate: float = Z_GATE, when: TimeRange | None = None) -> list[Hit]:
         """`when`: the time range the query names; items from it rank higher, and its phrase isn't matched as
         words."""
-        words = T.terms(without(query, when))
+        r = self.ranking
+        words = T.terms(without(query, when), cjk_pairs=r.cjk_pairs) if r.words else []
+        vector = vector if r.meaning else None
         best: dict[int, tuple[float, float, int]] = {}
         if vector is not None:
             z_gate = gate_for(z_gate, self.vector_count())
             scores, z = self.meaning(vector)
+            if not r.zscore:
+                z, z_gate = scores, r.fixed_cosine
             order = np.argsort(-z)
             for row in order[: max(2000, limit * 50)]:
                 item = int(self.seg_items[row])
@@ -125,7 +143,7 @@ class Searcher:
         lookup = T.is_lookup(words)
         meaning_weight, words_weight = (0.5, WORD_WEIGHT * 2) if lookup else (1.0, WORD_WEIGHT)
         in_range = self.store.items_between(set(best) | set(coverage), when.start, when.end) if when else set()
-        candidates = {i for i, (zz, _, _) in best.items() if zz >= z_gate}
+        candidates = {i for i, (zz, _, _) in best.items() if zz >= z_gate or not r.gate}
         candidates |= {i for i, share in coverage.items() if share >= 0.5}
         # From the time asked about, a weaker match is enough.
         candidates |= {i for i in in_range if best.get(i, (0.0,))[0] >= z_gate / 2 or coverage.get(i, 0) > 0}
