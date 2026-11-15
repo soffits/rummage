@@ -145,6 +145,7 @@ settings for the speaker labels.
 | `opencode` | | [OpenCode](https://github.com/anomalyco/opencode) 2 sessions in its `opencode.db`, the same way. Off until enabled. |
 | `dsh-sessions` | `dsh-sessions` | Chats in [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) session logs: one item per message a person wrote, with the reply after it. Config: optional `projects` (default: all), `people` (a JSON map of sender ids to names), `assistant_name`. Off until enabled. |
 | `hermes` | | Chats in a [Hermes Agent](https://github.com/NousResearch/hermes-agent) `state.db`, the same way. Config: `db` (default: Hermes's home), optional `people`, `exclude_sessions`, `frontends`. Off until enabled. |
+| `mail` | | Mail in a Maildir, an mbox, or an IMAP account (read-only: nothing is marked read). One item per message: subject, sender, recipients, date, body, and the text of attached documents. Config: `maildir` or `mbox`, or `imap_host`, `imap_user`, `password_env` / `password_file`, `folders`; optional `since`. |
 | `jsonl-chat` | | Any other chat log kept as JSONL, mapped by settings: `paths` (globs), and where the role, text, time and optional session, id and model are in each record (dotted paths). See the docstring of `rummage.plugins.jsonl_chat`. |
 | `telegram-stickers` | | The sticker library kept by [dsh-telegram-bot](https://github.com/soffits/dsh-telegram-bot): each sticker's saved meaning, and its picture, so a sticker is found by what it says or shows. Needs ffmpeg and the bot token. |
 

@@ -52,14 +52,12 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 Same rules as everything else: general, any language family, sources opt-in where they read someone's private
 data, tests.
 
-1. **Mail source:** IMAP and local Maildir/mbox, opt-in per account; attachments' text through the `files`
-   extractors.
-2. **`rummage dupes` / `rummage conflicts`:** near-duplicate passages across notes, and likely contradictions (same
+1. **`rummage dupes` / `rummage conflicts`:** near-duplicate passages across notes, and likely contradictions (same
    subject, different facts, dates or numbers), as a report an upkeep job can work through.
-3. **Time-aware queries:** read "last Wednesday", "in October" and their equivalents in other languages into a
+2. **Time-aware queries:** read "last Wednesday", "in October" and their equivalents in other languages into a
    date filter and a recency boost.
-4. **Person view:** `rummage about <name or alias>`, everything that mentions a person across sources as a
+3. **Person view:** `rummage about <name or alias>`, everything that mentions a person across sources as a
    timeline.
-5. **Audio and video:** a source that transcribes with a local whisper.cpp and indexes the transcript with times.
-6. **Per-token scopes in `serve`:** each API token sees only its own sources, so two homes can share one server.
-7. Small: implicit feedback (a `get` right after a `search` counts for that result) to tune ranking.
+4. **Audio and video:** a source that transcribes with a local whisper.cpp and indexes the transcript with times.
+5. **Per-token scopes in `serve`:** each API token sees only its own sources, so two homes can share one server.
+6. Small: implicit feedback (a `get` right after a `search` counts for that result) to tune ranking.
