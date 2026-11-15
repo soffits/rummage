@@ -13,7 +13,7 @@ def _index(tmp_path, docs):
 
 
 def _top(store, query):
-    hits = Searcher(store.db).search(query, None, limit=3)
+    hits = Searcher(store).search(query, None, limit=3)
     return hits[0].ref if hits else None
 
 

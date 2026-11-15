@@ -61,7 +61,7 @@ class Service:
             store.check_version()
             index_empty = store.item_count() == 0
             vector = None if words_only or index_empty else self.query_vector(q)
-            hits = Searcher(store.db, sources or None, paths, globs).search(q, vector, limit=limit,
+            hits = Searcher(store, sources or None, paths, globs).search(q, vector, limit=limit,
                                                                             kinds=set(kinds) or None)
         finally:
             store.close()

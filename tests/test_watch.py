@@ -49,3 +49,15 @@ def test_a_busy_batch_is_retried(tmp_path, monkeypatch):
     assert runner.retry == {"notes"}
     runner.tick()
     assert runner.retry == set() and seen == [["notes"], ["notes"]]
+
+
+def test_service_definitions_run_watch_with_the_config(tmp_path):
+    from rummage import service
+
+    config = tmp_path / "my config.toml"
+    unit = service.systemd_unit(config)
+    assert "ExecStart=" in unit and "watch" in unit and "'" + str(config) + "'" in unit
+    plist = service.launchd_plist(config, tmp_path / "watch.log")
+    assert f"<string>{config}</string>" in plist and "<key>KeepAlive</key><true/>" in plist
+    task = service.windows_task(config)
+    assert task[:2] == ["schtasks", "/Create"] and "watch" in task[-1] and '"' in task[-1]
