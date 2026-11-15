@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.1
 
 - Every request rummage makes to another machine (JMAP, Seafile, Telegram, remotes, runtime downloads, a remote embedder) sends one User-Agent, `rummage/<version>`; some servers refused Python's default and answered 403.
 - `rummage watch` leaves out sources switched off with `enabled = false`.
