@@ -24,7 +24,8 @@ def test_nothing_written_means_complete(tmp_path):
 def test_reading_then_embedding(tmp_path):
     read = P.Run(tmp_path, "read")
     read.source("notes", phase="planning")
-    assert P.state(tmp_path)["line"] == "rummage: checking folders"
+    assert P.state(tmp_path)["state"] == "complete"           # a quick re-check says nothing
+    assert P.state(tmp_path, now=time.time() + P.QUIET_READ + 1)["line"] == "rummage: checking folders"
     read.source("notes", phase="reading", done=120, total=900)
     read.save(force=True)
     info = P.state(tmp_path)
