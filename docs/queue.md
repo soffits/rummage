@@ -4,8 +4,8 @@
 
 rummage is for any person and any agent, not for one setup. The core assumes no particular agent harness, chat
 tool, messenger or directory layout; service-specific readers stay plugins. Agents integrate through generic layers
-only: the CLI and its versioned JSON contract, an Agent Skill file in the standard `SKILL.md` format, an optional MCP
-server, and documented hook snippets (Claude Code and Codex `UserPromptSubmit`, OpenCode `chat.message`, Hermes
+only: the CLI and its versioned JSON contract, an Agent Skill file in the standard `SKILL.md` format, and
+documented hook snippets (Claude Code and Codex `UserPromptSubmit`, OpenCode `chat.message`, Hermes
 `pre_llm_call`, DeepSeek Harness pre-step) that all call the same thin `recall` command. Docs and examples use
 neutral setups, and the defaults work on a plain laptop on macOS, Linux or Windows.
 
@@ -80,15 +80,11 @@ data, tests.
 2. **Misses become aliases:** a search that ended with nothing opened, followed by one that found the note, proposes
    the first query's words as aliases for that note, as a report an upkeep job applies; notes are never edited
    automatically.
-3. **Supersession at recall time:** when two hits state different values for the same thing (the `conflicts`
-   check), prefer the newer and mark the older "may be outdated".
-4. **Query expansion from names:** `[people]` aliases and note aliases expand a query, so a nickname finds the
-   person's notes.
-5. **`rummage related --file/--text`:** related items for something that just arrived (a mail, a calendar event),
+3. **`rummage related --file/--text`:** related items for something that just arrived (a mail, a calendar event),
    for event-driven recall.
-6. **Golden questions:** a private regression set of real past questions with known answers, run weekly to catch
+4. **Golden questions:** a private regression set of real past questions with known answers, run weekly to catch
    quality drops.
-7. **Optional local cross-encoder rerank** for hard queries, off by default, measured in the evaluation.
+5. **Optional local cross-encoder rerank** for hard queries, off by default, measured in the evaluation.
 
 ## Model switching leftovers
 

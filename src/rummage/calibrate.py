@@ -1,10 +1,9 @@
 """Thresholds per model, measured on the index itself.
 
-Ranking compares z-scores (how far a cosine stands out from the rest for one query) against a gate, and the
-reports compare raw cosines. Models spread their scores differently: one model's z of 2 can be another's 2.6. So
-a new model gets the thresholds that let through the same share of unrelated passages as the model it replaces did
-at its own thresholds, measured on the same probe queries over the same passages (quantile matching). The default
-model's thresholds are the ones ranking was tuned with; with no model to compare against, the shares measured for
+Ranking compares z-scores (how far a cosine stands out from the rest for one query) against a gate. Models
+spread their scores differently: one model's z of 2 can be another's 2.6. So a new model gets the thresholds
+that let through the same share of unrelated passages as the model it replaces did at its own thresholds, measured
+on the same probe queries over the same passages (quantile matching). The default model's thresholds are the ones ranking was tuned with; with no model to compare against, the shares measured for
 the default model (`models.ANCHOR_TAILS`) are the target.
 
 Probe queries are short pieces of sampled passages ("known items"): each should find its own passage, and every
@@ -20,11 +19,8 @@ from .models import ANCHOR_TAILS, Calibration
 from .store import Scope, Store
 
 PROBES = 120
-NEIGHBOURS = 5
 # Below this many text vectors the shares are too noisy to move thresholds; the reference's values are kept.
 MIN_VECTORS = 300
-_GATES = ("gate", "recall_gate")
-_COSINES = ("dupe_cosine", "topic_cosine", "same_cosine")
 
 
 def probe_text(text: str) -> str:
@@ -75,21 +71,6 @@ class Space:
             out.append(z if len(z) <= per_query else rng.choice(z, per_query, replace=False))
         return np.concatenate(out) if out else np.zeros(0, np.float32)
 
-    def neighbour_cosines(self, segments: list[int]) -> np.ndarray:
-        """For each sampled passage, its cosines to the closest passages of other items."""
-        rows = {int(s): n for n, s in enumerate(self.ids)}
-        text = self.matrix[self.text]
-        text_items = self.items[self.text]
-        out = []
-        for seg in segments:
-            if seg not in rows:
-                continue
-            cos = text @ self.matrix[rows[seg]]
-            cos = cos[text_items != self.items[rows[seg]]]
-            if len(cos):
-                out.append(np.sort(cos)[-NEIGHBOURS:])
-        return np.concatenate(out) if out else np.zeros(0, np.float32)
-
     def known_item(self, queries: np.ndarray, items: list[int]) -> dict:
         """How well each probe finds its own item by meaning alone, among every text passage of the index."""
         from .compare import known_item
@@ -97,10 +78,9 @@ class Space:
         return known_item(self.matrix[self.text], self.items[self.text], np.asarray(queries, np.float32), items)
 
 
-def _scores(space: Space, queries: np.ndarray, items: list[int], segments: list[int]) -> dict[str, np.ndarray]:
+def _scores(space: Space, queries: np.ndarray, items: list[int]) -> dict[str, np.ndarray]:
     z = space.unrelated_z(queries, items)
-    cos = space.neighbour_cosines(segments)
-    return {k: z for k in _GATES} | {k: cos for k in _COSINES}
+    return {k: z for k in Calibration.__dataclass_fields__}
 
 
 def matched(old: dict[str, np.ndarray], new: dict[str, np.ndarray], cal: Calibration) -> Calibration:
@@ -132,15 +112,14 @@ def calibrate(store: Store, model: str, queries: np.ndarray, sample: list[tuple[
     it replaces, with its thresholds and the same probes made by that model. Returns the thresholds and how they
     were found."""
     items = [item for _, item, _ in sample]
-    segments = [seg for seg, _, _ in sample]
     space = Space(store, model)
     if len(space) < MIN_VECTORS or len(sample) < 20:
         kept = reference[1] if reference else Calibration()
         return kept, f"kept ({len(space)} passages are too few to measure)"
-    new = _scores(space, queries, items, segments)
+    new = _scores(space, queries, items)
     if reference is None:
         values = {k: float(np.quantile(new[k], 1 - ANCHOR_TAILS[k])) for k in ANCHOR_TAILS}
         return Calibration(**values), "matched to the default model's shares"
     old_model, old_cal, old_queries = reference
-    old = _scores(Space(store, old_model), old_queries, items, segments)
+    old = _scores(Space(store, old_model), old_queries, items)
     return matched(old, new, old_cal), f"matched to {old_model} on this index"

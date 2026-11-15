@@ -1,7 +1,7 @@
 # Using rummage from agents
 
 Any agent that can run a command can use rummage: `rummage search "<query>" --json` returns a versioned
-`rummage.search.v1` object with `next_actions`, and `rummage get <id>` opens a result. Two thin layers sit on top:
+`rummage.search.v1` object, and `rummage get <id>` opens a result. Two thin layers sit on top:
 
 - **An Agent Skill** ([skills/rummage/SKILL.md](../skills/rummage/SKILL.md)) tells an agent when and how to search.
   Copy the folder into your agent's skills directory (for example `~/.claude/skills/` or `.agents/skills/`).
@@ -11,8 +11,8 @@ Any agent that can run a command can use rummage: `rummage search "<query>" --js
   recall matches exact words only. Each recalled line reads `#id · source · path:lines (or chat session#message) · date · "title" · why it matched`, followed by a snippet. Options: `--max-items` (4), `--max-chars` (1500), `--min-z` (3.0), `-s`,
   `--path`.
   Recall also adds up to two turns said in the last 45 minutes in other chat sessions (`--recent-minutes`,
-  `--recent-items`) when the prompt shares words with them or refers back ("just now", "as I said", and the same in
-  other languages), so a conversation continued in a new window keeps its context; the current session is left
+  `--recent-items`) when the prompt shares words with them, so a conversation continued in a new window keeps its
+  context; the current session is left
   out (`--session`, or the hook's `session_id`). Credentials are masked in the block unless `--show-secrets`.
 - **`rummage recent`** lists the latest chat turns and changed files across sources (`--minutes`, `-s`,
   `--exclude-session`, `--json`), and **`rummage get <#id> --around N`** shows a chat hit with the turns around it.
@@ -113,15 +113,6 @@ export function apply(ctx) {
     })] }
   })
 }
-```
-
-## MCP
-
-For agents that only speak MCP, `rummage mcp` (install `rummage[mcp]`) is a stdio server with read-only `search`,
-`get` and `status` tools returning the same JSON as the CLI. For example, in an MCP client's config:
-
-```json
-{ "mcpServers": { "rummage": { "command": "rummage", "args": ["mcp"] } } }
 ```
 
 ## Any other agent

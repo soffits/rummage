@@ -135,8 +135,8 @@ class Scope:
     sources: list[str] | None = None
     paths: list[str] | None = None
     globs: list[str] | None = None
-    since: float | None = None     # item time (a chat message's time, a mail's date, a file's change) from
-    until: float | None = None     # ... and before
+    since: float | None = None     # item time (a chat message's time, a mail's date, a file's change, or the
+    until: float | None = None     # period a dated note's path names) from `since` and before `until`
 
     def where(self, alias: str = "i") -> tuple[str, list]:
         clauses, args = [], []
@@ -152,12 +152,13 @@ class Scope:
         if self.globs:
             clauses.append("(" + " OR ".join(f"{alias}.ref GLOB ?" for _ in self.globs) + ")")
             args += list(self.globs)
-        if self.since is not None:
-            clauses.append(f"{alias}.mtime >= ?")
-            args.append(self.since)
-        if self.until is not None:
-            clauses.append(f"{alias}.mtime < ?")
-            args.append(self.until)
+        if self.since is not None or self.until is not None:
+            # The item's own time, or the period its path names (a weekly note is about its week).
+            since = self.since if self.since is not None else float("-inf")
+            until = self.until if self.until is not None else float("inf")
+            clauses.append(f"(({alias}.mtime >= ? AND {alias}.mtime < ?) OR (json_extract({alias}.info, '$.when') < ? "
+                           f"AND json_extract({alias}.info, '$.when_end') > ?))")
+            args += [since, until, until, since]
         return ("".join(f" AND {c}" for c in clauses), args)
 
 
@@ -306,49 +307,6 @@ class Store:
         for item, seg in rows:
             seen.setdefault(item, seg)
         return list(seen.items())
-
-    def segment_rows(self, segments: list[int]) -> dict[int, dict]:
-        """For each segment id: its text, where it is (loc, lines) and its item's id, source, ref and title."""
-        out = {}
-        for chunk in range(0, len(segments), 500):
-            part = segments[chunk:chunk + 500]
-            for seg, text, loc, lines, row, source, key, ref, title, mtime in self.db.execute(
-                    f"SELECT s.id, s.text, s.loc, s.lines, i.id, i.source, i.key, i.ref, i.title, i.mtime "
-                    f"FROM segments s JOIN items i ON i.id = s.item WHERE s.id IN ({','.join('?' * len(part))})",
-                    part):
-                out[seg] = {"item": row, "id": "#" + item_id(source, key), "source": source, "ref": ref,
-                            "title": title, "loc": loc, "lines": lines, "text": text or "", "mtime": mtime}
-        return out
-
-    def items_between(self, rows, start: float, end: float) -> set[int]:
-        rows = list(rows)
-        out: set[int] = set()
-        for chunk in range(0, len(rows), 500):
-            part = rows[chunk:chunk + 500]
-            out |= {r for (r,) in self.db.execute(
-                f"SELECT id FROM items WHERE id IN ({','.join('?' * len(part))}) AND ((mtime >= ? AND mtime < ?) "
-                f"OR (json_extract(info, '$.when') < ? AND json_extract(info, '$.when_end') > ?))",
-                [*part, start, end, end, start])}
-        return out
-
-    def known_names(self, name: str) -> set[str]:
-        """Other names for `name` from indexed notes: the title and aliases of a note titled `name` or listing it
-        among its aliases."""
-        low = name.lower()
-        names = set()
-        for title, info in self.db.execute("SELECT title, info FROM items WHERE info LIKE '%\"aliases\"%'"):
-            aliases = json.loads(info or "{}").get("aliases") or []
-            group = [title or "", *aliases]
-            if low in (g.lower() for g in group):
-                names |= {g for g in group if g}
-        return names
-
-    def items_by_speaker(self, names: list[str], scope: Scope) -> list[int]:
-        where, args = scope.where()
-        marks = ",".join("?" * len(names))
-        return [r for (r,) in self.db.execute(
-            f"SELECT i.id FROM items i WHERE json_extract(i.info, '$.speaker') IN ({marks}){where}",
-            [*names, *args])]
 
     def record_open(self, terms: list[str], row: int) -> None:
         """Remembers that a search with these words led to opening item `row` (implicit feedback)."""

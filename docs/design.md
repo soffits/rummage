@@ -55,7 +55,7 @@ along, so it survives restarts and kills and goes on from the last committed bat
 
 Until the swap, searches embed queries with the old model and read the old vectors; afterwards with the new one. A
 query is always searched against vectors of the model that embedded it (`Searcher(model=...)`), and the query
-daemon, `serve` and `mcp` load the new model on their next query. The old vectors stay after the swap, so
+daemon loads the new model on its next query. The old vectors stay after the swap, so
 `rummage models rollback` goes back at once (passages added since get old-model vectors as ordinary pending ones);
 `rummage models prune` frees them. `rummage models cancel` drops an unfinished switch and leaves the old model as it
 was. `rummage status` shows the switch: models, phase, passages done per source, rate and time left, and why it
@@ -64,11 +64,10 @@ waits.
 ### Calibration
 
 Ranking compares z-scores (how far a cosine stands out among all of a query's cosines) with a gate (2 for search, 3
-for recall), and `dupes`/`conflicts` compare raw cosines (0.95, 0.80-0.97). These were tuned on EmbeddingGemma 2;
-another model spreads its scores differently. So a new model gets the thresholds that let through the same share of
-unrelated scores as the old model did at its own, measured with the same probe queries over the same index
-(quantile matching; `calibrate.py`): the unrelated scores are each probe's z-scores against other items, and each
-sampled passage's closest cosines to other items. Where the old share can't be measured (nothing in the sample
+for recall). These were tuned on EmbeddingGemma 2; another model spreads its scores differently. So a new model
+gets the thresholds that let through the same share of unrelated scores as the old model did at its own, measured
+with the same probe queries over the same index (quantile matching; `calibrate.py`): the unrelated scores are each
+probe's z-scores against other items. Where the old share can't be measured (nothing in the sample
 passes), the threshold keeps its distance from the mean in standard deviations. An index with no model to compare
 against uses the shares measured for EmbeddingGemma 2 on BEIR SciFact (gate 2.6%, recall gate 0.4%). Matching a model
 against itself reproduces the original thresholds within 0.004 on a real index.
@@ -102,7 +101,7 @@ name and the items' keys and fingerprints are part of the index format.
 | `seafile` | plugin | a file in a Seafile library, read through the web API with a read-only account | library head commit, then each file's object id |
 | `dsh-sessions` | plugin | a person's message plus the reply, in a DeepSeek Harness session log | per-log mtime+size, then content hash |
 | `hermes` | plugin | the same, in a Hermes Agent `state.db` | message id cursor |
-| `claude-code`, `codex`, `jsonl-chat` | plugin | the same, in append-only JSONL session logs | per-file size+mtime; reading resumes at the last turn's first line |
+| `claude-code`, `codex` | plugin | the same, in append-only JSONL session logs | per-file size+mtime; reading resumes at the last turn's first line |
 | `gemini-cli` | plugin | the same, in Gemini CLI's JSONL logs, replayed with their patch and rewind records | per-file size+mtime, whole file |
 | `mail` | plugin | a mail message with its attached documents' text, from a Maildir, an mbox or IMAP | Maildir key / message hash; IMAP UIDVALIDITY + highest UID per folder |
 | `media` | plugin | an audio or video file's transcript (whisper.cpp), in passages by start time | size+mtime; transcripts cached by file |
@@ -128,7 +127,7 @@ failed or any item failed, with one line per problem on stderr, so a scheduler t
 
 ### Concurrency
 
-- SQLite in WAL mode: any number of readers (searches, `serve`, `mcp`) alongside one writer at a time; writers
+- SQLite in WAL mode: any number of readers (searches, the query daemon, recall) alongside one writer at a time; writers
   wait up to 30 s for each other's short transactions.
 - Two OS file locks in the data directory, released if a process dies: `index.lock` for reading sources and
   `embed.lock` for making vectors. A run takes them one after the other, never both, so a reader of new items
@@ -163,6 +162,3 @@ embedding), every front end searches by words and reports `degraded_reason` inst
 - **Moving:** `rummage export` / `import` carry the index, vectors included, to another machine or storage
   engine; see `docs/backends.md`.
 - **Removal:** uninstall the tool, delete `data_dir` and the config file. Nothing is written anywhere else.
-- **Server deployment** (file libraries indexed next to the file server): a container with the same CLI, its
-  data dir on a volume, run on a schedule; it answers searches over HTTP for the machine that asks. See
-  `deploy/`.

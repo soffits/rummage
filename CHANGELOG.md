@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.11.0
+
+rummage is now a smaller memory add-on: it reads, finds, opens and says what it left out, and leaves judgment to the agent calling it. Reasons in `docs/decisions.md`, "Scope".
+
+- Removed `rummage dupes`, `rummage conflicts` and `rummage about`. `search --sort newest` lists the newest of the matches first, which covers "everything about a person, latest first". The `[people]` config table went with `about`.
+- Removed reading time phrases in queries ("last Wednesday", "上周") and the `dates` extra; pass `--since/--until`. Those now also match notes whose path names a date or period (`todo/2026-W44.md` counts as that week), which before only affected time phrases.
+- Removed `--truncate` and the strategy hints in `next_actions` (open the best match, trim the tail, broaden, rephrase). `next_actions` now only says how to see what the output left out (`--show-secrets`, `get --original`) or that the index is empty. The JSON lost its always-empty `errors` field and the `error` status.
+- Removed `rummage serve`, `[serve]` tokens, `[remotes]`, the container image and its workflow, and the Postgres design in `docs/backends.md`.
+- Removed `rummage mcp` and the `mcp` extra.
+- Removed the `jsonl-chat` source type; the bench's memory sets are written as Claude Code session logs instead.
+- `recall` adds recent turns from other sessions only when they share words with the prompt; the multilingual "refers back" phrase list is gone.
+- Fixed: `recall --max-items 0` still printed one item.
+- Calibration keeps only the search and recall gates; the cosine thresholds were for the removed reports.
+
 ## 0.10.0
 
 - Output says what it leaves out. Masked credentials are counted per result (`masked`) and in the JSON summary (`masked_secrets`), with the same command plus `--show-secrets` in `next_actions` and as a closing note in text output; `recall` names `rummage get <#id> --show-secrets` per item. Items a size limit cut keep a `partial` record at index time (what, kept of total, the setting to raise), shown by `search`, `get`, `recent`, `recall`, `serve` and `mcp`; `rummage status` counts them per source, with the files `exclude` left out. Re-read existing items with `rummage index --reload` to record their cuts.

@@ -76,7 +76,7 @@ rummage sources disable codex --drop     # switches it off and drops its items f
 ```
 
 The index keeps text as written, credentials included, in a file only its owner can read (mode 600). What rummage
-prints (`search`, `get`, `recent`, `recall`, `serve`, `mcp`) has anything that looks like a credential replaced
+prints (`search`, `get`, `recent`, `recall`) has anything that looks like a credential replaced
 with `[secret]`; `--show-secrets` shows it, and `mask_secrets = false` on a source turns masking off for it. The
 output says when it masked something: each result carries `masked` (how many values), the JSON summary
 `masked_secrets`, and `next_actions` (or a closing note in text output) gives the same command with
@@ -109,15 +109,12 @@ raising a limit, `rummage index --reload -s <source>` reads the items again.
 rummage index              # incremental: new and changed items go into keyword search at once, then get vectors
 rummage search "query"     # --json, -s SOURCE, -k KIND, -n LIMIT, --words-only (no model, instant)
 rummage search "lease" --path housing --glob '*.pdf'   # only part of a source
-rummage search "what did we decide last Wednesday"      # time phrases rank that time first (`dates` extra)
-rummage search "receipt" --since 2026-10-01 --until 2026-10-31
+rummage search "receipt" --since 2026-10-01 --until 2026-10-31   # a dated note (todo/2026-W44.md) counts as its period
+rummage search "Ana Souza" --sort newest -n 50   # the newest of the matches first
 rummage get "#3f2a9c"     # a result's text by its id (or ref); --loc for one passage, --head N
 rummage get "#3f2a9c" --around 3   # with context: 3 chat turns before and after, or 3 lines around a passage
 rummage get ~/Documents/report.pdf --original   # a file's whole text, read now, past the indexing limits
 rummage recent --minutes 30          # the latest chat turns and changed files, newest first
-rummage about "Ana Souza"  # everything that mentions a person, newest first (aliases from notes and config)
-rummage dupes -s notes     # passages that say nearly the same thing in different notes
-rummage conflicts -s notes # passages about the same thing whose dates or numbers differ
 rummage status --json      # counts, last run per source, failures
 rummage doctor             # runtime files, model vectors, freshness; exit 1 on a problem
 rummage models             # embedding models; `models use NAME` switches, `models compare NAME` compares first
@@ -125,14 +122,13 @@ rummage watch              # index changes as they happen (install the `watch` e
 rummage service install    # run watch at login: systemd user unit, launchd agent or Windows scheduled task
 rummage export DIR         # the index as plain files; `rummage import DIR` fills an empty index from them
 rummage daemon --idle-minutes 30   # keep the query model loaded; searches use it automatically
-rummage serve --token-file F --reindex-minutes 60   # HTTP search API for an index kept on a server
 ```
 
-`search --json` prints one `rummage.search.v1` object: `status` (`ok`, `no_results`, `empty_index`, `error`), the
-request, a summary (result count, how many are strong, meaning and word matches), the results (each with an `id`
-for `get`), and `next_actions`, runnable commands with a reason (open the best match, trim the weak tail, broaden the
-scope, search exact words). `--truncate knee` drops the weak tail at the score curve's elbow, `--files` prints only
-refs, and `--budget-tokens N` trims the JSON to about N tokens, keeping the top result. Exit codes: 0 success
+`search --json` prints one `rummage.search.v1` object: `status` (`ok`, `no_results`, `empty_index`), the request, a
+summary (result count, how many are strong, meaning and word matches), the results (each with an `id` for `get`),
+and `next_actions`: the commands that show what the output left out (masked credentials, the rest of a partially
+indexed item) or build a missing index. Which query to run next is up to the caller. `--files` prints only refs,
+and `--budget-tokens N` trims the JSON to about N tokens, keeping the top result. Exit codes: 0 success
 (including no results), 1 failure, 2 usage, 3 index missing, 4 index busy, 5 model files
 missing; with `--json`, failures print a `rummage.error.v1` object with `next_actions` too.
 
@@ -179,31 +175,14 @@ that finds another one reading exits 0 at once (`--wait N` waits instead, and ex
 `--no-embed` only reads, `--embed-only` only makes vectors, and `--max-minutes` stops a long first run cleanly; the
 next run continues where it stopped.
 
-A server can give each home its own token that sees only its sources:
-
-```toml
-[serve.tokens.home-b]
-token_env = "RUMMAGE_TOKEN_HOME_B"    # or token_file
-sources = ["home-b-library"]
-```
-
-To search an index that `rummage serve` keeps on another machine, add a remote; its results merge with local ones:
-
-```toml
-[remotes.server]
-url = "http://fileserver:8765"
-token_file = "~/.config/rummage/server.token"
-sources = ["library"]                 # source names the remote serves
-```
-
 ## Agents
 
 Agents use the same CLI: `search --json`, `get` and `recent`. `rummage recall` gives prompt hooks a short block of
 cited passages, or nothing when nothing clearly matches; it also adds what was said minutes ago in another chat
-session when the prompt shares words with it or refers back to it, so a conversation can go on in a new window. [docs/integrations.md](docs/integrations.md) has hook snippets
-for Claude Code, Codex, OpenCode, Hermes Agent and DeepSeek Harness, and [skills/rummage](skills/rummage/SKILL.md)
-is an Agent Skill to drop into an agent's skills folder. For MCP-only agents, `rummage mcp` (with the `mcp` extra)
-serves the same `search`, `get` and `status`.
+session when the prompt shares words with it, so a conversation can go on in a new window.
+[docs/integrations.md](docs/integrations.md) has hook snippets for Claude Code, Codex, OpenCode, Hermes Agent and
+DeepSeek Harness, and [skills/rummage](skills/rummage/SKILL.md) is an Agent Skill to drop into an agent's skills
+folder.
 
 ## Available plugins
 
@@ -222,7 +201,6 @@ settings for the speaker labels.
 | `hermes` | | Chats in a [Hermes Agent](https://github.com/NousResearch/hermes-agent) `state.db`, the same way. Config: `db` (default: Hermes's home), optional `people`, `exclude_sessions`, `frontends`. Off until enabled. |
 | `mail` | | Mail in a Maildir, an mbox, an IMAP or a JMAP account (read-only: nothing is marked read). One item per message: subject, sender, recipients, date, body, and the text of attached documents. Every folder but junk, trash and drafts by default. Config: `maildir` or `mbox`, or `imap_host` + `imap_user`, or `jmap_session` + `jmap_user`; `password_env`, `password_file` or `password_command` (or `oauth_token_command` for OAuth/XOAUTH2 IMAP); optional `folders`, `since` (`2024-01-01`, `2y`). |
 | `media` | | Audio and video files, by what is said in them: transcribed once with a local [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (`whisper-cli` and a model you install; ffmpeg for decoding), passages pointing to the time they start. Config: `root`, `model`, optional `whisper`, `ffmpeg`, `language`. |
-| `jsonl-chat` | | Any other chat log kept as JSONL, mapped by settings: `paths` (globs), and where the role, text, time and optional session, id and model are in each record (dotted paths). See the docstring of `rummage.plugins.jsonl_chat`. |
 | `telegram-stickers` | | The sticker library kept by [dsh-telegram-bot](https://github.com/soffits/dsh-telegram-bot): each sticker's saved meaning, and its picture, so a sticker is found by what it says or shows. Needs ffmpeg and the bot token. |
 
 A plugin of your own is a class registered in the `rummage.sources` entry-point group; the docstring of
@@ -251,12 +229,6 @@ matches, which also gives an honest "nothing found". Exact-word matches from SQL
 with how many of the query's words an item has. CJK text (Chinese, Japanese, Korean) is indexed one character per token and queried by character pairs, so
 two-character words match. The ranking is adapted from [DigUp](https://github.com/ARahim3/DigUp). More in
 [docs/design.md](docs/design.md).
-
-## Docker
-
-`ghcr.io/soffits/rummage` runs `rummage setup`, then `rummage serve --reindex-minutes 60`, with the `seafile` and
-`archives` extras. Mount a data volume at `/data`, pass the config with `RUMMAGE_CONFIG` and the API token with
-`RUMMAGE_TOKEN`. See [deploy/compose.yaml](deploy/compose.yaml).
 
 ## License
 

@@ -1,5 +1,10 @@
 # Decisions
 
+## Scope
+
+- rummage is a small memory add-on for an agent: it reads sources into an index, finds passages by meaning and exact words, opens them with their context, and says plainly what its output leaves out. Judgment stays with the agent: which query to try next, what a time phrase means, whether two notes disagree, who someone is. A tool that guesses at those hides its guesses inside ranked output, where the agent can't see or overrule them, so they cost more than they give.
+- So these are not in rummage: `dupes`, `conflicts` and `about` (an agent finds a person's mentions with `search --sort newest` and judges duplicates and contradictions itself); reading time phrases in queries (the agent turns "last Wednesday" into `--since/--until`); `next_actions` that suggest a strategy (only facts stay: masked values, a partially indexed item, an empty index); `--truncate` (the agent reads the scores and `summary.strong`); recall's refer-back phrase list (recent turns come in only when they share words with the prompt); `serve`, remotes, tokens, the container image and a Postgres design (an index lives with its agent, and other machines' data is read through their APIs); `rummage mcp` (agents run the CLI); the generic `jsonl-chat` source (each harness gets its own source type, which knows its format).
+
 ## Model and runtime
 
 - EmbeddingGemma 2, first 512 of 768 dimensions, float16 storage, as the default: near-lossless on MTEB, a third less storage and compute.
@@ -10,7 +15,7 @@
 - The comparison before a swap is known-item search with the same probes: it needs no judgements, runs on any index, and catches a model that can't find what the old one found; the public set (SciFact) is on request because it takes minutes of embedding.
 - A remote endpoint is either a profile's own model (`url`) or an accelerator for a local profile (`[embedder] url`), trusted only when its reference vectors agree; an OpenAI-compatible request (`input`, optional `model`, bearer key) covers llama-server, vLLM, TEI and hosted APIs. Without `/tokenize`, long inputs are split by size (two bytes per token at least).
 - llama.cpp `llama-server` with ggml-org's Q8_0 GGUF: one runtime for text and images, official prebuilt CPU builds, the same files DigUp checked against the reference. ONNX int8 was ~25% faster on text but needs our own image preprocessing.
-- The server runs as a child for one run on 127.0.0.1 and a free port; no resident daemon except under `rummage serve`.
+- The server runs as a child for one run on 127.0.0.1 and a free port; the only resident process is the query daemon.
 - Passages are cut by characters (~1800), but the server's limit is tokens, which no character count bounds (a byte-fallback tokenizer spends a token per byte on invisible and rare characters). So the embedder owns the limit: it measures any text that could exceed a micro-batch with the server's tokenizer, embeds it in halves until each fits, and averages the vectors by token count. One passage stays one vector, and no source has to know the tokenizer.
 
 ## Index and ranking
@@ -25,7 +30,7 @@
 ## Sources
 
 - Source types are entry points in the `rummage.sources` group, so services are plugins and third parties can add their own; the core keeps only generic folder sources.
-- Bundled plugins live in `rummage.plugins.*` with extras for their packages, rather than separate distributions: one install and one image, while the core never imports them.
+- Bundled plugins live in `rummage.plugins.*` with extras for their packages, rather than separate distributions: one install, while the core never imports them.
 - `dsh-sessions` reads who wrote a message from `source.principal` first (DSH's field for the caller behind a user message, filled by dsh-oidc and dsh-telegram-bot as `{kind, channel, id, name?}`), then from the text tag or OIDC notice: structured data beats parsing, and old logs have only the text.
 - Chats: one item per message a person wrote plus the reply after it; the model reads the start of both, keyword search the full text.
 - Seafile: an account token with read-only shares; head commit per library, then file object ids; archives listed over HTTP range requests.
@@ -35,19 +40,19 @@
 
 ## Licence
 
-- AGPL-3.0-or-later from 0.3.0: `serve` makes it a network service, and modified hosted versions should share their source.
+- AGPL-3.0-or-later from 0.3.0: modified versions, hosted ones included, should share their source.
 
 ## Agent histories and live chats
 
 - Sessions kept as append-only JSONL are read from where the last read stopped, restarting at the last turn's first line, so a growing reply is re-read but nothing older; a file that shrank is read again from the start. Gemini CLI's logs patch earlier records, so they are replayed whole when they change.
 - Codex turns come from its `event_msg` user and agent messages, the text its UI shows, rather than the raw response items with their tool plumbing.
 - Credentials are masked when printed, not when indexed: masking at index time would lose a value the user may later ask for, and the index is a local file kept mode 600. The patterns are well-known token shapes plus credential-like assignments; scanners such as gitleaks and detect-secrets are built for files and repositories, and a short pattern list is enough for masking result text.
-- Masking is counted where it happens (`mask_count`) and each printed result carries `masked`, rather than counting `[secret]` in the output: a text that contains the marker itself would be miscounted, and per-result counts survive truncation, token budgets and merging remote results.
+- Masking is counted where it happens (`mask_count`) and each printed result carries `masked`, rather than counting `[secret]` in the output: a text that contains the marker itself would be miscounted, and per-result counts survive token budgets.
 - Reading and embedding are separate phases with separate locks, so keyword search covers new items within seconds while vectors follow; pending vectors are stored with their model input, so any later run finishes them.
 - Copies of one mail are recognised by Message-ID with no time window (a copy moved to an archive months later is the same mail) and collapsed at search time like chat messages, so both folders stay indexed.
 - A client's notices before a person's words count as scaffolding only when the message starts with a bracketed notice line; the `> ` lines and blank lines after it go with it. A message the person starts with their own quote stays as written.
 - The same chat message in two sources is recognised by its text with leading bracketed notices removed (sender tags, channel headers that one recorder adds and the other doesn't) and times within 10 minutes, and collapsed at search time rather than dropped at index time: both records stay, so either source can be switched off without losing the message.
-- Refer-back phrases for recall's recent part are one multilingual list, used only to decide whether to add at most two recent turns; shared words with the prompt are the main signal.
+- Recall's recent part adds turns from other sessions only when they share words with the prompt.
 
 ## Storage
 
@@ -67,10 +72,4 @@
 
 ## Time in queries
 
-- dateparser (BSD-3, 200+ locales, CJK included) reads time phrases; writing our own per-language rules would never cover as many languages. It runs in an optional extra since it pulls in regex and tz data.
-- A time phrase ranks items from that time higher (and lets weaker matches from it in) instead of filtering: the time an item carries (a file's change) is often not the time it is about. Hard filters are `--since/--until`.
-- Words that only look like dates are left alone: bare numbers, words of three letters or fewer ("may", "sun", "now"), and a month or weekday name standing alone; dateparser alone takes "March forward" for a month.
-
-## Upkeep reports
-
-- Conflicts are found without a language model: close passages (cosine 0.80-0.97 for EmbeddingGemma 2, calibrated for other models) whose dates, times, amounts or numbers differ, a few at most on each side. Refs that differ only in digits (a dated log, numbered runs) and number-heavy passages (tables) are left out, since their numbers are meant to differ. The report is a list to judge, not a verdict.
+- `--since/--until` match an item's own time or the period its path names (`todo/2026-W44.md` is about that week), as a filter. A dated note is often edited long after the period it covers, so its change time alone would put it in the wrong window.

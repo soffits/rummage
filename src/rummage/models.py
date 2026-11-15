@@ -47,12 +47,9 @@ class Pinned:
 @dataclass(frozen=True)
 class Calibration:
     """Thresholds that depend on how a model spreads its scores. `gate` and `recall_gate` are z-scores a meaning
-    match must reach (search, recall); the cosines are for `dupes` and `conflicts`."""
+    match must reach (search, recall)."""
     gate: float = 2.0
     recall_gate: float = 3.0
-    dupe_cosine: float = 0.95
-    topic_cosine: float = 0.80
-    same_cosine: float = 0.97
 
     def as_dict(self) -> dict:
         return {k: round(float(getattr(self, k)), 4) for k in self.__dataclass_fields__}
@@ -198,4 +195,4 @@ def by_version(configured: dict[str, dict], version: str | None) -> Profile | No
 ANCHOR = Calibration()
 # The share of unrelated scores the default model lets through at each of its thresholds, measured with 120 probe
 # queries over BEIR SciFact (`calibrate.py`); a model with nothing to compare against is calibrated to these.
-ANCHOR_TAILS = {"gate": 0.0258, "recall_gate": 0.0038, "dupe_cosine": 0.015, "topic_cosine": 0.977, "same_cosine": 0.0083}
+ANCHOR_TAILS = {"gate": 0.0258, "recall_gate": 0.0038}

@@ -1,10 +1,11 @@
 """The JSON that `search --json` prints: results plus what a caller (often an agent) needs to decide the next step.
 
-    {"schema": "rummage.search.v1", "query", "status", "request", "summary", "results", "errors", "next_actions"}
+    {"schema": "rummage.search.v1", "query", "status", "request", "summary", "results", "next_actions"}
 
-`status` is `ok`, `no_results` (the index has items, none matched), `empty_index` or `error`. `next_actions` are
-runnable commands (argument lists) with an intent and a reason. Optional fields can be trimmed to fit
-`--budget-tokens`; consumers should tolerate their absence.
+`status` is `ok`, `no_results` (the index has items, none matched) or `empty_index`. `next_actions` are
+runnable commands (argument lists) with an intent and a reason, only for facts about the output: what it hides and
+how to see it, or that nothing is indexed yet. Choosing the next query is the caller's job. Optional fields can be
+trimmed to fit `--budget-tokens`; consumers should tolerate their absence.
 
 Nothing is left out silently: a result whose item was indexed only in part carries `partial` (what was cut and the
 setting that lifts it), and one with masked credentials carries `masked`; `summary.masked_secrets` and
@@ -25,22 +26,6 @@ ERROR_SCHEMA = "rummage.error.v1"
 OK, FAILED, USAGE, INDEX_MISSING, INDEX_BUSY, MODEL_MISSING = 0, 1, 2, 3, 4, 5
 
 
-def knee(scores: list[float]) -> int:
-    """How many of the (descending) scores to keep: those before the elbow of the curve, the point farthest from the
-    line between the first and the last score. After a sudden drop the elbow is the first low score, so it goes;
-    on a curve that bends the other way it is the last high one, so it stays. Short or flat lists keep everything."""
-    n = len(scores)
-    if n < 3 or scores[0] - scores[-1] < 1e-9:
-        return n
-    slope = (scores[-1] - scores[0]) / (n - 1)
-    best, cut = 0.0, n
-    for i, y in enumerate(scores):
-        offset = y - (scores[0] + slope * i)   # below the chord is negative
-        if abs(offset) > best:
-            best, cut = abs(offset), i if offset < 0 else i + 1
-    return max(cut, 1)
-
-
 def strong_count(scores: list[float], ratio: float = 0.5) -> int:
     """How many scores reach `ratio` × the top one (the rest trail far behind)."""
     if not scores or scores[0] <= 0:
@@ -48,56 +33,10 @@ def strong_count(scores: list[float], ratio: float = 0.5) -> int:
     return sum(1 for s in scores if s >= scores[0] * ratio)
 
 
-def truncate(hits: list[dict], mode: str) -> list[dict]:
-    scores = [h["score"] for h in hits]
-    if mode == "knee":
-        return hits[: knee(scores)]
-    if mode == "strong":
-        return hits[: strong_count(scores)]
-    return hits
-
-
-def _base(args) -> list[str]:
-    base = ["rummage", "search", args.query, "--json", "-n", str(args.limit)]
-    for s in args.source or []:
-        base += ["-s", s]
-    for k in args.kind or []:
-        base += ["-k", k]
-    for p in getattr(args, "path", None) or []:
-        base += ["--path", p]
-    for g in getattr(args, "glob", None) or []:
-        base += ["--glob", g]
-    return base
-
-
-def next_actions(args, status: str, hits: list[dict], strong: int) -> list[dict]:
-    actions: list[dict] = []
-    base = _base(args)
+def next_actions(status: str) -> list[dict]:
     if status == "empty_index":
         return [{"intent": "build_index", "reason": "Nothing is indexed yet.", "command": ["rummage", "index"]}]
-    if status == "ok":
-        top = hits[0]
-        command = ["rummage", "get", top["id"]] if top.get("id") else ["rummage", "get", top["ref"]]
-        if top.get("loc") and top.get("segment") == "text":
-            command += ["--loc", top["loc"]]
-        actions.append({"intent": "inspect_best_match",
-                        "reason": "Read the best match before answering or refining the query.", "command": command})
-        if strong < len(hits) and args.truncate == "off":
-            actions.append({"intent": "clean_shortlist",
-                            "reason": f"Only {strong} of {len(hits)} results score near the top; drop the weak tail.",
-                            "command": base + ["--truncate", "knee"]})
-        return actions
-    if args.source or args.kind or getattr(args, "path", None) or getattr(args, "glob", None):
-        actions.append({"intent": "broaden_scope", "reason": "Nothing matched inside the requested scope.",
-                        "command": ["rummage", "search", args.query, "--json", "-n", str(args.limit)]})
-    if args.words_only:
-        actions.append({"intent": "search_by_meaning", "reason": "Exact words found nothing; search by meaning too.",
-                        "command": [c for c in base]})
-    else:
-        actions.append({"intent": "rephrase", "reason": "No passage stood out by meaning and too few query words "
-                        "matched. Describe what the thing is about, or search exact names, IDs or numbers with "
-                        "--words-only.", "command": base + ["--words-only"]})
-    return actions
+    return []
 
 
 def show_secrets_command(argv: list[str]) -> list[str]:
@@ -131,12 +70,10 @@ def note_hidden(doc: dict, results: list[dict], show_command, original_for=origi
     return doc
 
 
-def build(args, hits: list[dict], errors: list[str], seconds: float, index_empty: bool) -> dict:
+def build(args, hits: list[dict], seconds: float, index_empty: bool) -> dict:
     strong = strong_count([h["score"] for h in hits])
     if hits:
         status = "ok"
-    elif errors and not index_empty:
-        status = "error"
     elif index_empty:
         status = "empty_index"
     else:
@@ -147,13 +84,12 @@ def build(args, hits: list[dict], errors: list[str], seconds: float, index_empty
         "status": status,
         "request": {"limit": args.limit, "sources": args.source or [], "kinds": args.kind or [],
                     "paths": getattr(args, "path", None) or [], "globs": getattr(args, "glob", None) or [],
-                    "mode": "words" if args.words_only else "hybrid", "truncate": args.truncate},
+                    "mode": "words" if args.words_only else "hybrid", "sort": args.sort},
         "summary": {"result_count": len(hits), "strong": strong, "top_score": hits[0]["score"] if hits else None,
                     "meaning_matches": sum(1 for h in hits if (h.get("z") or 0) >= 2),
                     "word_matches": sum(1 for h in hits if h.get("words")), "seconds": round(seconds, 2)},
         "results": hits,
-        "errors": errors,
-        "next_actions": next_actions(args, status, hits, strong),
+        "next_actions": next_actions(status),
     }
 
 
@@ -170,11 +106,9 @@ def tokens(doc: dict) -> int:
     return math.ceil(len(json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode()) / 4)
 
 
-# Actions that stay when the output is trimmed: they are the only way to see what the output hides.
-KEEP_ACTIONS = ("show_secrets", "read_original")
-# Dropped in this order until the output fits. Fields marked True also go from the top result.
-_OPTIONAL_FIELDS = (("next_actions", None), ("info", True), ("cosine", True), ("segment", True),
-                    ("snippet", False), ("title", False))
+# Dropped in this order until the output fits. Fields marked True also go from the top result. `next_actions`
+# always stays: it is the only way to see what the output hides.
+_OPTIONAL_FIELDS = (("info", True), ("cosine", True), ("segment", True), ("snippet", False), ("title", False))
 
 
 def fit(doc: dict, budget: int) -> dict:
@@ -184,11 +118,6 @@ def fit(doc: dict, budget: int) -> dict:
     for field, from_top in _OPTIONAL_FIELDS:
         if tokens(doc) <= budget:
             break
-        if from_top is None:
-            if doc["status"] == "ok":
-                doc[field] = [a for a in doc.get(field, []) if a["intent"] in KEEP_ACTIONS]
-                dropped["fields"].append(field)
-            continue
         for hit in doc["results"][0 if from_top else 1:]:
             hit.pop(field, None)
         dropped["fields"].append(field)

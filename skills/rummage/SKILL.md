@@ -14,18 +14,21 @@ them. It runs on the user's machine; nothing is sent anywhere.
 rummage search "what the user is looking for, in their own words" --json -n 10
 rummage search "INV-20931" --words-only --json          # names, IDs, numbers: exact words, no model, instant
 rummage search "..." --json --path notes/work --glob '*.md' -s notes   # narrow by folder, pattern, source
-rummage search "..." --json --truncate knee --budget-tokens 1500       # shorter output
+rummage search "..." --json --since 2026-10-01 --until 2026-10-31      # a time window (dates you work out)
+rummage search "Ana Souza" --json --sort newest -n 30                  # the newest matches first
+rummage search "..." --json --budget-tokens 1500                       # shorter output
 ```
 
 The JSON has `status`:
 
 - `ok`: `results` are ranked. `summary.strong` says how many score near the top; the rest are weak.
-- `no_results`: nothing matched. Read `next_actions` before retrying: rephrase by meaning, try exact words with
-  `--words-only`, or drop a scope filter.
+- `no_results`: nothing matched. Rephrase by meaning, try exact words with `--words-only`, or drop a scope
+  filter.
 - `empty_index` or an error with status `index_missing`: nothing is indexed yet (`rummage index`).
 
 Each result has `id`, `source`, `title`, `ref` (where it is), `lines` for text files, `score`, `snippet`.
-`next_actions` holds runnable commands with a reason; prefer them to guessing.
+`next_actions` holds the commands that show what the output left out (masked credentials, the rest of a partially
+indexed file); the next query is yours to choose.
 
 ## Open what you found
 

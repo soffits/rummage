@@ -31,6 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentic import claude, json_in  # noqa: E402
+from memory import REF_PREFIX  # noqa: E402
 
 READER = "sonnet"
 JUDGE = "claude-haiku-4-5"
@@ -186,7 +187,7 @@ def main() -> int:
 
     def search(q: dict, text: str, limit: int):
         vector = embedder.query(text)
-        searcher = Searcher(store(), globs=[f"mem:{s}#*" for s in q["haystack_session_ids"]])
+        searcher = Searcher(store(), globs=[f"{REF_PREFIX}{s}#*" for s in q["haystack_session_ids"]])
         return searcher.search(text, vector, limit=limit), searcher.vector_count()
 
     def lead_lines(q: dict, shown) -> str:
