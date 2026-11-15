@@ -18,6 +18,7 @@ from .when import TimeRange, without
 
 WORD_WEIGHT = 2.0
 TIME_WEIGHT = 1.5      # bonus for an item from the time range the query names
+OPENED_WEIGHT = 0.4    # bonus per time an item was opened after a search with mostly the same words (max 2)
 Z_GATE = 2.0
 
 
@@ -128,12 +129,14 @@ class Searcher:
         candidates |= {i for i, share in coverage.items() if share >= 0.5}
         # From the time asked about, a weaker match is enough.
         candidates |= {i for i in in_range if best.get(i, (0.0,))[0] >= z_gate / 2 or coverage.get(i, 0) > 0}
+        opened = self.store.opened_for(words, candidates)
         scored = []
         for item in candidates:
             zz = best.get(item, (0.0, 0.0, 0))[0]
             score = meaning_weight * max(zz, 0.0) + words_weight * coverage.get(item, 0.0) ** 1.5
             if item in in_range:
                 score += TIME_WEIGHT
+            score += OPENED_WEIGHT * min(opened.get(item, 0), 2)
             scored.append((score, item))
         scored.sort(key=lambda s: (-s[0], s[1]))
 

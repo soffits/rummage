@@ -179,6 +179,29 @@ def _remote_search(name: str, spec: dict, args) -> dict:
     return _remote(spec, "/search", params)
 
 
+LAST_SEARCH = "last-search.json"
+OPEN_WINDOW_SECONDS = 600
+
+
+def _remember_search(cfg: C.Config, query: str, hits: list[dict]) -> None:
+    """The last search's words and result ids, so a `get` of one of them soon after counts for it."""
+    try:
+        cfg.data_dir.mkdir(parents=True, exist_ok=True)
+        (cfg.data_dir / LAST_SEARCH).write_text(json.dumps(
+            {"terms": T.terms(query), "ids": [h["id"] for h in hits], "at": time.time()}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _note_open(cfg: C.Config, store: Store, row: int, item: str) -> None:
+    try:
+        last = json.loads((cfg.data_dir / LAST_SEARCH).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if item in last.get("ids", []) and time.time() - last.get("at", 0) <= OPEN_WINDOW_SECONDS:
+        store.record_open(last["terms"], row)
+
+
 def _day(value: str | None, plus_days: int = 0) -> float | None:
     """Epoch seconds of a `YYYY-MM-DD` (local midnight), plus some days."""
     if not value:
@@ -240,6 +263,7 @@ def cmd_search(cfg: C.Config, args) -> int:
     doc = E.build(args, hits, errors, time.monotonic() - started, index_empty)
     doc["summary"]["pending_vectors"] = pending
     E.mark_degraded(doc, degraded)
+    _remember_search(cfg, args.query, hits)
     if when:
         doc["request"]["time"] = when.as_dict()
     for error in errors:
@@ -357,6 +381,7 @@ def cmd_get(cfg: C.Config, args) -> int:
     try:
         row = store.find(args.ref)
         doc = store.item(row, args.loc)
+        _note_open(cfg, store, row, doc["id"])
         also = store.same_message(row, SAME_MESSAGE_SECONDS)
         if also:
             doc["also"] = also

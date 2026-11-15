@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS segments (
 CREATE INDEX IF NOT EXISTS segments_item ON segments(item);
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(title, body, content='', contentless_delete=1,
     tokenize='unicode61 remove_diacritics 2');
+CREATE TABLE IF NOT EXISTS opened (terms TEXT NOT NULL, source TEXT NOT NULL, key TEXT NOT NULL, at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS source_state (source TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY,
@@ -334,6 +335,29 @@ class Store:
         return [r for (r,) in self.db.execute(
             f"SELECT i.id FROM items i WHERE json_extract(i.info, '$.speaker') IN ({marks}){where}",
             [*names, *args])]
+
+    def record_open(self, terms: list[str], row: int) -> None:
+        """Remembers that a search with these words led to opening item `row` (implicit feedback)."""
+        source, key = self.db.execute("SELECT source, key FROM items WHERE id = ?", (row,)).fetchone()
+        self.db.execute("INSERT INTO opened(terms, source, key, at) VALUES(?, ?, ?, ?)",
+                        (" ".join(sorted(set(terms))), source, key, time.time()))
+        self.db.commit()
+
+    def opened_for(self, terms: list[str], rows) -> dict[int, int]:
+        """How often each of `rows` was opened after a search sharing at least half of `terms`."""
+        wanted = set(terms)
+        if not wanted:
+            return {}
+        rows = list(rows)
+        counts: dict[int, int] = {}
+        for chunk in range(0, len(rows), 500):
+            part = rows[chunk:chunk + 500]
+            for row, past in self.db.execute(
+                    f"SELECT i.id, o.terms FROM opened o JOIN items i ON i.source = o.source AND i.key = o.key "
+                    f"WHERE i.id IN ({','.join('?' * len(part))})", part):
+                if len(wanted & set(past.split())) * 2 >= len(wanted):
+                    counts[row] = counts.get(row, 0) + 1
+        return counts
 
     def item_row(self, row: int) -> dict | None:
         found = self.db.execute("SELECT source, kind, title, ref, info, key, mtime FROM items WHERE id = ?",

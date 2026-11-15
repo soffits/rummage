@@ -47,6 +47,10 @@
 - Threads follow the load by restarting `llama-server` (about a second) when the wanted count changes, checked at most once a minute: llama.cpp fixes the thread count at start, and a minute-scale check matches the 1-minute load average it reads.
 - A remote embedder is trusted by result, not by name: it is used only when its vectors for three fixed reference texts agree with the ones stored at the index's first run (cosine ≥ 0.999, the same bar `doctor` applies to a llama.cpp upgrade). Queries keep using the local model or daemon, so search never depends on another machine.
 
+## Feedback
+
+- A `get` of a result soon after the search that showed it is the only signal recorded: it needs no extra step from people or agents, and it says which result was the useful one. The boost is small and capped (0.4 per open, two at most) and needs half of the query's words in common, so one open can't take over unrelated searches. The last search lives in a small file next to the index, not in it, so searching stays read-only.
+
 ## Time in queries
 
 - dateparser (BSD-3, 200+ locales, CJK included) reads time phrases; writing our own per-language rules would never cover as many languages. It runs in an optional extra since it pulls in regex and tz data.

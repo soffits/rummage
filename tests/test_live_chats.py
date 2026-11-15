@@ -154,3 +154,23 @@ def test_one_message_recorded_by_two_sources_is_one_hit(tmp_path, capsys):
     assert len(results) == 1 and len(results[0]["also"]) == 1
     code, out = _run(capsys, "--config", str(cfg), "get", results[0]["id"], "--json")
     assert json.loads(out)["also"] == results[0]["also"]
+
+
+def test_opening_a_result_after_a_search_ranks_it_higher_next_time(tmp_path, capsys):
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    for name in ("a.md", "b.md", "c.md"):
+        (notes / name).write_text("Notes about the boiler service visit and the warranty.", encoding="utf-8")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(f"data_dir = '{tmp_path / 'data'}'\n[sources.notes]\ntype = 'markdown'\nroot = '{notes}'\n",
+                   encoding="utf-8")
+    _run(capsys, "--config", str(cfg), "index", "--no-embed", "-q")
+    code, out = _run(capsys, "--config", str(cfg), "search", "boiler warranty", "--words-only", "--json")
+    first = json.loads(out)["results"]
+    picked = first[-1]
+    _run(capsys, "--config", str(cfg), "get", picked["id"])
+    code, out = _run(capsys, "--config", str(cfg), "search", "warranty for the boiler", "--words-only", "--json")
+    assert json.loads(out)["results"][0]["id"] == picked["id"]
+    _run(capsys, "--config", str(cfg), "search", "something else entirely", "--words-only", "--json")
+    code, out = _run(capsys, "--config", str(cfg), "search", "boiler warranty", "--words-only", "--json")
+    assert json.loads(out)["results"][0]["id"] == picked["id"]   # remembered, not only the last search
