@@ -63,6 +63,7 @@ root = "~/notes"
 ```sh
 rummage index              # incremental; only new and changed items are embedded
 rummage search "query"     # --json, -s SOURCE, -k KIND, -n LIMIT, --words-only (no model, instant)
+rummage get "#3f2a9c"     # a result's text by its id (or ref); --loc for one passage, --head N
 rummage status --json      # counts, last run per source, failures
 rummage doctor             # runtime files, vector version, freshness; exit 1 on a problem
 rummage serve --token-file F --reindex-minutes 60   # HTTP search API for an index kept on a server

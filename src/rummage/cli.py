@@ -3,6 +3,7 @@
     rummage setup                  fetch the pinned llama.cpp build and EmbeddingGemma 2 files
     rummage index [-s SOURCE]      bring the index up to date (incremental)
     rummage search QUERY [--json]  search by meaning and exact words
+    rummage get REF                print a result's text (by #id, ref or source:key)
     rummage status [--json]        what's indexed, and how the last runs went
     rummage doctor [--json]        check runtime, vectors and source freshness; exit 1 on a problem
     rummage sources                list the installed source types (core and plugins)
@@ -24,7 +25,7 @@ from . import runtime as R
 from .indexer import Busy, Embedders, index_source, lock
 from .search import Searcher
 from .sources import available, build
-from .store import Store, VersionMismatch
+from .store import Ambiguous, NotFound, Store, VersionMismatch
 
 REFERENCE_TEXTS = [
     "task: search result | query: a cat drinking tea",
@@ -111,7 +112,7 @@ def cmd_index(cfg: C.Config, args) -> int:
     return 0
 
 
-def _remote_search(name: str, spec: dict, args) -> dict:
+def _remote(spec: dict, path: str, params: list[tuple[str, str]]) -> dict:
     import os
     import urllib.parse
     import urllib.request
@@ -120,15 +121,19 @@ def _remote_search(name: str, spec: dict, args) -> dict:
     token = os.environ.get(spec.get("token_env", ""), "") if spec.get("token_env") else ""
     if not token and spec.get("token_file"):
         token = Path(spec["token_file"]).expanduser().read_text().strip()
-    params = [("q", args.query), ("limit", str(args.limit))]
-    params += [("source", s) for s in args.source or []] + [("kind", k) for k in args.kind or []]
-    if args.words_only:
-        params.append(("words_only", "1"))
-    request = urllib.request.Request(spec["url"].rstrip("/") + "/search?" + urllib.parse.urlencode(params),
+    request = urllib.request.Request(spec["url"].rstrip("/") + path + "?" + urllib.parse.urlencode(params),
                                      headers={"Authorization": f"Bearer {token}"})
     handlers = [urllib.request.ProxyHandler({"http": spec["proxy"], "https": spec["proxy"]})] if spec.get("proxy") else []
     with urllib.request.build_opener(*handlers).open(request, timeout=float(spec.get("timeout", 30))) as r:
         return json.load(r)
+
+
+def _remote_search(name: str, spec: dict, args) -> dict:
+    params = [("q", args.query), ("limit", str(args.limit))]
+    params += [("source", s) for s in args.source or []] + [("kind", k) for k in args.kind or []]
+    if args.words_only:
+        params.append(("words_only", "1"))
+    return _remote(spec, "/search", params)
 
 
 def cmd_search(cfg: C.Config, args) -> int:
@@ -184,7 +189,7 @@ def cmd_search(cfg: C.Config, args) -> int:
         if h["words"]:
             how.append(f"words {h['words']:.0%}")
         loc = h["loc"] if h["loc"] and h["loc"] not in ("0", "meaning", "picture") else ""
-        print(f"{h['score']:5.2f}  [{h['source']}] {h['title']}  ({h['ref']}{'@' + loc if loc else ''})"
+        print(f"{h['score']:5.2f}  {h.get('id', '')} [{h['source']}] {h['title']}  ({h['ref']}{'@' + loc if loc else ''})"
               f"  {', '.join(how)}")
         if h["snippet"]:
             print(f"       {h['snippet'][:200]}")
@@ -198,6 +203,36 @@ def cmd_sources(cfg: C.Config, args) -> int:
         return 0
     for name, target in sorted(types.items()):
         print(f"{name:20} {target}")
+    return 0
+
+
+def cmd_get(cfg: C.Config, args) -> int:
+    store = Store(cfg.index_path)
+    try:
+        doc = store.item(store.find(args.ref), args.loc)
+    except Ambiguous as error:
+        _eprint(f"{error}: " + ", ".join(error.candidates))
+        return 1
+    except NotFound as error:
+        doc = None
+        for spec in cfg.remotes.values():
+            try:
+                doc = _remote(spec, "/get", [("ref", args.ref)] + ([("loc", args.loc)] if args.loc else []))
+                break
+            except Exception:
+                continue
+        if doc is None:
+            _eprint(error)
+            return 1
+    finally:
+        store.close()
+    if args.head:
+        doc["text"] = "\n".join(doc["text"].splitlines()[: args.head])
+    if args.json:
+        print(json.dumps(doc, ensure_ascii=False))
+    else:
+        print(f"{doc['id']}  [{doc['source']}] {doc['title']}  ({doc['ref']})\n")
+        print(doc["text"])
     return 0
 
 
@@ -309,6 +344,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-remote", action="store_true", help="only the local index")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("get", help="print an item's text by #id, ref or source:key")
+    p.add_argument("ref", help="#id (a prefix of 4+ characters works), a result's ref, or source:key")
+    p.add_argument("--loc", help="only the passage at this location (a result's loc)")
+    p.add_argument("--head", type=int, help="only the first N lines")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_get)
 
     p = sub.add_parser("sources", help="list the installed source types")
     p.add_argument("--json", action="store_true")

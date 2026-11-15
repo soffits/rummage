@@ -138,3 +138,27 @@ def test_files_source_reads_each_kind(tmp_path):
     image = src.load(items["d.png"])
     assert image[1].kind == "image" and image[1].image == b"\x89PNG fake"
     assert len(src.load(items["e.exe"])) == 1
+
+
+def test_get_by_id_ref_and_loc(tmp_path):
+    from rummage.store import Ambiguous, NotFound, item_id
+    store = Store(tmp_path / "index.db")
+    item = Item("notes", "a.md", "note", "A", "a.md")
+    store.put(item, [Segment("name", "a.md"), Segment("text", "First part of the note, which runs on for a while.", loc="0"),
+                     Segment("text", "which runs on for a while. Then the second part.", loc="30")])
+    store.commit()
+    uid = item_id("notes", "a.md")
+    row = store.find("#" + uid[:5])
+    assert row == store.find("a.md") == store.find("notes:a.md")
+    doc = store.item(row)
+    assert doc["id"] == "#" + uid
+    assert doc["text"] == "First part of the note, which runs on for a while. Then the second part."
+    assert store.item(row, "30")["text"].startswith("which runs")
+    for bad in ("#zzzzz", "b.md"):
+        try:
+            store.find(bad)
+        except NotFound:
+            pass
+        else:
+            raise AssertionError(bad)
+    store.close()

@@ -1,6 +1,7 @@
 """`rummage serve`: answer searches over HTTP from a machine that holds an index, and keep that index current.
 
     GET /search?q=...&limit=10&source=...&kind=...&words_only=1   the same JSON as `rummage search --json`
+    GET /get?ref=#id&loc=...                                      the same JSON as `rummage get --json`
     GET /status                                                   the same JSON as `rummage status --json`
     GET /health                                                   200 "ok"
 
@@ -55,6 +56,13 @@ class Service:
         return {"query": q, "strong": strong(hits), "seconds": round(time.monotonic() - started, 2),
                 "hits": [h.as_dict() for h in hits]}
 
+    def get(self, ref: str, loc: str | None) -> dict:
+        store = Store(self.cfg.index_path)
+        try:
+            return store.item(store.find(ref), loc)
+        finally:
+            store.close()
+
     def status(self) -> dict:
         store = Store(self.cfg.index_path)
         try:
@@ -105,6 +113,12 @@ def handler(service: Service):
                     limit = max(1, min(100, int((params.get("limit") or ["10"])[0])))
                     return self._send(200, service.search(q, limit, params.get("source", []), params.get("kind", []),
                                                           (params.get("words_only") or ["0"])[0] in ("1", "true")))
+                if url.path == "/get":
+                    ref = (params.get("ref") or [""])[0]
+                    try:
+                        return self._send(200, service.get(ref, (params.get("loc") or [None])[0]))
+                    except LookupError as error:
+                        return self._send(404, {"error": str(error)})
                 if url.path == "/status":
                     return self._send(200, service.status())
                 return self._send(404, {"error": "not found"})
