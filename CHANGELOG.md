@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.1
+
+- A search, recall or `recent` run inside a git repository that no source reads saw an empty scope and found nothing (0.14.0). It now sees the default scope and says that `rummage project ensure` adds the repository (`scope.note`, and an `add_project` next action in JSON). Agents' hooks still add the repository by themselves.
+
 ## 0.15.0
 
 - `memory-export` source: memories exported from mem0 (`get_all` JSON or JSONL, platform pages, `mem0 list --output json`), Letta (Agent File memory blocks, passages lists), Zep or Graphiti (fact lists) and assistants whose memory can only be copied (ChatGPT, Claude: one memory per line), one item per memory with its time, user, agent and origin, embedded with rummage's own model. README: "Coming from another memory system".

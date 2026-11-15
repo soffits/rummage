@@ -349,7 +349,7 @@ def cmd_search(cfg: C.Config, args) -> int:
         print("nothing found" if doc["status"] != "empty_index" else "nothing indexed yet: run `rummage index`")
         if index:
             print(f"note: {index['note']}")
-        if scope.limited():
+        if scope.worth_saying():
             print(f"note: {scope.line()}")
         return E.OK if doc["status"] != "error" else E.FAILED
     cut = doc["summary"]["strong"] if args.sort == "score" else len(hits)
@@ -372,7 +372,7 @@ def cmd_search(cfg: C.Config, args) -> int:
         print(f"note: {index['note']}")
     for line in _hidden_lines(args, hits):
         print(line)
-    if scope.limited():
+    if scope.worth_saying():
         print(f"note: {scope.line()}")
     return E.OK
 
@@ -624,7 +624,7 @@ def cmd_recent(cfg: C.Config, args) -> int:
               + f" · {item['title']}\n  {item['text']}")
     for line in _hidden_lines(args, items):
         print(line)
-    if scope.limited():
+    if scope.worth_saying():
         print(f"note: {scope.line()}")
     return 0
 

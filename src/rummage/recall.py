@@ -209,7 +209,7 @@ def run(cfg: C.Config, args) -> int:
         except Exception as error:  # a hook must never break the agent
             print(f"rummage recall: {type(error).__name__}: {error}", file=sys.stderr)
     block = "" if not searched else render(results, recent, degraded, agent,
-                                                   scope.line() if scope.limited() else None)
+                                                   scope.line() if scope.worth_saying() else None)
     if args.hook:
         status = memory.pause_line(paused) if paused else index["line"]
         print(json.dumps(hook_reply(block, about, status), ensure_ascii=False))
