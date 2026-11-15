@@ -149,8 +149,9 @@ def test_table_and_line_are_ascii(tmp_path):
     read.source("projects/mods", phase="reading", done=10, total=2000)
     read.save(force=True)
     embed = P.Run(tmp_path, "embed")
-    embed.vectors({"notes": (860, 1200), "projects/mods": (0, 0)})
+    embed.vectors({"notes": (900, 1200), "projects/mods": (0, 0)})
     embed.value["per_second"] = 1.5
+    embed.value["made_since_count"] = 40    # made after that count: the reader takes them off
     embed.save(force=True)
     lines = P.table(tmp_path)
     text = "\n".join(lines)

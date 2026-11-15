@@ -282,15 +282,17 @@ def embed_models(store: Store, active: Embedders | None, building: Embedders | N
     def tell(made_now: int = 0, force: bool = False) -> None:
         if progress is None:
             return
-        progress.sample(made_before[0] + made_now)
+        made = made_before[0] + made_now
+        progress.sample(made)
         if force or time.monotonic() - counted[0] >= COUNT_EVERY:
             counted[0] = time.monotonic()
             if store.model:
-                progress.vectors(store.pending_by_source(store.model))
+                progress.vectors(store.pending_by_source(store.model), made_so_far=made)
             info = switch.status(store) if building is not None else None
             progress.value["switch"] = None if not info or info["phase"] == "swapped" else {
                 "to_name": info["to_name"], "done": info.get("done", 0), "total": info.get("total", 0),
                 "eta_seconds": info.get("eta_seconds")}
+        progress.value["made_since_count"] = made - progress.value.get("made_at_count", made)
         progress.save(force)
 
     def active_waiting(*_):

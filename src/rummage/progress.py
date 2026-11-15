@@ -112,10 +112,13 @@ class Run:
         self.value["per_second"] = round(rate, 3) if rate else None
         return rate
 
-    def vectors(self, by_source: dict[str, tuple[int, int]]) -> None:
-        """A count of passages per source: (still without a vector of the active model, all)."""
+    def vectors(self, by_source: dict[str, tuple[int, int]], made_so_far: int = 0) -> None:
+        """A count of passages per source: (still without a vector of the active model, all). `made_so_far`: the
+        run's own count of vectors made, so readers can take off what was made since this count."""
         self.value["vectors"] = {name: {"left": left, "total": total} for name, (left, total) in by_source.items()}
         self.value["vectors_at"] = time.time()
+        self.value["made_at_count"] = made_so_far
+        self.value["made_since_count"] = 0
 
     def finish(self, paused: str | None = None, error: str | None = None, **fields) -> None:
         self.value.update(fields, finished=time.time(), paused=paused, error=error)
@@ -204,7 +207,9 @@ def state(data_dir: Path, pending: int | None = None, now: float | None = None) 
         out["items"] = {"done": sum(int(s.get("done") or 0) for s in sources),
                         "total": sum(int(s.get("total") or 0) for s in sources)}
     left, total = _vectors(read, embed, embedding)
-    if pending is not None and not embedding:
+    if embedding:
+        left = max(left - int(embed.get("made_since_count") or 0), 0)
+    elif pending is not None:
         left = pending
     if left:
         out["vectors"] = {"done": max(total - left, 0), "total": total} if total >= left else \
@@ -312,6 +317,11 @@ def table(data_dir: Path, pending: int | None = None, now: float | None = None) 
     read, embed = doc.get("read") or {}, doc.get("embed") or {}
     newest = max((p for p in (read, embed) if p.get("vectors_at")), key=lambda p: p["vectors_at"], default={})
     counts = (embed if _running(embed) else newest).get("vectors") or {}
+    if _running(embed) and embed.get("made_since_count"):
+        # Made since the last count, spread over the sources by what each had left (exact for one source).
+        waiting = sum(c["left"] for c in counts.values()) or 1
+        share = min(embed["made_since_count"] / waiting, 1.0)
+        counts = {name: {**c, "left": round(c["left"] * (1 - share))} for name, c in counts.items()}
     sources = read.get("sources") or {}
     lines = [info["line"] or "rummage: index complete", ""]
     names = sorted(set(sources) | set(counts))
