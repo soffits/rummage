@@ -134,8 +134,15 @@ hook's `cwd`); `session` (the hook's session); `private`.
 
 ## Claude Code and Codex
 
-This repository is a plugin marketplace for both. The plugin holds the recall hook (`hooks/hooks.json`, a
-`UserPromptSubmit` hook running `rummage recall --hook`) and the skill.
+This repository is a plugin marketplace for both. The plugin holds the recall hook (a `UserPromptSubmit` hook running
+`rummage recall --hook --harness claude-code`, or `--harness codex` from Codex's own manifest
+`.codex-plugin/plugin.json`) and the skill. Installing it is the choice to have that harness's chats and the
+projects you open remembered: the first prompt in a new project says once, under the prompt, what rummage now
+reads and how to stop it.
+
+In Claude Code, `/rummage:pause` and `/rummage:resume` take the words of `rummage pause --hook` (`recall`, `index`
+or `all`, a time like `2h`, `here`, `session`, `private`); a `UserPromptExpansion` hook answers them directly, so
+they cost no model turn. In Codex, run `rummage pause` and `rummage resume` in a terminal.
 
 Claude Code:
 
@@ -159,7 +166,7 @@ Without the plugin, the same hook goes in `~/.claude/settings.json` or `~/.codex
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "rummage recall --hook", "timeout": 5 } ] }
+      { "hooks": [ { "type": "command", "command": "rummage recall --hook --harness claude-code", "timeout": 5 } ] }
     ]
   }
 }
@@ -176,7 +183,8 @@ complete. To keep the line in view between prompts, add rummage to your status l
 { "statusLine": { "type": "command", "command": "rummage status --line", "refreshInterval": 5 } }
 ```
 
-It prints nothing when the index is complete, and reads one small file, so a short interval costs little. On
+It prints nothing when the index is complete and nothing is paused, and reads two small files, so a short interval
+costs little. A pause covering the folder comes first ("rummage: recall paused until 16:30"). On
 Windows the same command works whether Claude Code runs it through Git Bash or PowerShell. If you already have a
 status line script, print `rummage status --line` from it too.
 
@@ -198,8 +206,9 @@ request, so the text you typed stays as you typed it. It also registers the rumm
 
 `args` are passed on to `rummage recall` (for example `["-s", "notes"]`); `"skill": false` leaves the skill out.
 
-The package's TUI part shows indexing progress in the footer while the index is unfinished, paused or broken, and a
-toast when indexing starts, finishes or fails. Between index runs it only checks the progress file's time stamp.
+The package's TUI part shows indexing progress (and a pause) in the footer while the index is unfinished, paused or
+broken, a toast when indexing starts, finishes or fails, and once a note on what the plugin does. `/rummage-pause`
+and `/rummage-resume` take the same words as in Claude Code. Between index runs it only checks the progress file's time stamp.
 
 ## Hermes Agent
 
@@ -267,6 +276,10 @@ harness knows them. It always replies with JSON, also when it has nothing to rec
 | `paused`, `error` | why work stopped with some left, what failed, else `null` |
 | `updated` | when a run last wrote progress (Unix time), else `null` |
 | `file` | the progress file; poll its modification time and run `status --line --json` only when it changes |
+
+`status --line --json` adds `paused_memory`, the pause covering the current folder (or `null`), and puts its line
+first in `line`. The hook reply adds `rummage.notice` on the prompt where `ensure` started remembering something
+new, and shows it in `systemMessage`.
 
 `search --json`, `get --json` and `recall --json` carry `state`, `note`, `items`, `vectors`, `eta_seconds`, `paused`
 and `error` as `index` while the index is incomplete, and leave it out once it's complete.

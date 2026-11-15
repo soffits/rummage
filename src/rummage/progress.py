@@ -36,6 +36,7 @@ WRITE_EVERY = 1.0          # seconds between heartbeats of one run
 STALE_SECONDS = 600        # a running part without a heartbeat for this long counts as stalled
 RATE_WINDOW = 300          # seconds of samples behind a rate
 LINE_REASON = 48           # characters of a reason shown in `line`
+QUIET_READ = 5             # seconds a read may check folders before it shows
 
 
 def path(data_dir: Path) -> Path:
@@ -198,6 +199,13 @@ def state(data_dir: Path, pending: int | None = None, now: float | None = None) 
            "paused": None, "error": None, "updated": max([p.get("updated") or 0 for p in (read, embed)]) or None,
            "file": str(path(data_dir))}
     reading, embedding = _running(read), _running(embed)
+    if reading:
+        # A watcher's quick re-check of unchanged folders isn't news: a read counts once it has items left to read,
+        # or has been walking folders for a while (a first, large pass).
+        sources = (read.get("sources") or {}).values()
+        left = sum(int(s.get("total") or 0) - int(s.get("done") or 0) for s in sources)
+        walking = any(s.get("phase") == "planning" for s in sources) and now - (read.get("started") or now) > QUIET_READ
+        reading = left > 0 or walking
     stalled = [p for p in (read, embed) if p and p.get("finished") is None and alive(p.get("pid"))
                and now - (p.get("updated") or now) > STALE_SECONDS]
     switch = embed.get("switch") if embedding else None

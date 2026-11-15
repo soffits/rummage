@@ -162,6 +162,24 @@ def hook_reply(block: str, rummage: dict, status: str | None = None) -> dict:
     return reply
 
 
+def notice(project: dict | None) -> str | None:
+    """One sentence for the person when this prompt's `ensure` started remembering something new: what it now reads
+    and adds to prompts, and how to stop it. Said once per thing, because the next prompt finds it registered."""
+    if not project or not project.get("added"):
+        return None
+    what = []
+    if (project.get("project") or {}).get("added"):
+        what.append(f"this project ({project['project']['folder']}, read in the background)")
+    history = project.get("history") or {}
+    if history.get("source") in project["added"]:
+        what.append(f"{history['harness']}'s own chat history")
+    if not what:
+        return None
+    return (f"rummage now remembers {' and '.join(what)}, and adds passages that clearly match to your prompts. "
+            "`rummage pause` stops it for a while, `rummage exclude` drops things, and removing the plugin turns "
+            "it off.")
+
+
 def run(cfg: C.Config, args) -> int:
     raw = args.query if args.query else sys.stdin.read()
     session, cwd, harness = args.session, args.cwd, args.harness
@@ -212,6 +230,10 @@ def run(cfg: C.Config, args) -> int:
                                                    scope.line() if scope.worth_saying() else None)
     if args.hook:
         status = memory.pause_line(paused) if paused else index["line"]
+        told = notice(about.get("project"))
+        if told:
+            about["notice"] = told
+            status = "\n".join(filter(None, [f"rummage: {told}", status]))
         print(json.dumps(hook_reply(block, about, status), ensure_ascii=False))
     elif args.json:
         if results or recent or agent or paused:

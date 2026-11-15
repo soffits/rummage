@@ -1,5 +1,6 @@
 // OpenCode TUI part of the rummage plugin: shows rummage's index state in the footer while it is building, paused
-// or broken, and a toast when indexing starts, finishes or fails.
+// or broken (or memory is paused), toasts when indexing starts, finishes or fails, a one-time note on what the plugin
+// does, and /rummage-pause and /rummage-resume.
 //
 // All state comes from `rummage status --line --json`, which reads one small progress file. Between runs this part
 // only checks that file's modification time, so an idle index costs a stat every few seconds. Written as plain JS
@@ -15,11 +16,17 @@ const RECHECK_BUSY_MS = 30000
 const FOOTER_CHARS = 60
 const KEY = Symbol.for("rummage.opencode.tui")
 
-function run(command, args, timeout) {
+const INTRO =
+  "rummage remembers the project you open and OpenCode's own chats, and adds passages that clearly match to your " +
+  "prompts. /rummage-pause stops it for a while; removing the plugin turns it off."
+
+function run(command, args, timeout, input) {
   return new Promise((resolve) => {
-    execFile(command, args, { timeout, maxBuffer: 1 << 20, windowsHide: true }, (error, stdout, stderr) =>
+    const child = execFile(command, args, { timeout, maxBuffer: 1 << 20, windowsHide: true }, (error, stdout, stderr) =>
       resolve({ ok: !error, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") }),
     )
+    child.stdin.on("error", () => {})
+    child.stdin.end(input ?? "")
   })
 }
 
@@ -83,7 +90,7 @@ export default {
         return line.length > FOOTER_CHARS ? line.slice(0, FOOTER_CHARS - 3) + "..." : line
       })
       effect((prev) => {
-        const bad = ["error", "stopped", "paused"].includes(info().state)
+        const bad = ["error", "stopped", "paused"].includes(info().state) || Boolean(info().paused_memory)
         const theme = context.theme.text
         return setProp(el, "fg", bad ? (theme.feedback?.warning?.base ?? theme.base) : theme.muted, prev)
       })
@@ -95,11 +102,64 @@ export default {
       context.ui.slot({ append: "home.footer.status", render: label }),
     ]
 
+    const directory = () => (context.location ?? context.data.location.default())?.directory
+    const sessionID = () => {
+      const route = context.ui.router.current()
+      return route.type === "session" ? route.sessionID : undefined
+    }
+
+    // The same words as Claude Code's /rummage:pause: recall|index|all, a time like 2h, here, session, private.
+    async function pauseCommand(verb, input) {
+      const event = { command_args: String(input ?? ""), cwd: directory(), session_id: sessionID() }
+      const result = await run(command, [verb, "--hook"], 10000, JSON.stringify(event))
+      let reason = ""
+      try {
+        reason = JSON.parse(result.stdout).reason ?? ""
+      } catch {}
+      context.ui.toast.show({
+        title: "rummage",
+        message: reason || result.stderr.trim() || `${verb} failed`,
+        variant: result.ok ? "info" : "error",
+      })
+      void refresh()
+    }
+
+    const unkeymap = context.keymap.layer(() => ({
+      mode: "global",
+      commands: [
+        {
+          id: "rummage.pause",
+          title: "Pause rummage (recall, index or all; a time like 2h; here or session)",
+          group: "rummage",
+          palette: true,
+          slash: { name: "rummage-pause", arguments: true },
+          run: (input) => pauseCommand("pause", input),
+        },
+        {
+          id: "rummage.resume",
+          title: "Resume rummage",
+          group: "rummage",
+          palette: true,
+          slash: { name: "rummage-resume", arguments: true },
+          run: (input) => pauseCommand("resume", input),
+        },
+      ],
+    }))
+
+    const [seen, setSeen] = context.storage.store("rummage.intro", { initial: { shown: false } })
+    if (!seen.shown) {
+      context.ui.toast.show({ title: "rummage", message: INTRO, variant: "info" })
+      void setSeen((draft) => {
+        draft.shown = true
+      })
+    }
+
     const dispose = () => {
       if (stopped) return
       stopped = true
       clearTimeout(timer)
       for (const off of unslot) off?.()
+      unkeymap?.()
       if (globalThis[KEY] === dispose) delete globalThis[KEY]
     }
     globalThis[KEY] = dispose
