@@ -14,8 +14,10 @@ import numpy as np
 from . import text as T
 from .chats import SAME_MESSAGE_SECONDS
 from .store import Scope, Store
+from .when import TimeRange, without
 
 WORD_WEIGHT = 2.0
+TIME_WEIGHT = 1.5      # bonus for an item from the time range the query names
 Z_GATE = 2.0
 
 
@@ -55,11 +57,11 @@ class Hit:
 
 class Searcher:
     def __init__(self, store: Store, sources: list[str] | None = None, paths: list[str] | None = None,
-                 globs: list[str] | None = None):
+                 globs: list[str] | None = None, since: float | None = None, until: float | None = None):
         """`sources`: only these sources. `paths`: only items whose ref starts with one of these prefixes. `globs`:
         only items whose ref matches one of these patterns (`*` crosses folders, as in SQLite's GLOB)."""
         self.store = store
-        self.scope = Scope(sources, paths, globs)
+        self.scope = Scope(sources, paths, globs, since, until)
         self._loaded = False
 
     def _load(self) -> None:
@@ -93,8 +95,10 @@ class Searcher:
         return scores, z
 
     def search(self, query: str, vector: np.ndarray | None, limit: int = 10, kinds: set[str] | None = None,
-               z_gate: float = Z_GATE) -> list[Hit]:
-        words = T.terms(query)
+               z_gate: float = Z_GATE, when: TimeRange | None = None) -> list[Hit]:
+        """`when`: the time range the query names; items from it rank higher, and its phrase isn't matched as
+        words."""
+        words = T.terms(without(query, when))
         best: dict[int, tuple[float, float, int]] = {}
         if vector is not None:
             z_gate = gate_for(z_gate, self.vector_count())
@@ -119,12 +123,17 @@ class Searcher:
 
         lookup = T.is_lookup(words)
         meaning_weight, words_weight = (0.5, WORD_WEIGHT * 2) if lookup else (1.0, WORD_WEIGHT)
+        in_range = self.store.items_between(set(best) | set(coverage), when.start, when.end) if when else set()
         candidates = {i for i, (zz, _, _) in best.items() if zz >= z_gate}
         candidates |= {i for i, share in coverage.items() if share >= 0.5}
+        # From the time asked about, a weaker match is enough.
+        candidates |= {i for i in in_range if best.get(i, (0.0,))[0] >= z_gate / 2 or coverage.get(i, 0) > 0}
         scored = []
         for item in candidates:
             zz = best.get(item, (0.0, 0.0, 0))[0]
             score = meaning_weight * max(zz, 0.0) + words_weight * coverage.get(item, 0.0) ** 1.5
+            if item in in_range:
+                score += TIME_WEIGHT
             scored.append((score, item))
         scored.sort(key=lambda s: (-s[0], s[1]))
 

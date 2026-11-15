@@ -84,6 +84,8 @@ with `[secret]`; `--show-secrets` shows it, and `mask_secrets = false` on a sour
 rummage index              # incremental: new and changed items go into keyword search at once, then get vectors
 rummage search "query"     # --json, -s SOURCE, -k KIND, -n LIMIT, --words-only (no model, instant)
 rummage search "lease" --path housing --glob '*.pdf'   # only part of a source
+rummage search "what did we decide last Wednesday"      # time phrases rank that time first (`dates` extra)
+rummage search "receipt" --since 2026-10-01 --until 2026-10-31
 rummage get "#3f2a9c"     # a result's text by its id (or ref); --loc for one passage, --head N
 rummage get "#3f2a9c" --around 3   # with context: 3 chat turns before and after, or 3 lines around a passage
 rummage recent --minutes 30          # the latest chat turns and changed files, newest first

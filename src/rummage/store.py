@@ -109,6 +109,8 @@ class Scope:
     sources: list[str] | None = None
     paths: list[str] | None = None
     globs: list[str] | None = None
+    since: float | None = None     # item time (a chat message's time, a mail's date, a file's change) from
+    until: float | None = None     # ... and before
 
     def where(self, alias: str = "i") -> tuple[str, list]:
         clauses, args = [], []
@@ -124,6 +126,12 @@ class Scope:
         if self.globs:
             clauses.append("(" + " OR ".join(f"{alias}.ref GLOB ?" for _ in self.globs) + ")")
             args += list(self.globs)
+        if self.since is not None:
+            clauses.append(f"{alias}.mtime >= ?")
+            args.append(self.since)
+        if self.until is not None:
+            clauses.append(f"{alias}.mtime < ?")
+            args.append(self.until)
         return ("".join(f" AND {c}" for c in clauses), args)
 
 
@@ -296,6 +304,16 @@ class Store:
                     part):
                 out[seg] = {"item": row, "id": "#" + item_id(source, key), "source": source, "ref": ref,
                             "title": title, "loc": loc, "lines": lines, "text": text or "", "mtime": mtime}
+        return out
+
+    def items_between(self, rows, start: float, end: float) -> set[int]:
+        rows = list(rows)
+        out: set[int] = set()
+        for chunk in range(0, len(rows), 500):
+            part = rows[chunk:chunk + 500]
+            out |= {r for (r,) in self.db.execute(
+                f"SELECT id FROM items WHERE id IN ({','.join('?' * len(part))}) AND mtime >= ? AND mtime < ?",
+                [*part, start, end])}
         return out
 
     def item_row(self, row: int) -> dict | None:

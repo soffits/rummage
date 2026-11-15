@@ -28,7 +28,7 @@ User docs: `README.md`. Design and the reasons behind it: `docs/design.md`, `doc
 
 ## Checks and releases
 
-- `uv run --with pytest --extra archives --extra dsh-sessions --extra mcp pytest -q` runs the tests (no model needed). CI runs them on pushes
+- `uv run --with pytest --extra archives --extra dsh-sessions --extra mcp --extra watch --extra dates pytest -q` runs the tests (no model needed). CI runs them on pushes
   to `main` and on pull requests.
 - A real run needs the model: `rummage setup`, then `rummage index` and `rummage search` against a small config.
 - Release: update `CHANGELOG.md`, bump `version` in `pyproject.toml` and `src/rummage/__init__.py`, merge to `main`,

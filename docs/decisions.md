@@ -47,6 +47,12 @@
 - Threads follow the load by restarting `llama-server` (about a second) when the wanted count changes, checked at most once a minute: llama.cpp fixes the thread count at start, and a minute-scale check matches the 1-minute load average it reads.
 - A remote embedder is trusted by result, not by name: it is used only when its vectors for three fixed reference texts agree with the ones stored at the index's first run (cosine ≥ 0.999, the same bar `doctor` applies to a llama.cpp upgrade). Queries keep using the local model or daemon, so search never depends on another machine.
 
+## Time in queries
+
+- dateparser (BSD-3, 200+ locales, CJK included) reads time phrases; writing our own per-language rules would never cover as many languages. It runs in an optional extra since it pulls in regex and tz data.
+- A time phrase ranks items from that time higher (and lets weaker matches from it in) instead of filtering: the time an item carries (a file's change) is often not the time it is about. Hard filters are `--since/--until`.
+- Words that only look like dates are left alone: bare numbers, words of three letters or fewer ("may", "sun", "now"), and a month or weekday name standing alone; dateparser alone takes "March forward" for a month.
+
 ## Upkeep reports
 
 - Conflicts are found without a language model: close passages (cosine 0.80-0.97) whose dates, times, amounts or numbers differ, a few at most on each side. Refs that differ only in digits (a dated log, numbered runs) and number-heavy passages (tables) are left out, since their numbers are meant to differ. The report is a list to judge, not a verdict.

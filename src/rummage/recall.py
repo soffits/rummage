@@ -24,6 +24,7 @@ from . import config as C
 from . import runtime as R
 from . import text as T
 from .query import meaning_vector
+from .when import understand
 from .search import Hit, Searcher, gate_for
 from .secrets import mask_value
 from .store import Store
@@ -139,7 +140,7 @@ def recall(cfg: C.Config, query: str, sources: list[str] | None, paths: list[str
         if store.vector_version != R.VECTOR_VERSION:
             return [], "none", 0, None
         searcher = Searcher(store, sources, paths)
-        hits = searcher.search(query, vector, limit=limit)
+        hits = searcher.search(query, vector, limit=limit, when=understand(query))
         count = searcher.vector_count()
     finally:
         store.close()
