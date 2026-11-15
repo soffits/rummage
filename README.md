@@ -69,6 +69,14 @@ rummage doctor             # runtime files, vector version, freshness; exit 1 on
 rummage serve --token-file F --reindex-minutes 60   # HTTP search API for an index kept on a server
 ```
 
+`search --json` prints one `rummage.search.v1` object: `status` (`ok`, `no_results`, `empty_index`, `error`), the
+request, a summary (result count, how many are strong, meaning and word matches), the results (each with an `id`
+for `get`), and `next_actions`, runnable commands with a reason (open the best match, trim the weak tail, broaden the
+scope, search exact words). `--truncate knee` drops the weak tail at the score curve's elbow, `--files` prints only
+refs, and `--budget-tokens N` trims the JSON to about N tokens, keeping the top result. Exit codes: 0 success
+(including no results), 1 failure, 2 usage, 3 index missing or made with other vectors, 4 index busy, 5 model files
+missing; with `--json`, failures print a `rummage.error.v1` object with `next_actions` too.
+
 `index` and `doctor` exit with 1 and one line per problem on stderr, so a scheduler that reports failures shows
 them. A second `index` while one runs exits 0 at once; `--max-minutes` stops a long first run cleanly, and the next
 run continues where it stopped.
