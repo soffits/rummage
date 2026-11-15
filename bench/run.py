@@ -95,7 +95,10 @@ def main() -> int:
     if target.exists() and not args.force:
         print(target.read_text(encoding="utf-8"))
         return 0
-    home = corpus.parent / ("rummage" if args.engine.startswith("rummage") else label)
+    # One index per tool and model: qmd's search modes share theirs, the ablations reuse rummage's.
+    family = args.engine.split("-")[0]
+    home = corpus.parent / "-".join(filter(None, [family, args.fidx_profile,
+                                                  Path(args.qmd_model).stem if args.qmd_model else None]))
     home.mkdir(parents=True, exist_ok=True)
     meta = {"dataset": args.dataset, "limit_queries": args.limit_queries, "documents": len(list(corpus.glob("*.md"))),
             "threads": args.threads, "embedder": "remote" if args.embedder_url else "local"}
