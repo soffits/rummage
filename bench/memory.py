@@ -113,22 +113,26 @@ MIN_WORDS = [0.5, 0.67, 0.8, 1.0, None]   # None: words alone never inject
 
 
 def evaluate(config: Path, questions: list[dict], embedder_url: str | None, threads: int) -> dict:
-    """Recall's selection at its defaults (`rummage recall`: min z 3, words 0.67, 4 items, 1,500 characters), then
+    """Recall's selection at its defaults (`rummage recall`: the model's recall gate, 3 for EmbeddingGemma 2; words
+    0.67, 4 items, 1,500 characters), then
     the same selection over a grid of the two thresholds, to show what a stricter setting trades away."""
     from rummage import config as C
+    from rummage import models as M
     from rummage import runtime as R
     from rummage.recall import pick
     from rummage.search import Searcher, gate_for
     from rummage.store import Store
 
     cfg = C.load(config)
+    profile = M.by_name(cfg.models, cfg.model)
     if embedder_url:
-        embedder = R.RemoteEmbedder(embedder_url, timeout=30)
+        embedder = R.RemoteEmbedder(embedder_url, profile, timeout=30)
     else:
-        embedder = R.Embedder(R.Runtime(cfg.data_dir, cfg.llama_server), media=False, threads=threads, nice=15)
+        embedder = R.open_embedder(R.Runtime(cfg.data_dir, cfg.llama_server), profile, threads=threads, nice=15)
     embedder.start()
     store = Store(cfg.index_path)
     asked = []
+    recall_gate = 3.0
     try:
         for q in questions:
             vector = embedder.query(q["question"])
@@ -139,6 +143,7 @@ def evaluate(config: Path, questions: list[dict], embedder_url: str | None, thre
                 session, _, message = hit.ref.split(":", 1)[1].partition("#")
                 return message in q["evidence"] if "evidence" in q else session in q["answer_sessions"]
             asked.append((q, hits, [good(h) for h in hits], searcher.vector_count()))
+            recall_gate = searcher.calibration.recall_gate
     finally:
         store.close()
         if not embedder_url:
@@ -162,7 +167,7 @@ def evaluate(config: Path, questions: list[dict], embedder_url: str | None, thre
         for q, hits, goods, count in asked:
             if not q["answerable"]:
                 continue
-            shown = pick(hits, gate_for(3.0, count), 0.67, 20, 10**9, False)
+            shown = pick(hits, gate_for(recall_gate, count), 0.67, 20, 10**9, False)
             if order == "recent":
                 shown = sorted(shown, key=lambda h: -q["dates"].get(h.ref.split(":", 1)[1].partition("#")[0], 0.0))
             flags = [goods[hits.index(h)] for h in shown]
@@ -174,7 +179,7 @@ def evaluate(config: Path, questions: list[dict], embedder_url: str | None, thre
         return {**{f"evidence_in_top{k}": mean(v) for k, v in found.items()},
                 "nothing_shown_while_evidence_in_search": mean(silent)}
 
-    defaults = score(3.0, 0.67, by_category=True)
+    defaults = score(recall_gate, 0.67, by_category=True)
     defaults["pointers"] = {"by_score": pointers("score"), "newest_first": pointers("recent")}
     defaults["sweep"] = [{"min_z": z, "min_words": w, **score(z, w)} for z in MIN_Z for w in MIN_WORDS]
     return defaults

@@ -100,6 +100,7 @@ def run_rummage_ablations(corpus: Path, queries: dict, home: Path, runtime_dir: 
     Queries are embedded by `embedder_url` when given, so this also runs rummage's ranking over another model's
     vectors, which `rummage search` can't (it embeds queries with the pinned local model)."""
     from rummage import config as C
+    from rummage import models as M
     from rummage import runtime as R
     from rummage.search import Ranking, Searcher
     from rummage.store import Store
@@ -107,12 +108,13 @@ def run_rummage_ablations(corpus: Path, queries: dict, home: Path, runtime_dir: 
     config = _rummage_config(corpus, home, runtime_dir, threads, embedder_url)
     cfg = C.load(config)
     _index_rummage(config, embedder_url)
+    profile = M.by_name(cfg.models, cfg.model)
     if embedder_url:
-        embedder = R.RemoteEmbedder(embedder_url, timeout=30)
+        embedder = R.RemoteEmbedder(embedder_url, profile, timeout=30)
         embedder.start()
         vectors = {qid: embedder.query(text) for qid, text in queries.items()}
     else:
-        with R.embedder(R.Runtime(cfg.data_dir, cfg.llama_server), media=False, threads=threads, nice=15) as e:
+        with R.embedder(R.Runtime(cfg.data_dir, cfg.llama_server), profile, threads=threads, nice=15) as e:
             vectors = {qid: e.query(text) for qid, text in queries.items()}
     store = Store(cfg.index_path)
     out = {}

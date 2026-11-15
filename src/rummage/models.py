@@ -14,6 +14,7 @@ Profiles come from the files in `rummage/profiles/` (built in; `embeddinggemma-2
     # api_key_env = "OPENAI_API_KEY"       # or api_key_file
     query = "search_query: {text}"
     document = "search_document: {text}"   # {title} and {text}; an empty title becomes `empty_title`
+    # document_untitled = "{text}"         # used instead when there is no title
     dim = 512                              # keep the first N dimensions (Matryoshka models); default: all
     pooling = "mean"                       # llama.cpp pooling for a GGUF: mean, cls, last
     # version = "..."                      # names the vectors; default: derived from everything above
@@ -79,6 +80,7 @@ class Profile:
     query: str = "{text}"
     document: str = "{text}"
     empty_title: str = ""
+    document_untitled: str | None = None
     dim: int | None = None
     pooling: str = "mean"
     max_tokens: int = 2048
@@ -106,6 +108,8 @@ class Profile:
         return self.query.format(text=text)
 
     def document_text(self, title: str | None, text: str) -> str:
+        if not (title and title.strip()) and self.document_untitled is not None:
+            return self.document_untitled.format(text=text)
         title = title.strip() if title and title.strip() else self.empty_title
         return self.document.format(title=title, text=text)
 
@@ -135,9 +139,6 @@ def _pinned(spec, sha256: str | None = None, size: int | None = None) -> Pinned 
                   int(spec["size"]) if spec.get("size") else None, spec["sha256"].lower())
 
 
-VECTOR_KEYS = ("query", "document", "empty_title", "dim", "pooling", "gguf", "mmproj", "path", "url", "api_model")
-
-
 def from_dict(name: str, data: dict) -> Profile:
     gguf = _pinned(data.get("gguf"), data.get("sha256"), data.get("size"))
     mmproj = _pinned(data.get("mmproj"), data.get("mmproj_sha256"), data.get("mmproj_size"))
@@ -147,7 +148,8 @@ def from_dict(name: str, data: dict) -> Profile:
     if not version:
         material = {k: (v.__dict__ if isinstance(v, Pinned) else v) for k, v in
                     {"query": data.get("query", "{text}"), "document": data.get("document", "{text}"),
-                     "empty_title": data.get("empty_title", ""), "dim": data.get("dim"),
+                     "empty_title": data.get("empty_title", ""), "document_untitled": data.get("document_untitled"),
+                     "dim": data.get("dim"),
                      "pooling": data.get("pooling", "mean"), "gguf": gguf, "mmproj": mmproj,
                      "path": data.get("path"), "url": data.get("url"), "api_model": data.get("api_model")}.items()}
         digest = hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()[:10]
@@ -155,7 +157,8 @@ def from_dict(name: str, data: dict) -> Profile:
     calibration = data.get("calibration")
     return Profile(
         name=name, version=version, query=data.get("query", "{text}"), document=data.get("document", "{text}"),
-        empty_title=data.get("empty_title", ""), dim=int(data["dim"]) if data.get("dim") else None,
+        empty_title=data.get("empty_title", ""), document_untitled=data.get("document_untitled"),
+        dim=int(data["dim"]) if data.get("dim") else None,
         pooling=data.get("pooling", "mean"), max_tokens=int(data.get("max_tokens", 2048)), gguf=gguf, mmproj=mmproj,
         path=data.get("path"), url=data.get("url"), api_model=data.get("api_model"),
         api_key_env=data.get("api_key_env"), api_key_file=data.get("api_key_file"),
