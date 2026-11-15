@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `rummage watch` leaves out sources switched off with `enabled = false`.
 - `mail`: IMAP messages are fetched one at a time as they are indexed, instead of all during planning, so a large mailbox's first run doesn't hold every message in memory.
 - `mail`: IMAP accounts that sign in with OAuth (XOAUTH2, as Gmail and Microsoft 365 work accounts do): `oauth_token_command` prints a current access token, for example from the tool that already keeps it for your mail client.
 
