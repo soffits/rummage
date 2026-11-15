@@ -151,6 +151,7 @@ def test_jmap_account_read_only(tmp_path):
 
         def do_GET(self):
             assert self.headers["Authorization"].startswith("Basic ")
+            assert self.headers["User-Agent"].startswith("rummage/")   # servers that refuse Python's default
             if self.path == "/session":
                 port = self.server.server_port
                 return self._send({"apiUrl": f"http://127.0.0.1:{port}/api",

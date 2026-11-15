@@ -18,14 +18,16 @@ import socket
 import subprocess
 import tarfile
 import tempfile
-import zipfile
 import time
+import zipfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+from . import net
 
 MODEL_REPO = "ggml-org/embeddinggemma-2-GGUF"
 MODEL_REVISION = "bfcd298762cc34d0357ece5ebdd31791a3a374d8"
@@ -163,8 +165,8 @@ def _download(pinned: Pinned, target: Path, log) -> None:
     log(f"downloading {pinned.name} ({pinned.size / 1e6:.0f} MB)")
     partial = target.with_name(target.name + ".part")
     digest = hashlib.sha256()
-    request = urllib.request.Request(pinned.url, headers={"User-Agent": "rummage"})
-    with urllib.request.urlopen(request, timeout=60) as response, open(partial, "wb") as out:
+    request = urllib.request.Request(pinned.url)
+    with net.urlopen(request, timeout=60) as response, open(partial, "wb") as out:
         while chunk := response.read(1 << 20):
             digest.update(chunk)
             out.write(chunk)
@@ -253,7 +255,7 @@ class Embedder:
                 raise EmbedError(f"llama-server exited with {self.process.returncode} while loading"
                                  + (f" (log: {self.log_path})" if self.log_path else ""))
             try:
-                with urllib.request.urlopen(f"{self.base}/health", timeout=2) as r:
+                with net.urlopen(f"{self.base}/health", timeout=2) as r:
                     if r.status == 200:
                         break
             except (urllib.error.URLError, ConnectionError, TimeoutError):
@@ -280,7 +282,7 @@ class Embedder:
         self.process = None
 
     def _get(self, path: str) -> dict:
-        with urllib.request.urlopen(f"{self.base}{path}", timeout=30) as r:
+        with net.urlopen(f"{self.base}{path}", timeout=30) as r:
             return json.load(r)
 
     def _post(self, path: str, body: dict, timeout: float = 600) -> object:
@@ -289,7 +291,7 @@ class Embedder:
             headers={"Content-Type": "application/json"},
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as r:
+            with net.urlopen(request, timeout=timeout) as r:
                 return json.load(r)
         except urllib.error.HTTPError as error:
             raise EmbedError(f"{path}: HTTP {error.code} {error.read()[:300]!r}") from None
@@ -336,7 +338,7 @@ class RemoteEmbedder(Embedder):
 
     def start(self) -> None:
         try:
-            with urllib.request.urlopen(f"{self.url}/health", timeout=self.timeout) as r:
+            with net.urlopen(f"{self.url}/health", timeout=self.timeout) as r:
                 if r.status != 200:
                     raise EmbedError(f"{self.url}: not ready (HTTP {r.status})")
             self.marker = self._get("/props").get("media_marker")

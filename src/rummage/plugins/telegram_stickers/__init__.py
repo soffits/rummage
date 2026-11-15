@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from rummage import net
 from rummage import extract as X
 from rummage.runtime import document_text
 from rummage.store import Item, Segment
@@ -122,12 +123,12 @@ class StickerSource(Source):
 
     def _file(self, file_id: str) -> tuple[bytes, str]:
         query = urllib.parse.urlencode({"file_id": file_id})
-        with urllib.request.urlopen(f"{API}/bot{self.token}/getFile?{query}", timeout=30) as r:
+        with net.urlopen(f"{API}/bot{self.token}/getFile?{query}", timeout=30) as r:
             meta = json.load(r)
         if not meta.get("ok"):
             raise RuntimeError(f"getFile failed: {meta.get('description')}")
         path = meta["result"]["file_path"]
-        with urllib.request.urlopen(f"{API}/file/bot{self.token}/{path}", timeout=60) as r:
+        with net.urlopen(f"{API}/file/bot{self.token}/{path}", timeout=60) as r:
             return r.read(), Path(path).suffix
 
 
