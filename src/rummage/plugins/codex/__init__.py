@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from rummage.chats import AppendOnlyLogs, Turn, iso_time, session_files, turn_segments
+from rummage.chats import AppendOnlyLogs, Turn, iso_time, keep_chars, session_files, turn_segments
 from rummage.sources import Plan, Source
 from rummage.store import Item, Segment
 
@@ -25,6 +25,7 @@ def default_home() -> Path:
 class CodexSource(Source):
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
+        self.keep_chars = keep_chars(spec)
         self.home = Path(os.path.expanduser(spec.get("home") or default_home()))
         self.person = spec.get("user_name", "user")
         self.logs = AppendOnlyLogs(name, "codex", spec.get("assistant_name", "Codex"), self.parse)
@@ -68,4 +69,4 @@ class CodexSource(Source):
         return self.logs.plan(files, known, state)
 
     def load(self, item: Item) -> list[Segment]:
-        return turn_segments(item)
+        return turn_segments(item, self.keep_chars)

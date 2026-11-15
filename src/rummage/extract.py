@@ -17,6 +17,8 @@ from html.parser import HTMLParser
 from pathlib import PurePosixPath
 from xml.etree import ElementTree
 
+from .limits import Cut, Limits
+
 TEXT = {".md", ".markdown", ".txt", ".text", ".rst", ".org", ".tex", ".csv", ".tsv", ".log", ".json", ".yaml",
         ".yml", ".toml", ".ini", ".xml", ".srt", ".vtt", ".typ"}
 HTML = {".html", ".htm", ".xhtml"}
@@ -31,11 +33,7 @@ NAME_ONLY = {".exe", ".msi", ".dmg", ".pkg", ".iso", ".img", ".bin", ".dll", ".s
              ".jpeg", ".png", ".heic", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".raw", ".dng", ".psd", ".ttf",
              ".otf", ".woff", ".woff2"} - IMAGES
 
-# Bytes read at most per kind (bigger files keep their name and, for archives, nothing more).
-LIMITS = {"text": 4 << 20, "html": 8 << 20, "office": 64 << 20, "pdf": 128 << 20, "tar": 256 << 20,
-          "image": 40 << 20}
-MAX_CHARS = 400_000
-MAX_NAMES = 5000
+COMPRESSED_TARS = (".tgz", ".tar.gz", ".tbz2", ".tar.bz2", ".txz", ".tar.xz")
 
 
 def suffix(name: str) -> str:
@@ -126,57 +124,69 @@ def office_text(fh) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(parts)).strip()
 
 
-def pdf_text(fh, max_pages: int = 500) -> str:
+def pdf_text(fh, limits: Limits) -> tuple[str, list[Cut]]:
+    """The text of a PDF's pages, up to `max_pdf_pages` pages and `max_chars` characters, and what those cut."""
     try:
         from pypdf import PdfReader
     except ImportError as error:
         raise RuntimeError("PDF text needs the pypdf package") from error
     reader = PdfReader(fh)
+    total = len(reader.pages)
     pages = []
-    for page in reader.pages[:max_pages]:
+    for page in reader.pages[: limits.max_pdf_pages]:
         try:
             pages.append(page.extract_text() or "")
         except Exception:
             pages.append("")
-        if sum(map(len, pages)) > MAX_CHARS:
+        if sum(map(len, pages)) > limits.max_chars:
             break
-    return "\n\n".join(pages).strip()
+    cuts = []
+    if len(pages) < total:
+        setting = "max_pdf_pages" if len(pages) == limits.max_pdf_pages else "max_chars"
+        cuts.append(Cut("PDF pages", len(pages), total, "pages", setting))
+    return "\n\n".join(pages).strip(), cuts
 
 
-def bytes_text(name: str, data: bytes) -> str | None:
-    """The text of a document given as bytes (text, HTML, Office/OpenDocument, PDF), or None for other kinds."""
+def bytes_text(name: str, data: bytes, limits: Limits) -> tuple[str | None, list[Cut]]:
+    """The text of a document given as bytes (text, HTML, Office/OpenDocument, PDF) cut to the limits, and what was
+    cut; None for other kinds."""
     kind = kind_of(name)
+    cuts: list[Cut] = []
     if kind == "text":
-        return decode(data)
-    if kind == "html":
-        return html_text(data)
-    if kind == "office":
-        return office_text(io.BytesIO(data))
-    if kind == "pdf":
-        return pdf_text(io.BytesIO(data))
-    return None
+        text = decode(data)
+    elif kind == "html":
+        text = html_text(data)
+    elif kind == "office":
+        text = office_text(io.BytesIO(data))
+    elif kind == "pdf":
+        text, cuts = pdf_text(io.BytesIO(data), limits)
+    else:
+        return None, []
+    text, clipped = limits.clip(text)
+    return text, cuts + clipped
 
 
-def archive_names(fh, name: str) -> list[str]:
+def archive_names(fh, name: str, limits: Limits) -> tuple[list[str], list[Cut]]:
+    """The names inside an archive, at most `max_archive_names`, and the cut when there were more."""
     s = suffix(name)
     if s in (".zip", ".jar", ".apk"):
         with zipfile.ZipFile(fh) as z:
-            return z.namelist()[:MAX_NAMES]
-    if s == ".7z":
+            names = z.namelist()
+    elif s == ".7z":
         import py7zr  # optional
         with py7zr.SevenZipFile(fh) as z:
-            return z.getnames()[:MAX_NAMES]
-    if s == ".rar":
+            names = z.getnames()
+    elif s == ".rar":
         import rarfile  # optional; listing needs no unrar binary
         with rarfile.RarFile(fh) as z:
-            return z.namelist()[:MAX_NAMES]
-    with tarfile.open(fileobj=fh, mode="r:*") as t:
-        names = []
-        for member in t:
-            names.append(member.name)
-            if len(names) >= MAX_NAMES:
-                break
-        return names
+            names = z.namelist()
+    else:
+        with tarfile.open(fileobj=fh, mode="r:*") as t:
+            names = [member.name for member in t]
+    keep = limits.max_archive_names
+    if len(names) <= keep:
+        return names, []
+    return names[:keep], [Cut("archive names", keep, len(names), "names", "max_archive_names")]
 
 
 def names_text(names: list[str]) -> str:

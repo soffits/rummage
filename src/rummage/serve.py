@@ -32,7 +32,7 @@ from . import envelope as E
 from .query import FALLBACK_ERRORS, QueryModel, reason_for
 from .search import Searcher
 from .when import understand
-from .secrets import mask_value
+from .secrets import shown
 from .store import Store
 
 
@@ -61,9 +61,7 @@ class Service:
 
 
     def shown(self, value: dict, show_secrets: bool) -> dict:
-        if show_secrets or not C.masks_secrets(self.cfg, value.get("source", "")):
-            return value
-        return mask_value(value)
+        return shown(value, show_secrets, lambda source: C.masks_secrets(self.cfg, source))
 
     def search(self, q: str, limit: int, sources: list[str], kinds: list[str], words_only: bool,
                paths: list[str] | None = None, globs: list[str] | None = None, show_secrets: bool = False) -> dict:
@@ -84,8 +82,10 @@ class Service:
             store.close()
         args = SimpleNamespace(query=q, limit=limit, source=sources, kind=kinds, words_only=words_only,
                                truncate="off", path=paths, glob=globs)
-        return E.mark_degraded(E.build(args, [self.shown(h.as_dict(), show_secrets) for h in hits], [],
-                                       time.monotonic() - started, index_empty), degraded)
+        results = [self.shown(h.as_dict(), show_secrets) for h in hits]
+        doc = E.build(args, results, [], time.monotonic() - started, index_empty)
+        E.note_hidden(doc, results, ["rummage", "search", q, "--json", "-n", str(limit), "--show-secrets"])
+        return E.mark_degraded(doc, degraded)
 
     def allowed(self, auth: str) -> list[str] | None | bool:
         """The sources a request's bearer token may see: None for all (the main token), a list for a scoped token,
@@ -105,6 +105,9 @@ class Service:
             store.close()
         if allowed is not None and doc["source"] not in allowed:
             raise LookupError(f"no item {ref!r}")
+        partial = doc["info"].pop("partial", None)
+        if partial:
+            doc["partial"] = partial
         return self.shown(doc, show_secrets)
 
     def status(self, allowed: list[str] | None = None) -> dict:

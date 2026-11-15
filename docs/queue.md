@@ -42,6 +42,25 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 - Audio and video are not indexed.
 - A message that another agent sends into a DSH session through `open_session` without the "[Sent by the agent" prefix is attributed to the web user.
 - Vectors are loaded from SQLite on every search; a memory-mapped cache would help once an index passes a few hundred thousand segments.
+- **Cross-language miss beaten by same-language keywords.** A Chinese question ("车库钥匙放在哪里", where is the
+  garage key kept) whose answer is an English note section ("Spare keys" in a moving checklist) didn't reach the top
+  five: Chinese chat lines that contain the words "车库钥匙" ranked above it on the word-coverage bonus, while the
+  English section matched by meaning only. Repro for the evaluation: a corpus with one English passage answering the
+  question and three or more Chinese passages that only mention the term (a purchase, a delivery, a reminder), query
+  in Chinese; expected the English passage in the top 3. Measure the word weight against meaning when the query and
+  the best passage are in different languages (CJK and Latin scripts both ways) before changing ranking;
+  `rummage-ablations` with a cross-language set is the place.
+- **Recall ignores how recent a lead is.** `recall "did the bookshelf arrive yet"` returned three chat turns from the
+  day before, not that morning's "delivery attempted" mails or the support-chat summary, which answer it. Recall
+  ranks plausible matches by meaning and words only, and a fresh item that is a weaker match loses. First check
+  where the fresh items fall out (outside the top 20 that recall reads, or below its gates), then try a configurable
+  time-decay term or slots kept for the newest plausible matches. Repro: one topic, three older chat turns that
+  repeat the query's words, two newer items (a mail, a note) that answer it with fewer of them; expected at least
+  one newer item among the recalled. Measure on `bench/memory.py` before changing defaults.
+- `get --original` reads files of folder sources only; for a Seafile item it could download the file the same way
+  indexing does.
+- The query daemon a search starts isn't used on systems without Unix sockets (Windows); they keep loading the
+  model per search.
 
 ## Leftovers from the agent-history batch
 

@@ -178,3 +178,18 @@ def test_opening_a_result_after_a_search_ranks_it_higher_next_time(tmp_path, cap
     _run(capsys, "--config", str(cfg), "search", "something else entirely", "--words-only", "--json")
     code, out = _run(capsys, "--config", str(cfg), "search", "boiler warranty", "--words-only", "--json")
     assert json.loads(out)["results"][0]["id"] == picked["id"]   # remembered, not only the last search
+
+
+def test_reply_notice_and_quote_are_context_not_the_persons_words():
+    from rummage.chats import Turn, turn_item, turn_segments
+
+    text = ("[Replying to a message from the assistant (this bot) (sent 2026-11-15 15:20 UTC)]\n"
+            "> Three things on the board today.\n> \n> First, the backup.\n\nok, go ahead")
+    turn = Turn("s1", "m1", 1_700_000_000, "Alex", text, session_title="Telegram-Alex-[Telegram message from Alex (@x,")
+    item = turn_item("chats", "dsh", turn, "Robin")
+    assert item.info["context"].startswith("[Replying to a message") and "First, the backup." in item.info["context"]
+    assert item.info["session_title"] == "Telegram-Alex" and item.title.endswith("· Telegram-Alex")
+    assert turn_segments(item, 1000)[1].text == "Alex: ok, go ahead"
+
+    plain = turn_item("chats", "dsh", Turn("s1", "m2", 1_700_000_000, "Alex", "> quoting myself\nand more"), "S")
+    assert "context" not in plain.info

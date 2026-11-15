@@ -21,7 +21,8 @@ import glob
 import os
 from pathlib import Path
 
-from rummage.chats import AppendOnlyLogs, Turn, iso_time, text_blocks, turn_segments
+from rummage.chats import (
+    AppendOnlyLogs, Turn, iso_time, keep_chars, text_blocks, turn_segments)
 from rummage.sources import Plan, Source
 from rummage.store import Item, Segment
 
@@ -40,6 +41,7 @@ def lookup(record: dict, path: str | None):
 class JsonlChatSource(Source):
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
+        self.keep_chars = keep_chars(spec)
         self.patterns = [os.path.expanduser(p) for p in spec["paths"]]
         self.fields = {k: spec.get(k, d) for k, d in (("role", "role"), ("text", "content"), ("time", "timestamp"),
                                                      ("session", None), ("id", None), ("model", None))}
@@ -80,4 +82,4 @@ class JsonlChatSource(Source):
         return self.logs.plan(files, known, state)
 
     def load(self, item: Item) -> list[Segment]:
-        return turn_segments(item)
+        return turn_segments(item, self.keep_chars)

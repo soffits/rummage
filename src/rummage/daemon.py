@@ -1,6 +1,9 @@
 """A per-user query daemon: keeps the text model loaded behind a Unix socket in the data directory, so a search
-costs milliseconds instead of a model load. `rummage search` uses it when it answers and loads the model itself
-otherwise.
+costs milliseconds instead of a model load. `rummage search` uses it when it answers; when none runs, a search
+starts one in the background (`[daemon] idle_minutes`, exiting after that long unused) and uses it as soon as the
+model is loaded, so only the first search of a while pays for the load and memory is given back when idle.
+
+One daemon per data directory: it holds the `daemon` lock while it runs, so a second one started meanwhile exits.
 
 Protocol: one JSON line per request, `{"embed": "<query>", "model": "<version>"}`, answered by `{"vector": [...]}`
 or `{"error": "..."}`. The daemon embeds with the model the request names (the index's), loading another when a
@@ -16,6 +19,7 @@ import os
 import signal
 import socket
 import socketserver
+import subprocess
 import sys
 import tempfile
 import threading
@@ -25,6 +29,7 @@ from pathlib import Path
 import numpy as np
 
 from . import config as C
+from .indexer import Busy, lock
 
 SOCKET_NAME = "query.sock"
 
@@ -62,14 +67,63 @@ def query_vector(data_dir: Path, text: str, version: str | None, timeout: float 
         return None
 
 
-def run(cfg: C.Config, idle_minutes: float | None) -> int:
-    from .query import QueryModel
-    from .store import Store
+def running(data_dir: Path) -> bool:
+    """Whether a daemon holds this data directory's daemon lock (it may still be loading the model)."""
+    try:
+        with lock(data_dir, "daemon"):
+            return False
+    except Busy:
+        return True
 
+
+def ensure(config: Path, data_dir: Path, idle_minutes: float, log: Path) -> subprocess.Popen | bool:
+    """Starts a daemon in the background that exits after `idle_minutes` unused, unless one runs already. The
+    started process, True when one was running, False when none can run here (no Unix sockets)."""
+    if not hasattr(socket, "AF_UNIX"):
+        return False
+    if running(data_dir):
+        return True
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with open(log, "ab") as err:
+        return subprocess.Popen(
+            [sys.executable, "-m", "rummage", "--config", str(config), "daemon", "--idle-minutes", str(idle_minutes)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err, start_new_session=True)
+
+
+def wait_vector(data_dir: Path, text: str, version: str | None, seconds: float,
+                process: subprocess.Popen | None = None):
+    """The query vector from a daemon that is starting, once it answers; None after `seconds`, or as soon as the
+    process we started has exited."""
+    give_up = time.monotonic() + seconds
+    while time.monotonic() < give_up:
+        if socket_path(data_dir).exists():
+            vector = query_vector(data_dir, text, version, timeout=max(1.0, give_up - time.monotonic()))
+            if vector is not None:
+                return vector
+        if process is not None and process.poll() is not None:
+            return None
+        time.sleep(0.1)
+    return None
+
+
+def run(cfg: C.Config, idle_minutes: float | None) -> int:
     data_dir = cfg.data_dir
     if not hasattr(socket, "AF_UNIX"):
         print("this system has no Unix sockets; searches load the model themselves", file=sys.stderr)
         return 1
+    try:
+        with lock(data_dir, "daemon"):
+            return _serve(cfg, idle_minutes)
+    except Busy:
+        print(f"a daemon already runs for {data_dir}", file=sys.stderr)
+        return 0
+
+
+def _serve(cfg: C.Config, idle_minutes: float | None) -> int:
+    from .query import QueryModel
+    from .store import Store
+
+    data_dir = cfg.data_dir
     path = socket_path(data_dir)
     if path.exists() and _answers(path):
         print(f"a daemon already answers on {path}", file=sys.stderr)

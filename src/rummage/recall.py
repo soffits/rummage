@@ -25,7 +25,8 @@ from . import text as T
 from .query import meaning_vector
 from .when import understand
 from .search import Hit, Searcher, gate_for
-from .secrets import mask_value
+from .limits import describe
+from .secrets import masked_total, shown
 from .store import Store
 
 HOOK_EVENT = "UserPromptSubmit"
@@ -81,7 +82,10 @@ def render_item(hit: Hit | dict) -> str:
     where = h["ref"] + (f":{h['lines']}" if h.get("lines") else "")
     reason = h.get("why") or why(hit)
     head = " · ".join(filter(None, [h["id"], h["source"], where, h.get("date"), f'"{h["title"]}"', reason]))
-    return f"- {head}\n  {h['snippet']}"
+    tail = "".join(f"\n  (indexed in part: {describe(e)})" for e in h.get("partial") or [])
+    if h.get("masked"):
+        tail += f"\n  ({h['masked']} credential-like values masked as [secret]; `rummage get {h['id']} --show-secrets`)"
+    return f"- {head}\n  {h['snippet']}{tail}"
 
 
 def render(results: list[dict], recent: list[dict], degraded: str | None = None) -> str:
@@ -146,9 +150,10 @@ def recall(cfg: C.Config, query: str, sources: list[str] | None, paths: list[str
 
 
 def _masked(cfg: C.Config, args, value: dict) -> dict:
-    if args.show_secrets or not C.masks_secrets(cfg, value.get("source", "")):
-        return value
-    return mask_value(value)
+    partial = (value.get("info") or {}).get("partial")
+    if partial:
+        value = {**value, "partial": partial, "info": {k: v for k, v in value["info"].items() if k != "partial"}}
+    return shown(value, args.show_secrets, lambda source: C.masks_secrets(cfg, source))
 
 
 def run(cfg: C.Config, args) -> int:
@@ -184,7 +189,8 @@ def run(cfg: C.Config, args) -> int:
         return 0
     if args.json:
         print(json.dumps({"schema": "rummage.recall.v1", "query": prompt, "mode": mode, "degraded_reason": degraded,
-                          "results": results, "recent": recent}, ensure_ascii=False))
+                          "results": results, "recent": recent, "masked_secrets": masked_total(results + recent)},
+                         ensure_ascii=False))
     elif args.hook:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": HOOK_EVENT,
                                                  "additionalContext": render(results, recent, degraded)}},

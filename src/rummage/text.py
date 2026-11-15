@@ -96,14 +96,14 @@ def has_prose(text: str) -> bool:
     return words >= 4 or cjk >= 8 or (words >= 2 and cjk >= 4)
 
 
-def chunks(text: str, size: int = 1800, overlap: int = 200, limit: int = 400) -> list[tuple[int, str]]:
+def chunks(text: str, size: int = 1800, overlap: int = 200) -> list[tuple[int, str]]:
     """~`size`-character passages that overlap a little, as (start offset, text). Cuts prefer a blank line, then a
     line end, then a space, in the last third of the window; CJK text without spaces is cut where it must be."""
     text = text.strip()
     out: list[tuple[int, str]] = []
     start = 0
     n = len(text)
-    while start < n and len(out) < limit:
+    while start < n:
         end = min(n, start + size)
         if end < n:
             window = text[start + size * 2 // 3:end]

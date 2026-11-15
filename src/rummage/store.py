@@ -109,6 +109,20 @@ class Item:
     info: dict = field(default_factory=dict)
 
 
+SAME_MESSAGE_SECONDS = 600
+
+
+def same_message_key(info: dict) -> tuple[tuple | None, float]:
+    """What makes two items one message, and how far apart their times may be: a mail's Message-ID (copies in
+    several folders or accounts, any time apart), or a chat message's `said` key (one message recorded by two sources
+    within minutes)."""
+    if info.get("message_id"):
+        return ("message_id", info["message_id"]), float("inf")
+    if info.get("said"):
+        return ("said", info["said"]), SAME_MESSAGE_SECONDS
+    return None, 0.0
+
+
 def item_id(source: str, key: str) -> str:
     """A short id that stays the same for an item across runs and machines (shown as `#<id>`)."""
     return hashlib.sha1(f"{source}\0{key}".encode("utf-8")).hexdigest()[:10]
@@ -563,15 +577,16 @@ class Store:
                 break
         return out
 
-    def same_message(self, row: int, seconds: float) -> list[str]:
-        """Refs of the same chat message recorded by other sources (same `said` key, times within `seconds`)."""
-        info, mtime, source = self.db.execute("SELECT info, mtime, source FROM items WHERE id = ?", (row,)).fetchone()
-        said = json.loads(info or "{}").get("said")
-        if not said:
+    def same_message(self, row: int) -> list[str]:
+        """Refs of the same message recorded elsewhere: another copy of a mail, the same chat message in another
+        source (`same_message_key`)."""
+        info, mtime = self.db.execute("SELECT info, mtime FROM items WHERE id = ?", (row,)).fetchone()
+        key, window = same_message_key(json.loads(info or "{}"))
+        if key is None:
             return []
-        return [ref for (ref,) in self.db.execute(
-            "SELECT ref FROM items WHERE json_extract(info, '$.said') = ? AND id != ? AND abs(mtime - ?) <= ?",
-            (said, row, mtime or 0, seconds))]
+        return [ref for ref, other in self.db.execute(
+            f"SELECT ref, mtime FROM items WHERE json_extract(info, '$.{key[0]}') = ? AND id != ?", (key[1], row))
+            if abs((other or 0) - (mtime or 0)) <= window]
 
     def neighbours(self, row: int, around: int) -> list[dict]:
         """The chat turns around item `row` in its session, in time order (the item itself included)."""
@@ -622,6 +637,20 @@ class Store:
                 "SELECT i.source, s.kind, count(*), count(v.segment) FROM segments s JOIN items i ON i.id = s.item "
                 "LEFT JOIN vectors v ON v.segment = s.id AND v.model = ? GROUP BY i.source, s.kind", (model,)):
             out["sources"].setdefault(source, {}).setdefault("segments", {})[kind] = {"count": n, "vectors": vectors}
+        for source, partial, name_only in self.db.execute(
+                "SELECT source, count(*), sum(EXISTS (SELECT 1 FROM json_each(info, '$.partial') "
+                "WHERE json_extract(value, '$.kept') = 0)) FROM items "
+                "WHERE json_extract(info, '$.partial') IS NOT NULL GROUP BY source"):
+            entry = out["sources"].setdefault(source, {})
+            entry["partial_items"] = partial
+            entry["name_only_items"] = name_only
+            entry["settings"] = sorted({s for (s,) in self.db.execute(
+                "SELECT DISTINCT json_extract(value, '$.setting') FROM items, json_each(items.info, '$.partial') "
+                "WHERE items.source = ?", (source,))})
+        for source, state in self.states().items():
+            left_out = {k: v for k, v in (state.get("left_out") or {}).items() if v.get("count")}
+            if left_out:
+                out["sources"].setdefault(source, {})["left_out"] = left_out
         for source, in self.db.execute("SELECT DISTINCT source FROM runs"):
             last = self.db.execute(
                 "SELECT started, finished, ok, added, updated, removed, failed, seconds_embedding, error FROM runs "

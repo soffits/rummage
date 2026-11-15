@@ -5,10 +5,14 @@ daemon runs where loading the model isn't allowed, the search goes on by words a
 
 A query is embedded with the model the index's searches use (`Store.model`), which a model switch changes while
 searches run; the caller passes that version and searches the vectors of the same version.
+
+With no daemon running, a search starts one (`daemon.ensure`) and waits for it instead of loading a second copy of
+the model; where loading isn't allowed (prompt hooks) it starts one for the next query and goes by words now.
 """
 
 from __future__ import annotations
 
+import subprocess
 import threading
 import urllib.error
 
@@ -46,12 +50,21 @@ def profile_for(cfg: C.Config, version: str | None) -> M.Profile:
 def meaning_vector(cfg: C.Config, version: str | None, text: str, use_daemon: bool = True, load: bool = True,
                    load_seconds: float = LOAD_SECONDS) -> tuple[np.ndarray | None, str | None]:
     """`(vector, None)` from model `version`, or `(None, reason)` when the search has to go by words."""
+    started: subprocess.Popen | bool = False
     if use_daemon:
         vector = D.query_vector(cfg.data_dir, text, version)
         if vector is not None:
             return vector, None
+        profile = M.by_version(cfg.models, version)
+        if cfg.daemon_idle_minutes > 0 and profile and not R.Runtime(cfg.data_dir, cfg.llama_server).missing(profile, False):
+            started = D.ensure(cfg.path, cfg.data_dir, cfg.daemon_idle_minutes, cfg.log_dir / "daemon.log")
+        if started and load:
+            vector = D.wait_vector(cfg.data_dir, text, version, load_seconds, None if started is True else started)
+            if vector is not None:
+                return vector, None
     if not load:
-        return None, "no query daemon is running (`rummage daemon`), so this matched by words only"
+        return None, ("the query daemon is starting, so this matched by words only" if started else
+                      "no query daemon is running (`rummage daemon`), so this matched by words only")
     try:
         profile = profile_for(cfg, version)
         with R.embedder(R.Runtime(cfg.data_dir, cfg.llama_server), profile, threads=cfg.threads, nice=0,

@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 from .. import text as T
+from ..limits import Limits, record
 from ..store import Item, Segment
 from .folder import FolderSource
 
@@ -56,21 +57,24 @@ class MarkdownSource(FolderSource):
     default_extensions = (".md", ".markdown")
     default_max_bytes = 2_000_000
 
-    def load(self, item: Item) -> list[Segment]:
+    def read(self, item: Item) -> list[Segment]:
         raw = (self.root / item.key).read_text(encoding="utf-8", errors="replace")
-        return note_segments(item, raw)
+        return note_segments(item, raw, self.limits)
 
 
-def note_segments(item: Item, raw: str) -> list[Segment]:
+def note_segments(item: Item, raw: str, limits: Limits) -> list[Segment]:
     """A Markdown note's segments: a name line (path, title, aliases, tags) and its passages, each embedded with the
-    title and the heading it sits under. Sets the item's title and info from the frontmatter."""
+    title and the heading it sits under. Sets the item's title and info from the frontmatter; a body over
+    `max_chars` is cut, and the cut recorded."""
     meta, body = _frontmatter(raw)
+    body, cuts = limits.clip(body)
     base = len(raw) - len(body)
     title = str(meta.get("title") or Path(item.key).stem)
     aliases = _as_list(meta.get("aliases") or meta.get("alias"))
     tags = _as_list(meta.get("tags") or meta.get("tag"))
     item.title = title
     item.info = {**item.info, "path": item.key}
+    record(item, cuts)
     if aliases:
         item.info["aliases"] = aliases
     if tags:
