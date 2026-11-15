@@ -51,14 +51,16 @@ class Resolved:
         """One sentence for text output: what this query saw and how to see more."""
         if self.kind == "everything":
             return "scope: everything (--all)"
-        hidden = f"; local sources of other folders left out: {', '.join(self.within.hidden)}" \
-            if self.within and self.within.hidden else ""
-        if self.within and self.within.everything:
-            return f"scope: {self.kind} {self.name}: everything{hidden}" + ("; --all for those too" if hidden else "")
-        what = "items under " + ", ".join(self.folders)
-        if self.within and self.within.sources:
-            what += " and the sources " + ", ".join(self.within.sources)
-        return f"scope: {self.kind} {self.name} ({what}); --all for everything"
+        label = {"all": "all", "scope": f"scope {self.name}", "project": f"project {self.name}"}[self.kind]
+        within = self.within
+        if within.everything:
+            what = "everything"
+        else:
+            what = "items under " + ", ".join(self.folders) if self.folders else "nothing under a folder"
+            if within.sources:
+                what += " and the sources " + ", ".join(within.sources)
+        hidden = f"; other folders' own files left out ({', '.join(within.hidden)})" if within.hidden else ""
+        return f"scope: {label}: {what}{hidden}; --all for everything"
 
 
 def _under(path: str, folder: str) -> bool:

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.0
 
 - Scopes: what `search`, `recall` and `recent` see depends on the folder they run in (`--cwd`, or a hook's `cwd`). Inside a git repository that is the project (its files and the chats held in it, worktrees shared); `[scopes.<name>]` tables give folders like an assistant's home a wider view; elsewhere `default_scope` (everything). Sources with `local = true` are seen only from inside their folder. `--all` sees everything, and every output says which scope applied.
 - `rummage project ensure` (and `recall --hook` with a `cwd`) adds a git repository no source covers as a `local` source of the files git keeps, minus key files, switches on the calling harness's own history (`--harness`, or the hook's `harness`), and starts `rummage watch --setup` in the background when none runs. A known project costs a few file checks.
