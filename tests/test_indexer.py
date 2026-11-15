@@ -9,7 +9,7 @@ from rummage.store import Store
 class FakeEmbedder:
     def __init__(self):
         self.texts_seen: list[str] = []
-        self.media = True
+        self.has_media = True
 
     def texts(self, texts):
         self.texts_seen += texts
@@ -17,7 +17,7 @@ class FakeEmbedder:
         rows = rng.normal(size=(len(texts), DIM)).astype(np.float32)
         return rows / np.linalg.norm(rows, axis=1, keepdims=True)
 
-    def image(self, data):
+    def media(self, data):
         return self.texts(["image"])[0]
 
 
@@ -87,7 +87,7 @@ def test_threads_follow_the_machines_load(monkeypatch):
 
     class Fake:
         def __init__(self, runtime, profile, media, threads, nice, log_path):
-            self.media, self.threads = media, threads
+            self.has_media, self.threads = media, threads
 
         def start(self):
             started.append(self.threads)

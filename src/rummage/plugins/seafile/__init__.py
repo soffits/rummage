@@ -152,7 +152,7 @@ class SeafileSource(Source):
         kind = item.info["type"]
         name_line = f"{item.info['library']}{path}"
         segments = [Segment("name", name_line)]
-        if kind in ("name", "image"):
+        if kind in ("name", "image", "audio", "video"):
             return segments
         url = self._download_url(repo_id, path)
         if kind == "archive":

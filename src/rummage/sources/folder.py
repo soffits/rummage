@@ -17,6 +17,21 @@ from . import Plan, Source
 
 DEFAULT_EXCLUDE = [".*", "node_modules", "__pycache__", "$RECYCLE.BIN", "System Volume Information"]
 
+# Keys, certificates, password stores and credential files (DigUp's list): never read, wherever they are, unless a
+# source sets `read_secret_files = true`. Matched against the name in lower case.
+SECRET_EXTENSIONS = (".pem", ".key", ".p12", ".pfx", ".keystore", ".jks", ".ppk", ".kdbx", ".gpg", ".asc", ".crt",
+                     ".cer", ".der", ".p8", ".mobileprovision")
+SECRET_PREFIXES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".env", "secret", "credential", ".netrc", ".npmrc",
+                   ".pypirc", "htpasswd", ".htpasswd")
+SECRET_FOLDERS = (".ssh", ".gnupg", ".password-store", ".aws")
+
+
+def is_secret(name: str, folder: bool = False) -> bool:
+    lower = name.lower()
+    if folder:
+        return lower in SECRET_FOLDERS
+    return lower.endswith(SECRET_EXTENSIONS) or lower.startswith(SECRET_PREFIXES)
+
 
 _ISO_DAY = re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)")
 _ISO_WEEK = re.compile(r"(?<!\d)(\d{4})-W(\d{2})(?!\d)")
@@ -57,6 +72,7 @@ class FolderSource(Source):
         self.extensions = tuple(e.lower() for e in extensions) if extensions else None
         self.max_bytes = int(spec.get("max_bytes", self.default_max_bytes))
         self.limits = Limits.of(spec)
+        self.skip_secrets = not spec.get("read_secret_files", False)
 
     def watch_roots(self) -> list[Path]:
         return [self.root]
@@ -65,16 +81,23 @@ class FolderSource(Source):
         return any(fnmatch.fnmatch(part, pat) for part in rel.split("/") for pat in self.exclude) or any(
             fnmatch.fnmatch(rel, pat) for pat in self.exclude)
 
-    def files(self, excluded: list[str] | None = None):
-        """Paths of the files to index, relative to the root. Excluded files and folders go into `excluded`."""
+    def files(self, excluded: list[str] | None = None, secret: list[str] | None = None):
+        """Paths of the files to index, relative to the root. Excluded files and folders go into `excluded`, key
+        and password files into `secret`."""
         excluded = [] if excluded is None else excluded
+        secret = [] if secret is None else secret
         for dirpath, dirnames, filenames in os.walk(self.root):
             rel_dir = os.path.relpath(dirpath, self.root)
             rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
             kept = []
             for d in sorted(dirnames):
                 rel = f"{rel_dir}/{d}".lstrip("/")
-                (excluded.append(rel + "/") if self._skip(rel) else kept.append(d))
+                if self._skip(rel):
+                    excluded.append(rel + "/")
+                elif self.skip_secrets and is_secret(d, folder=True):
+                    secret.append(rel + "/")
+                else:
+                    kept.append(d)
             dirnames[:] = kept
             for f in sorted(filenames):
                 rel = f"{rel_dir}/{f}".lstrip("/")
@@ -82,6 +105,8 @@ class FolderSource(Source):
                     continue
                 if self._skip(rel):
                     excluded.append(rel)
+                elif self.skip_secrets and is_secret(f):
+                    secret.append(rel)
                 else:
                     yield rel
 
@@ -89,6 +114,9 @@ class FolderSource(Source):
         """Why file `rel` under the root has no item."""
         if self._skip(rel):
             return f"excluded by sources.{self.name}.exclude ({', '.join(self.exclude)})"
+        if self.skip_secrets and any(is_secret(part, folder=n < rel.count("/"))
+                                     for n, part in enumerate(rel.split("/"))):
+            return f"a key or password file, never read unless sources.{self.name}.read_secret_files = true"
         if self.extensions is not None and not rel.lower().endswith(self.extensions):
             return f"source {self.name} reads only {', '.join(self.extensions)} files (sources.{self.name}.extensions)"
         return f"not indexed yet: `rummage index -s {self.name}` reads it"
@@ -123,8 +151,9 @@ class FolderSource(Source):
         upserts: list[Item] = []
         seen: dict[str, list] = {}
         excluded: list[str] = []
+        secret: list[str] = []
         unreadable: list[str] = []
-        for rel in self.files(excluded):
+        for rel in self.files(excluded, secret):
             path = self.root / rel
             try:
                 st = path.stat()
@@ -151,7 +180,8 @@ class FolderSource(Source):
                                 {"path": rel, "size": st.st_size, **info}))
         removed = [key for key in known if key not in seen]
         left_out = {"excluded": _left_out(excluded, f"sources.{self.name}.exclude", self.exclude),
-                    "unreadable": _left_out(unreadable)}
+                    "unreadable": _left_out(unreadable),
+                    "skipped as keys or passwords": _left_out(secret, f"sources.{self.name}.read_secret_files")}
         return Plan(upserts, removed, {"stats": seen, "left_out": left_out}, len(upserts))
 
 

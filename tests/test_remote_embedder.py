@@ -48,7 +48,7 @@ def _reference():
 
 class _LocalStandIn:
     def __init__(self, *a, **k):
-        self.media, self.threads = False, 2
+        self.has_media, self.threads = False, 2
 
     def start(self):
         pass

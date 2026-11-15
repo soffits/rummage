@@ -7,7 +7,7 @@ DIM = PROFILE.dim
 
 
 class AsEmbedders:
-    """Gives a stand-in model (`texts`, `get`, `image`) the shape of `indexer.Embedders` for one profile."""
+    """Gives a stand-in model (`texts`, `get`, `media`) the shape of `indexer.Embedders` for one profile."""
 
     def __init__(self, model, profile: M.Profile = PROFILE):
         self.model = model

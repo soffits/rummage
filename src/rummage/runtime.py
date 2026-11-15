@@ -225,7 +225,7 @@ class Embedder:
     """Embeds texts (and pictures) with one model profile. Subclasses say where the model runs."""
 
     profile: Profile
-    media: bool = False
+    has_media: bool = False
     marker: str | None = None
     process: subprocess.Popen | None = None
     threads: int = 0
@@ -311,9 +311,10 @@ class Embedder:
     def query(self, text: str) -> np.ndarray:
         return self.texts([self.profile.query_text(text)])[0]
 
-    def image(self, data: bytes) -> np.ndarray:
-        """`data`: PNG or JPEG bytes (what stb_image reads; flatten transparency first)."""
-        if not self.media or not self.marker:
+    def media(self, data: bytes) -> np.ndarray:
+        """The vector of a picture or a sound: PNG or JPEG bytes (what stb_image reads; flatten transparency first),
+        or WAV bytes (what miniaudio reads; the model hears the first 30 s)."""
+        if not self.has_media or not self.marker:
             raise EmbedError("this embedder was started without the media encoders")
         out = self._request(self.endpoint.rsplit("/v1/", 1)[0] + "/embeddings", {"content": {
             "prompt_string": self.marker, "multimodal_data": [base64.b64encode(data).decode()]}})
@@ -345,7 +346,7 @@ class LocalEmbedder(Embedder):
             raise RuntimeMissing("missing " + ", ".join(missing) + ": run `rummage setup`")
         self.runtime = runtime
         self.profile = profile
-        self.media = media
+        self.has_media = media
         self.threads = threads
         self.nice = nice
         self.log_path = log_path
@@ -370,7 +371,7 @@ class LocalEmbedder(Embedder):
     def start(self) -> None:
         self.port = _free_port()
         binary = self.runtime.server_binary(self.backend)
-        files = self.runtime.files(self.profile, self.media)
+        files = self.runtime.files(self.profile, self.has_media)
         layers = self.runtime.gpu_layers(self.backend)
         # A non-causal input must fit one micro-batch: `texts` embeds what could be longer than that in pieces.
         n = self.max_tokens
@@ -383,7 +384,7 @@ class LocalEmbedder(Embedder):
             *(["-ngl", str(layers)] if layers is not None else []),
             *(["--device", self.device] if self.device and self.backend != "cpu" else []),
         ]
-        if self.media:
+        if self.has_media:
             args += ["--mmproj", str(files[1])]
         if self.nice and shutil.which("nice"):
             args = ["nice", "-n", str(self.nice), *args]
@@ -410,7 +411,7 @@ class LocalEmbedder(Embedder):
                 self.stop()
                 raise EmbedError(f"llama-server did not become ready in {self.ready_timeout:g} s")
             time.sleep(0.05)
-        if self.media:
+        if self.has_media:
             self.marker = self._request(f"{self.base}/props").get("media_marker")
 
     def stop(self) -> None:
@@ -442,7 +443,7 @@ class RemoteEmbedder(Embedder):
         self.timeout = timeout
         self.process = None
         self.marker = None
-        self.media = False
+        self.has_media = False
         self.threads = 0
         self._tokenize = True
 
@@ -482,7 +483,7 @@ class RemoteEmbedder(Embedder):
             self.marker = self._request(self.root + "/props", timeout=self.timeout).get("media_marker")
         except (EmbedError, urllib.error.URLError, OSError, ValueError, AttributeError):
             self.marker = None
-        self.media = bool(self.marker) and self.profile.media
+        self.has_media = bool(self.marker) and self.profile.media
 
 
 def api_key(profile: Profile) -> str | None:

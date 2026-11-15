@@ -16,6 +16,7 @@ archives = ["py7zr>=0.22", "rarfile>=4.2"]
 seafile = ["py7zr>=0.22", "rarfile>=4.2"]
 dsh-sessions = ["zstandard>=0.22"]
 watch = ["watchfiles>=1.0"]
+pdf-scans = ["pypdfium2>=5"]
 
 [project.entry-points."rummage.sources"]
 markdown = "rummage.sources.markdown:MarkdownSource"
@@ -29,7 +30,6 @@ codex = "rummage.plugins.codex:CodexSource"
 gemini-cli = "rummage.plugins.gemini_cli:GeminiCliSource"
 opencode = "rummage.plugins.opencode:OpenCodeSource"
 mail = "rummage.plugins.mail:MailSource"
-media = "rummage.plugins.media:MediaSource"
 
 [project.scripts]
 rummage = "rummage.cli:main"

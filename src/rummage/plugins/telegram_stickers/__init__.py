@@ -92,7 +92,7 @@ class StickerSource(Source):
         if self.images:
             png = self.picture(item.key, entry)
             if png:
-                segments.append(Segment("image", "", loc="picture", image=png))
+                segments.append(Segment("image", "", loc="picture", media=png))
                 item.info["image"] = str(self.cache / f"{_safe(item.key)}.png")
         return segments
 

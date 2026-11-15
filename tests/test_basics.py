@@ -140,7 +140,7 @@ def test_files_source_reads_each_kind(tmp_path):
     assert "14A" in src.load(items["b.txt"])[1].text
     assert src.load(items["c.zip"])[1].text == "inner/report.pdf"
     image = src.load(items["d.png"])
-    assert image[1].kind == "image" and image[1].image == b"\x89PNG fake"
+    assert image[1].kind == "image" and image[1].media == b"\x89PNG fake"
     assert len(src.load(items["e.exe"])) == 1
 
 
