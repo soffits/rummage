@@ -271,8 +271,9 @@ def main() -> int:
     for r in rows:
         for arm in arms:
             r[arm].pop("prompt", None)
-    (results / f"qa-rows{tag}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
-    (results / f"qa{tag}.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    name = f"qa{tag}-{'+'.join(arms)}-{len(rows)}"   # runs with other arms or samples keep their own files
+    (results / f"{name}-rows.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    (results / f"{name}.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary))
     return 0
 
