@@ -7,6 +7,7 @@
     rummage status [--json]        what's indexed, and how the last runs went
     rummage doctor [--json]        check runtime, vectors and source freshness; exit 1 on a problem
     rummage sources                list the installed source types (core and plugins)
+    rummage recall [PROMPT]        cited context for an agent's prompt hook, silent when nothing matches
     rummage daemon                 keep the query model loaded (searches use it when it runs)
     rummage serve                  answer searches over HTTP (for an index kept on another machine)
 """
@@ -270,6 +271,12 @@ def cmd_get(cfg: C.Config, args) -> int:
     return 0
 
 
+def cmd_recall(cfg: C.Config, args) -> int:
+    from .recall import run
+
+    return run(cfg, args)
+
+
 def cmd_daemon(cfg: C.Config, args) -> int:
     return D.run(_runtime(cfg), cfg.data_dir, cfg.threads, args.idle_minutes)
 
@@ -402,6 +409,22 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("sources", help="list the installed source types")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_sources)
+
+    p = sub.add_parser("recall", help="a few cited passages for a prompt, for agents' prompt hooks (quiet otherwise)")
+    p.add_argument("query", nargs="?", help="the prompt (default: read stdin)")
+    p.add_argument("--hook", action="store_true",
+                   help="stdin is a prompt hook's JSON (its `prompt` field); reply with the hook's JSON")
+    p.add_argument("-s", "--source", action="append", help="only this source (repeatable)")
+    p.add_argument("--path", action="append", help="only items under this ref prefix (repeatable)")
+    p.add_argument("--max-items", type=int, default=4)
+    p.add_argument("--max-chars", type=int, default=1500, help="size budget of the block")
+    p.add_argument("--min-z", type=float, default=3.0, help="how far a passage must stand out by meaning")
+    p.add_argument("--min-words", type=float, default=0.67, help="share of the prompt's words an item must contain")
+    p.add_argument("--max-query-chars", type=int, default=2000)
+    p.add_argument("--allow-model-load", action="store_true",
+                   help="load the model when no daemon runs (~1.5 s); otherwise fall back to exact words")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_recall)
 
     p = sub.add_parser("daemon", help="keep the query model loaded so searches take milliseconds")
     p.add_argument("--idle-minutes", type=float, help="exit after this long without a query")
