@@ -63,11 +63,15 @@ class Embedders:
 
 
 def index_source(store: Store, source: Source, embedders: Embedders, log, warn, limit: int | None = None,
-                 deadline: float | None = None, batch: int = 8) -> dict:
-    """`log` gets progress, `warn` gets problems."""
+                 deadline: float | None = None, batch: int = 8, reload: bool = False) -> dict:
+    """`log` gets progress, `warn` gets problems. `reload` reads every item again (vectors are reused, so it only
+    costs the reading), to pick up what a newer version stores about items."""
     counts = {"added": 0, "updated": 0, "removed": 0, "failed": 0, "reused": 0, "seconds_embedding": 0.0}
     known = store.fingerprints(source.name)
-    plan = source.plan(known, store.state(source.name))
+    if reload:
+        plan = source.plan({key: None for key in known}, {})
+    else:
+        plan = source.plan(known, store.state(source.name))
     for key in plan.removed:
         store.remove(source.name, key)
         counts["removed"] += 1
@@ -83,9 +87,13 @@ def index_source(store: Store, source: Source, embedders: Embedders, log, warn, 
         try:
             segments = source.load(item)
             known_vectors = store.known_vectors([h for h in (s.embed_hash for s in segments) if h])
+            legacy = store.unhashed_vectors(item.source, item.key) if item.key in known else {}
             for seg in segments:
-                if seg.embed_hash in known_vectors:
-                    seg.vector = known_vectors[seg.embed_hash]
+                reused = known_vectors.get(seg.embed_hash) if seg.embed_hash else None
+                if reused is None:
+                    reused = legacy.get((seg.kind, seg.loc, seg.text))
+                if reused is not None and seg.embed_hash:
+                    seg.vector = reused
                     counts["reused"] += 1
             embed = [s for s in segments if s.embed_text and s.vector is None and not s.image]
             images = [s for s in segments if s.kind == "image" and s.image and s.vector is None]
