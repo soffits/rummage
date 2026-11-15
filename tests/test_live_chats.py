@@ -1,6 +1,7 @@
 """Chats as they happen: agent sessions switched on, read into keyword search at once, vectors later, recall that
 sees another session from minutes ago, context around a hit, masked credentials."""
 
+import datetime as dt
 import json
 import threading
 import time
@@ -103,13 +104,16 @@ def test_recall_sees_another_session_from_minutes_ago(tmp_path, monkeypatch, cap
                                            "Blue sofa it is, delivery Friday.", _iso(600)))
     _lines(project / "sess-b.jsonl", _turn("b1", "unrelated earlier chat in this window", "ok", _iso(300)))
     _run(capsys, "--config", str(cfg), "index", "--no-embed", "-q")
-    hook = json.dumps({"session_id": "sess-b", "prompt": "can you order the one we picked just now"})
+    hook = json.dumps({"session_id": "sess-b", "prompt": "can you order the sofa we picked"})
     monkeypatch.setattr("sys.stdin", __import__("io").StringIO(hook))
     code, out = _run(capsys, "--config", str(cfg), "recall", "--hook")
     context = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert "Said minutes ago in another session" in context and "blue sofa" in context
     assert "unrelated earlier chat" not in context
-    # By shared words, without a refer-back phrase (as a match, or in the recent part; never twice):
+    # Nothing in common, nothing recalled: how a prompt is phrased decides nothing.
+    code, out = _run(capsys, "--config", str(cfg), "recall", "--session", "sess-b", "order the one from just now")
+    assert out == ""
+    # As a match or in the recent part, never twice:
     code, out = _run(capsys, "--config", str(cfg), "recall", "--session", "sess-b", "--json", "what about the sofa")
     doc = json.loads(out)
     refs = [r["ref"] for r in doc["results"] + doc["recent"]]
@@ -139,19 +143,22 @@ def test_get_around_a_chat_turn_and_masked_output(tmp_path, monkeypatch, capsys)
 
 def test_one_message_recorded_by_two_sources_is_one_hit(tmp_path, capsys):
     logs = tmp_path / "logs"
-    (logs / "a").mkdir(parents=True)
-    (logs / "b").mkdir()
+    (logs / "a" / "project").mkdir(parents=True)
+    (logs / "b" / "project").mkdir(parents=True)
     when = time.time() - 300
-    _lines(logs / "a" / "s1.jsonl", [{"role": "user", "content": "book the dentist for next Tuesday", "ts": when},
-                                     {"role": "assistant", "content": "Booked for 3 pm.", "ts": when + 2}])
-    _lines(logs / "b" / "s9.jsonl", [{"role": "user", "content": "[Web message from Lia]  Book the dentist for next "
-                                                                 "Tuesday", "ts": when + 1},
-                                     {"role": "assistant", "content": "Booked for 3 pm.", "ts": when + 3}])
+
+    def turn(text, at):
+        stamp = dt.datetime.fromtimestamp(at, dt.timezone.utc).isoformat()
+        return [{"type": "user", "uuid": f"u{at}", "timestamp": stamp, "message": {"content": text}},
+                {"type": "assistant", "message": {"content": [{"type": "text", "text": "Booked for 3 pm."}]}}]
+
+    _lines(logs / "a" / "project" / "s1.jsonl", turn("book the dentist for next Tuesday", when))
+    _lines(logs / "b" / "project" / "s9.jsonl", turn("[Web message from Lia]  Book the dentist for next Tuesday",
+                                                     when + 1))
     cfg = tmp_path / "config.toml"
     cfg.write_text(f"data_dir = '{tmp_path / 'data'}'\n"
-                   f"[sources.harness]\ntype = 'jsonl-chat'\npaths = ['{logs / 'a' / '*.jsonl'}']\ntime = 'ts'\n"
-                   f"[sources.model]\ntype = 'jsonl-chat'\npaths = ['{logs / 'b' / '*.jsonl'}']\ntime = 'ts'\n",
-                   encoding="utf-8")
+                   f"[sources.harness]\ntype = 'claude-code'\nroot = '{logs / 'a'}'\n"
+                   f"[sources.model]\ntype = 'claude-code'\nroot = '{logs / 'b'}'\n", encoding="utf-8")
     _run(capsys, "--config", str(cfg), "index", "--no-embed", "-q")
     code, out = _run(capsys, "--config", str(cfg), "search", "dentist tuesday", "--words-only", "--json")
     results = json.loads(out)["results"]

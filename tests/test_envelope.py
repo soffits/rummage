@@ -6,7 +6,7 @@ from rummage.cli import main
 
 
 def _args(**kw):
-    base = dict(query="q", limit=10, source=None, kind=None, words_only=False, truncate="off")
+    base = dict(query="q", limit=10, source=None, kind=None, words_only=False, sort="score")
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -16,25 +16,22 @@ def _hit(n, score):
             "segment": "text", "title": f"t{n}", "snippet": "s" * 200, "cosine": 0.5, "info": {"path": f"r{n}"}}
 
 
-def test_knee_and_strong():
-    assert E.knee([9, 8.5, 8, 2, 1.9, 1.8]) == 3
-    assert E.knee([5, 5, 5]) == 3
+def test_strong():
     assert E.strong_count([10, 6, 4]) == 2
 
 
 def test_build_statuses_and_actions():
-    ok = E.build(_args(), [_hit(1, 5), _hit(2, 1)], [], 0.1, False)
-    assert ok["status"] == "ok" and ok["schema"] == E.SCHEMA
-    assert ok["next_actions"][0]["command"][:3] == ["rummage", "get", "#0000000001"]
-    assert any(a["intent"] == "clean_shortlist" for a in ok["next_actions"])
-    none = E.build(_args(source=["notes"]), [], [], 0.1, False)
-    assert none["status"] == "no_results"
-    assert [a["intent"] for a in none["next_actions"]] == ["broaden_scope", "rephrase"]
-    assert E.build(_args(), [], [], 0.1, True)["status"] == "empty_index"
+    ok = E.build(_args(), [_hit(1, 5), _hit(2, 1)], 0.1, False)
+    assert ok["status"] == "ok" and ok["schema"] == E.SCHEMA and ok["summary"]["strong"] == 1
+    assert ok["next_actions"] == []   # the next query is the caller's choice
+    none = E.build(_args(source=["notes"]), [], 0.1, False)
+    assert none["status"] == "no_results" and none["next_actions"] == []
+    empty = E.build(_args(), [], 0.1, True)
+    assert empty["status"] == "empty_index" and empty["next_actions"][0]["command"] == ["rummage", "index"]
 
 
 def test_fit_keeps_top_identity():
-    doc = E.build(_args(), [_hit(n, 10 - n) for n in range(10)], [], 0.1, False)
+    doc = E.build(_args(), [_hit(n, 10 - n) for n in range(10)], 0.1, False)
     small = E.fit(doc, 60)
     top = small["results"][0]
     assert top["id"] and top["ref"] and "score" in top

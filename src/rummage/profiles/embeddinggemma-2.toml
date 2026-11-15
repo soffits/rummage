@@ -31,6 +31,3 @@ sha256 = "c4a8a52691ecef40618438928bdf9e68379b854e24166f292592353db0aab64f"
 [calibration]
 gate = 2.0
 recall_gate = 3.0
-dupe_cosine = 0.95
-topic_cosine = 0.80
-same_cosine = 0.97

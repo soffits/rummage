@@ -28,20 +28,8 @@ def test_search_without_model_files_falls_back_to_words(tmp_path, capsys):
     assert "a.md" in captured.out and "words only" in captured.err
 
 
-def test_recall_and_mcp_without_model(tmp_path, capsys):
+def test_recall_without_model(tmp_path, capsys):
     cfg = _index(tmp_path, capsys)
     assert main(["--config", str(cfg), "recall", "--allow-model-load", "--json", "where is the blue binder kept"]) == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["mode"] == "words" and "model files missing" in doc["degraded_reason"]
-    import asyncio
-
-    import pytest
-    pytest.importorskip("mcp")
-    from rummage import config as C
-    from rummage.mcp_server import build
-
-    server, stop = build(C.load(cfg))
-    result = asyncio.run(server.call_tool("search", {"query": "blue binder"}))
-    payload = getattr(result, "structured_content", None) or json.loads(result.content[0].text)
-    stop()
-    assert payload["status"] == "ok" and payload["request"]["mode"] == "words" and payload["summary"]["degraded_reason"]

@@ -12,9 +12,7 @@
     rummage service install        run watch at login under systemd, launchd or Task Scheduler
     rummage recent --minutes 30    the latest chat turns and changed files, newest first
     rummage sources enable codex   switch on a source found on this machine (agent histories are off by default)
-    rummage mcp                    a stdio MCP server (search, get, status) for MCP-only agents
     rummage daemon                 keep the query model loaded (searches use it when it runs)
-    rummage serve                  answer searches over HTTP (for an index kept on another machine)
     rummage models                 embedding models: list, `use` one (switches in the background), compare
 """
 
@@ -28,13 +26,11 @@ import signal
 import sys
 import time
 
-import numpy as np
 from pathlib import Path
 
 from . import config as C
 from . import daemon as D
 from . import envelope as E
-from . import net
 from . import models as M
 from . import models_cli
 from . import runtime as R
@@ -43,7 +39,6 @@ from . import text as T
 from .indexer import Busy, Embedders, embed_models, index_source, lock
 from .search import Searcher
 from .query import meaning_vector
-from .when import understand
 from .limits import describe
 from .secrets import masked_total, shown
 from .sources import available, build, load_type
@@ -170,33 +165,6 @@ def _read_sources(cfg, store, names, embedders, again, args, deadline, log, repo
                 + ("" if counts["complete"] else " (stopped early; the next run continues)"))
 
 
-def _remote(spec: dict, path: str, params: list[tuple[str, str]]) -> dict:
-    import os
-    import urllib.parse
-    import urllib.request
-    from pathlib import Path
-
-    token = os.environ.get(spec.get("token_env", ""), "") if spec.get("token_env") else ""
-    if not token and spec.get("token_file"):
-        token = Path(spec["token_file"]).expanduser().read_text().strip()
-    request = urllib.request.Request(spec["url"].rstrip("/") + path + "?" + urllib.parse.urlencode(params),
-                                     headers={"Authorization": f"Bearer {token}"})
-    handlers = [urllib.request.ProxyHandler({"http": spec["proxy"], "https": spec["proxy"]})] if spec.get("proxy") else []
-    with urllib.request.build_opener(*handlers).open(request, timeout=float(spec.get("timeout", 30))) as r:
-        return json.load(r)
-
-
-def _remote_search(name: str, spec: dict, args) -> dict:
-    params = [("q", args.query), ("limit", str(args.limit))]
-    params += [("source", s) for s in args.source or []] + [("kind", k) for k in args.kind or []]
-    params += [("path", p) for p in args.path or []] + [("glob", g) for g in args.glob or []]
-    if args.words_only:
-        params.append(("words_only", "1"))
-    if args.show_secrets:
-        params.append(("show_secrets", "1"))
-    return _remote(spec, "/search", params)
-
-
 LAST_SEARCH = "last-search.json"
 OPEN_WINDOW_SECONDS = 600
 
@@ -237,55 +205,53 @@ def _fail(args, status: str, code: int, message: str, actions: list[dict] | None
     return code
 
 
+def _item_time(hit: dict) -> float:
+    """When a hit is from, for newest-first order: a chat message's or mail's own time, else the item's date."""
+    import datetime as dt
+
+    for value in ((hit.get("info") or {}).get("time"), hit.get("date")):
+        if value:
+            try:
+                when = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            return (when if when.tzinfo else when.astimezone()).timestamp()
+    return 0.0
+
+
 def cmd_search(cfg: C.Config, args) -> int:
     started = time.monotonic()
     hits: list[dict] = []
-    errors: list[str] = []
-    local_sources = [s for s in (args.source or []) if s in cfg.sources] if args.source else None
     index_empty = True
     pending = 0
     degraded = None
     gate = M.ANCHOR.gate
-    when = None if args.no_dates or args.since or args.until else understand(args.query)
-    if not cfg.index_path.exists() and not cfg.remotes:
+    if not cfg.index_path.exists():
         return _fail(args, "index_missing", E.INDEX_MISSING, "no index yet: run `rummage index`",
                      [{"intent": "build_index", "reason": "Nothing is indexed yet.", "command": ["rummage", "index"]}])
-    if cfg.index_path.exists() and (local_sources is None or local_sources):
-        store = Store(cfg.index_path)
-        try:
-            version = store.model
-            index_empty = store.item_count() == 0
-            vector = None
-            if not args.words_only and not index_empty:
-                vector, degraded = meaning_vector(cfg, version, args.query, use_daemon=not args.no_daemon)
-            searcher = Searcher(store, local_sources, args.path, args.glob, _day(args.since), _day(args.until, 1),
-                                model=version)
-            hits += [h.as_dict() for h in searcher.search(
-                args.query, vector, limit=args.limit, kinds=set(args.kind) if args.kind else None, when=when)]
-            pending = store.pending_count(sources=local_sources)
-            gate = searcher.calibration.gate
-        finally:
-            store.close()
-    for name, spec in cfg.remotes.items():
-        if args.no_remote or (args.source and not set(args.source) & set(spec.get("sources", [name]))):
-            continue
-        try:
-            remote = _remote_search(name, spec, args)
-            hits += remote["results"]
-            index_empty = index_empty and remote.get("status") == "empty_index"
-        except Exception as error:
-            errors.append(f"remote {name}: {type(error).__name__}: {error}")
-    hits.sort(key=lambda h: -h["score"])
-    hits = [_show(cfg, args, h) for h in E.truncate(hits[: args.limit], args.truncate)]
-    doc = E.build(args, hits, errors, time.monotonic() - started, index_empty)
+    store = Store(cfg.index_path)
+    try:
+        version = store.model
+        index_empty = store.item_count() == 0
+        vector = None
+        if not args.words_only and not index_empty:
+            vector, degraded = meaning_vector(cfg, version, args.query, use_daemon=not args.no_daemon)
+        searcher = Searcher(store, args.source, args.path, args.glob, _day(args.since), _day(args.until, 1),
+                            model=version)
+        hits += [h.as_dict() for h in searcher.search(
+            args.query, vector, limit=args.limit, kinds=set(args.kind) if args.kind else None)]
+        pending = store.pending_count(sources=args.source)
+        gate = searcher.calibration.gate
+    finally:
+        store.close()
+    if args.sort == "newest":
+        hits.sort(key=_item_time, reverse=True)
+    hits = [_show(cfg, args, h) for h in hits]
+    doc = E.build(args, hits, time.monotonic() - started, index_empty)
     doc["summary"]["pending_vectors"] = pending
     E.note_hidden(doc, hits, E.show_secrets_command(args.argv))
     E.mark_degraded(doc, degraded)
     _remember_search(cfg, args.query, hits)
-    if when:
-        doc["request"]["time"] = when.as_dict()
-    for error in errors:
-        _eprint("warning:", error)
     if args.files:
         refs = list(dict.fromkeys(h["ref"] for h in hits))
         print(json.dumps({"schema": E.SCHEMA, "query": args.query, "status": doc["status"], "files": refs})
@@ -301,7 +267,7 @@ def cmd_search(cfg: C.Config, args) -> int:
     if not hits:
         print("nothing found" if doc["status"] != "empty_index" else "nothing indexed yet: run `rummage index`")
         return E.OK if doc["status"] != "error" else E.FAILED
-    cut = doc["summary"]["strong"]
+    cut = doc["summary"]["strong"] if args.sort == "score" else len(hits)
     for n, h in enumerate(hits):
         if n == cut:
             print("-- weaker matches --")
@@ -481,18 +447,9 @@ def cmd_get(cfg: C.Config, args) -> int:
         store.close()
         return 1
     except NotFound as error:
-        doc = None
-        for spec in cfg.remotes.values():
-            try:
-                doc = _remote(spec, "/get", [("ref", args.ref)] + ([("loc", args.loc)] if args.loc else [])
-                              + ([("show_secrets", "1")] if args.show_secrets else []))
-                break
-            except Exception:
-                continue
-        if doc is None:
-            _eprint(error)
-            store.close()
-            return 1
+        _eprint(error)
+        store.close()
+        return 1
     except OSError as error:
         _eprint(f"can't read the original: {error}")
         store.close()
@@ -586,72 +543,6 @@ def cmd_recent(cfg: C.Config, args) -> int:
     return 0
 
 
-def cmd_about(cfg: C.Config, args) -> int:
-    from . import person
-    from .store import Scope
-
-    if not cfg.index_path.exists():
-        _eprint("no index yet: run `rummage index`")
-        return E.INDEX_MISSING
-    store = Store(cfg.index_path)
-    try:
-        names = person.names_for(store, args.name, args.alias or [], cfg.people)
-        found = person.timeline(store, names, Scope(args.source, None, None, _day(args.since), _day(args.until, 1)),
-                                args.limit)
-    finally:
-        store.close()
-    found = [_show(cfg, args, f) for f in found]
-    if args.json:
-        print(json.dumps({"schema": "rummage.about.v1", "names": names, "results": found,
-                          **_hidden_summary(args, found)}, ensure_ascii=False))
-        return 0
-    print(f"{args.name} (also: {', '.join(n for n in names if n != args.name) or 'no other names'})")
-    for f in found:
-        print(f"{f['date'] or '          '}  {f['id']} [{f['source']}] {f['how']}: {f['title']}  ({f['ref']})\n"
-              f"      {f['snippet']}")
-    if not found:
-        print("nothing found")
-    for line in _hidden_lines(args, found):
-        print(line)
-    return 0
-
-
-def cmd_report(cfg: C.Config, args) -> int:
-    from . import upkeep
-    from .store import Scope
-
-    if not cfg.index_path.exists():
-        _eprint("no index yet: run `rummage index`")
-        return E.INDEX_MISSING
-    store = Store(cfg.index_path)
-    try:
-        scope = Scope(args.source, args.path)
-        if args.report == "dupes":
-            found = upkeep.dupes(store, scope, args.min_cosine, args.limit)
-        else:
-            found = upkeep.conflicts(store, scope, args.min_cosine, limit=args.limit)
-    finally:
-        store.close()
-    found = [_show(cfg, args, {"source": f["a"]["source"], **f}) for f in found]
-    if args.json:
-        print(json.dumps({"schema": f"rummage.{args.report}.v1", "results": found,
-                          **_hidden_summary(args, found)}, ensure_ascii=False))
-        return 0
-    for f in found:
-        print(f"{f['cosine']:.3f}")
-        for side in ("a", "b"):
-            row = f[side]
-            where = row["ref"] + (f":{row['lines']}" if row.get("lines") else "")
-            extra = f"  facts: {', '.join(row['facts'])}" if row.get("facts") else ""
-            print(f"  {row['id']} [{row['source']}] {where}{extra}\n      {row['text']}")
-        print()
-    if not found:
-        print("nothing found")
-    for line in _hidden_lines(args, found):
-        print(line)
-    return 0
-
-
 def cmd_service(cfg: C.Config, args) -> int:
     from . import service
 
@@ -714,20 +605,8 @@ def cmd_watch(cfg: C.Config, args) -> int:
         return 0
 
 
-def cmd_mcp(cfg: C.Config, args) -> int:
-    from .mcp_server import run
-
-    return run(cfg)
-
-
 def cmd_daemon(cfg: C.Config, args) -> int:
     return D.run(cfg, args.idle_minutes)
-
-
-def cmd_serve(cfg: C.Config, args) -> int:
-    from .serve import run
-
-    return run(cfg, args.host, args.port, args.token_file, args.reindex_minutes)
 
 
 def cmd_status(cfg: C.Config, args) -> int:
@@ -922,12 +801,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--since", metavar="YYYY-MM-DD", help="only items from this day on (a chat's time, a mail's date, "
                                                          "a file's change)")
     p.add_argument("--until", metavar="YYYY-MM-DD", help="only items up to and including this day")
-    p.add_argument("--no-dates", action="store_true",
-                   help="don't read time phrases in the query (\"last Wednesday\", \"上周\") as a time range")
-    p.add_argument("--no-remote", action="store_true", help="only the local index")
     p.add_argument("--no-daemon", action="store_true", help="load the model even when a query daemon is running")
-    p.add_argument("--truncate", choices=["off", "knee", "strong"], default="off",
-                   help="drop the weak tail: at the score curve's elbow (knee) or below half the top score (strong)")
+    p.add_argument("--sort", choices=["score", "newest"], default="score",
+                   help="order of the results: best match first, or the newest of the matches first")
     p.add_argument("--files", action="store_true", help="only the refs of matching items, one per line")
     p.add_argument("--budget-tokens", type=int, help="with --json: trim the output to about this many tokens")
     p.add_argument("--show-secrets", action="store_true", help="don't mask credentials in the output")
@@ -988,28 +864,6 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_recall)
 
-    p = sub.add_parser("about", help="everything that mentions a person, across sources, newest first")
-    p.add_argument("name")
-    p.add_argument("--alias", action="append", help="another name for them (repeatable)")
-    p.add_argument("-s", "--source", action="append", help="only this source (repeatable)")
-    p.add_argument("--since", metavar="YYYY-MM-DD")
-    p.add_argument("--until", metavar="YYYY-MM-DD")
-    p.add_argument("-n", "--limit", type=int, default=50)
-    p.add_argument("--show-secrets", action="store_true", help="don't mask credentials in the output")
-    p.add_argument("--json", action="store_true")
-    p.set_defaults(func=cmd_about)
-
-    for name, help_text in (("dupes", "passages in different items that say nearly the same thing"),
-                            ("conflicts", "passages about the same thing whose dates, times or numbers differ")):
-        p = sub.add_parser(name, help=help_text)
-        p.add_argument("-s", "--source", action="append", help="only this source (repeatable)")
-        p.add_argument("--path", action="append", help="only items under this ref prefix (repeatable)")
-        p.add_argument("--min-cosine", type=float, help="how alike passages must be")
-        p.add_argument("-n", "--limit", type=int, default=50)
-        p.add_argument("--show-secrets", action="store_true", help="don't mask credentials in the output")
-        p.add_argument("--json", action="store_true")
-        p.set_defaults(func=cmd_report, report=name)
-
     p = sub.add_parser("service", help="run `rummage watch` under the OS supervisor (systemd, launchd, Task Scheduler)")
     p.add_argument("action", choices=["show", "install", "uninstall"])
     p.set_defaults(func=cmd_service)
@@ -1029,19 +883,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="read a batch once its folders were quiet this long (at most 4x this while they keep changing)")
     p.set_defaults(func=cmd_watch)
 
-    p = sub.add_parser("mcp", help="a stdio MCP server with read-only search, get and status tools (needs rummage[mcp])")
-    p.set_defaults(func=cmd_mcp)
-
     p = sub.add_parser("daemon", help="keep the query model loaded so searches take milliseconds")
     p.add_argument("--idle-minutes", type=float, help="exit after this long without a query")
     p.set_defaults(func=cmd_daemon)
-
-    p = sub.add_parser("serve", help="answer searches over HTTP and keep the index current")
-    p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8765)
-    p.add_argument("--token-file", help="bearer token file (default $RUMMAGE_TOKEN)")
-    p.add_argument("--reindex-minutes", type=float, help="run `rummage index` on this interval")
-    p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("status", help="what's indexed and how the last runs went")
     p.add_argument("--json", action="store_true")
