@@ -199,9 +199,9 @@ complete they add nothing.
 
 ## Coming from another memory system
 
-`rummage setup` lists the agent histories it finds on the machine (Claude Code, Codex, Gemini CLI, OpenCode, Hermes
-Agent, DeepSeek Harness) with the command that switches each on, and asks about each one when you run it in a
-terminal. Nothing is read until you say so; `rummage sources disable <name>` switches one off again.
+`rummage setup` and `rummage project ensure` list the agent histories they find on the machine (Claude Code, Codex,
+Gemini CLI, OpenCode, Hermes Agent, DeepSeek Harness) with the command that switches each on, and setup asks about
+each one when you run it in a terminal. Nothing is read until you say so; `rummage sources disable <name>` switches one off again.
 
 What another memory system has stored comes over through its export, with a `memory-export` source per system:
 

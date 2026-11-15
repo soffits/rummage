@@ -11,13 +11,16 @@ import time
 from . import config as C
 from . import memory
 from .projects import ensure
+from .sources import found
 from .store import Store
 
 
 def cmd_project(cfg: C.Config, args) -> int:
     out = ensure(cfg, args.cwd or os.getcwd(), args.harness, start=not args.no_start)
+    # Other programs' histories on this machine stay off until the person switches them on; say how.
+    offered = {name: f"rummage sources enable {name}" for name in found(cfg.sources)}
     if args.json:
-        print(json.dumps({"schema": "rummage.project.v1", **out}, ensure_ascii=False))
+        print(json.dumps({"schema": "rummage.project.v1", **out, "found": offered}, ensure_ascii=False))
         return 0
     project = out.get("project")
     if project:
@@ -30,6 +33,10 @@ def cmd_project(cfg: C.Config, args) -> int:
         print(f"{history['harness']} chats: {history['state']}")
     if out["started"]:
         print(f"started the background reader (`rummage watch`; log in {cfg.log_dir})")
+    if offered:
+        print("found on this machine, not read until you switch it on:")
+        for name, command in offered.items():
+            print(f"  {name:14} {command}")
     return 0
 
 

@@ -47,7 +47,7 @@ from .search import Searcher
 from .query import meaning_vector
 from .limits import describe
 from .secrets import masked_total, shown
-from .sources import available, build, load_type
+from .sources import available, build, detected, found, load_type
 from .store import Ambiguous, NotFound, Scope, Store
 
 
@@ -74,29 +74,29 @@ def cmd_setup(cfg: C.Config, args) -> int:
         elif args.backend == "auto" or "reason" not in rt.backend_record:
             backends.choose(rt, profile, cfg.threads, log=_eprint)
     _eprint(f"runtime ready for {profile.name} on {rt.backend}:", rt.root)
-    _offer_found(cfg)
+    offer_found(cfg)
     return 0
 
 
-def _offer_found(cfg: C.Config) -> None:
+def offer_found(cfg: C.Config) -> None:
     """Lists the other programs' histories found on this machine that no source reads yet, with the command that
     switches each on. Asks about each when a person is at the terminal; never switches one on unasked."""
-    found = _found(cfg)
-    if not found:
+    offered = found(cfg.sources)
+    if not offered:
         return
     print("\nFound on this machine, not read until you switch it on:")
-    for name in found:
+    for name in offered:
         print(f"  {name:14} rummage sources enable {name}")
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return
-    for name, spec in found.items():
+    for name, spec in offered.items():
         try:
             answer = input(f"Remember {name}'s history now? [y/N] ").strip().lower()
         except EOFError:
             return
         if answer in ("y", "yes"):
             C.set_enabled(cfg.path, name, spec, True)
-            print(_switched_on(name))
+            print(switched_on(name))
 
 
 def _embedders(cfg: C.Config, store: Store, profile: M.Profile | None, log) -> Embedders | None:
@@ -377,27 +377,7 @@ def cmd_search(cfg: C.Config, args) -> int:
     return E.OK
 
 
-def _detected() -> dict[str, dict]:
-    """Source types that read another program's data, with the settings to use, when that data is on this machine."""
-    out = {}
-    for kind in sorted(available()):
-        try:
-            cls = load_type(kind)
-        except Exception:
-            continue
-        spec = cls.detect()
-        if spec:
-            out[kind] = spec
-    return out
-
-
-def _found(cfg: C.Config) -> dict[str, dict]:
-    """Detected sources that no configured source reads yet, with the settings to use."""
-    configured_types = {s.get("type") for s in cfg.sources.values()}
-    return {k: spec for k, spec in _detected().items() if k not in cfg.sources and k not in configured_types}
-
-
-def _switched_on(name: str) -> str:
+def switched_on(name: str) -> str:
     return (f"{name} is on: `rummage index -s {name}` reads it now, `rummage watch` keeps it current; "
             f"`rummage sources disable {name}` switches it off")
 
@@ -408,16 +388,16 @@ def cmd_sources(cfg: C.Config, args) -> int:
     types = available()
     on = set(C.enabled(cfg))
     configured = {n: {"type": s.get("type"), "enabled": n in on} for n, s in cfg.sources.items()}
-    found = {k: {"type": k, "enabled": False, "detected": True} for k in _found(cfg)}
+    offered = {k: {"type": k, "enabled": False, "detected": True} for k in found(cfg.sources)}
     if args.json:
-        print(json.dumps({"types": types, "configured": configured, "detected": found}))
+        print(json.dumps({"types": types, "configured": configured, "detected": offered}))
         return 0
     print("configured:")
     for name, entry in configured.items():
         print(f"  {name:20} {entry['type']:18} {'on' if entry['enabled'] else 'off'}")
-    if found:
+    if offered:
         print("found on this machine, off until enabled (`rummage sources enable <name>`):")
-        for name in found:
+        for name in offered:
             print(f"  {name}")
     print("installed types: " + ", ".join(sorted(types)))
     return 0
@@ -428,14 +408,14 @@ def _switch_source(cfg: C.Config, args) -> int:
     on = args.action == "enable"
     spec = cfg.sources.get(name)
     if spec is None:
-        spec = _detected().get(name)
+        spec = detected().get(name)
         if spec is None or not on:
             _eprint(f"no source {name!r}: configured are {', '.join(cfg.sources) or 'none'}; "
-                    f"found on this machine: {', '.join(_detected()) or 'none'}")
+                    f"found on this machine: {', '.join(detected()) or 'none'}")
             return 2
     C.set_enabled(cfg.path, name, spec, on)
     if on:
-        print(_switched_on(name))
+        print(switched_on(name))
         return 0
     print(f"{name} is off; `rummage sources enable {name}` switches it back on")
     if not cfg.index_path.exists():
