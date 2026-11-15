@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `mail`: IMAP accounts that sign in with OAuth (XOAUTH2, as Gmail and Microsoft 365 work accounts do): `oauth_token_command` prints a current access token, for example from the tool that already keeps it for your mail client.
+
 ## 0.9.0
 
 - `rummage watch` waits for a folder to be quiet for `--settle-seconds` before reading it (at most four times that while it keeps changing), instead of reading a constantly written chat log every few seconds.

@@ -11,6 +11,7 @@ sender, recipients, date, the body (plain text, else the HTML's text) and the te
     # jmap_session = "https://mail.example.com/jmap/session"
     # jmap_user = "me@example.com"
     # password_env = "MAIL_PASSWORD"     # or password_file = "...", or password_command = ["pass", "mail"]
+    # oauth_token_command = ["ortie", "token", "show", "-a", "work"]   # IMAP with an OAuth access token (XOAUTH2)
     # folders = "all"                    # IMAP: every folder but spam, trash and drafts (default); or a list
     # since = "2y"                       # only mail from then on: a date (2024-01-01) or a span (90d, 2y)
 
@@ -174,13 +175,23 @@ class MailSource(Source):
             # Maildir keys survive flag changes; mbox keys are positions, so name a message by its bytes there.
             yield (str(key) if self.spec.get("maildir") else hashlib.sha1(raw).hexdigest()[:20]), raw
 
+    def _run(self, command) -> str:
+        command = [os.path.expanduser(c) for c in command] if isinstance(command, list) else shlex.split(command)
+        return subprocess.run(command, check=True, capture_output=True, text=True).stdout.strip()
+
+    def login(self, imap) -> None:
+        user = self.spec["imap_user"]
+        if self.spec.get("oauth_token_command"):
+            token = self._run(self.spec["oauth_token_command"])
+            imap.authenticate("XOAUTH2", lambda _: f"user={user}\x01auth=Bearer {token}\x01\x01".encode())
+        else:
+            imap.login(user, self.password())
+
     def password(self) -> str:
         if self.spec.get("password_env"):
             return os.environ[self.spec["password_env"]]
         if self.spec.get("password_command"):
-            command = self.spec["password_command"]
-            command = [os.path.expanduser(c) for c in command] if isinstance(command, list) else shlex.split(command)
-            return subprocess.run(command, check=True, capture_output=True, text=True).stdout.strip()
+            return self._run(self.spec["password_command"])
         return Path(os.path.expanduser(self.spec["password_file"])).read_text(encoding="utf-8").strip()
 
     def _folders(self, imap) -> list[str]:
@@ -201,7 +212,7 @@ class MailSource(Source):
 
     def _plan_imap(self, known: dict[str, str | None], state: dict) -> Plan:
         imap = imaplib.IMAP4_SSL(self.spec["imap_host"], int(self.spec.get("imap_port", 993)))
-        imap.login(self.spec["imap_user"], self.password())
+        self.login(imap)
         upserts, removed, new_state = [], [], {}
         try:
             for folder in self._folders(imap):
