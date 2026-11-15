@@ -9,6 +9,7 @@ document = "title: {title} | text: {text}"
 empty_title = "none"
 pooling = "mean"
 max_tokens = 2048
+encoders = ["image", "audio"]
 
 # The reference texts' vectors as made by the pinned llama.cpp build (`rummage doctor` compares against them).
 reference = [

@@ -176,7 +176,7 @@ def test_pictures_and_inputless_passages_are_read_again(tmp_path):
     embed_models(store, old, new, SMALL, print, readable=["notes"])
     rec = switch.record(store)
     assert rec["phase"] == "embedding" and "read again" in rec["paused"]
-    again = store.unreadable(new.version, store.model, False)
+    again = store.unreadable(new.version, store.model, ())
     assert len(again["notes"]) >= 1
     reused = index_source(store, source, [old, new], print, print, again=set(again["notes"]))
     assert reused["updated"] == len(again["notes"])
@@ -343,7 +343,7 @@ def test_an_openai_compatible_endpoint(tmp_path):
         assert rows.shape == (2, 3) and np.allclose(rows[0], [1 / 3, 2 / 3, 2 / 3])
         assert all(auth == "Bearer sk-test" and model == "embed-small" for auth, model, _ in seen)
         assert max(len(t) for _, _, inputs in seen for t in inputs) <= 128
-        assert not e.media
+        assert not e.has_media
     finally:
         server.shutdown()
 

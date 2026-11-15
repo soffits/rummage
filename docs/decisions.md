@@ -52,6 +52,15 @@
 - Files over `max_bytes` are indexed by name with a `partial` note instead of being left out of the plan, so a search for the file finds it and says why its text is missing. Files `exclude` leaves out are only counted with a few examples in the source's state: walking excluded folders (`node_modules`) to list them would cost what excluding them saves.
 - The passage cap in `chunks` (400 per item) is gone: `max_chars` is the one limit on text per item, so there is one setting to raise.
 
+## Media
+
+- Audio and video are embedded by the model itself (EmbeddingGemma 2 hears and sees), not transcribed: no whisper, no transcript cache. A hit points at the file and moment; an agent that needs the words transcribes that window with its own tools. Which kinds a profile embeds is its `encoders` list; a text-only profile skips media.
+- How media is cut follows DigUp (MIT): 30 s windows every 25 s at 16 kHz mono (the model ignores audio past 30 s, and the overlap keeps a sentence whole), windows under about -50 dBFS skipped; a frame every 3 s (fewer past 1,200), one kept per shot by an 8x8 average hash within 4 bits, scaled to the model's 70-token budget so a frame costs seconds, not a minute. Frame times come from ffmpeg's `showinfo`, not from counting, since `fps` filters shift by a slot.
+- Windows, frames and rendered pages are read lazily (`Segment.media` as a function, the hash from file fingerprint, place and settings), so a long recording never sits in memory and a re-read reuses every vector without decoding. At most `MEDIA_STEP` (30) media inputs per item per pass; the rest wait in `info.media_waiting` and are embedded after the source's other items, then by the next run.
+- PDFs are read per page (`loc` = `page N`); a page under 200 characters of text is also rendered with pypdfium2 (Apache-2.0/BSD, the `pdf-scans` extra) at the 280-token budget and embedded as a picture. Without the extra the item records why its scans weren't read. No OCR: the image vector already carries much of a page's text.
+- RTF, EPUB and .eml are read with the standard library only (an RTF tokenizer that skips font, style and picture groups; the EPUB spine; `email` with attachments through the same readers). Old binary Office formats stay name-only: no pure-Python reader is good enough.
+- Keys, certificates, password stores, `.env`, `.netrc` and folders like `.ssh` are never read, by name (DigUp's list), nor a text file holding a private key block; counted under `left_out` with `read_secret_files` to allow them.
+
 ## Licence
 
 - AGPL-3.0-or-later from 0.3.0: modified versions, hosted ones included, should share their source.

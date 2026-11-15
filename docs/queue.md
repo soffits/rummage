@@ -28,8 +28,6 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 12. **PyPI releases**, so `pip install rummage` and `uvx rummage` work without Git (fidx wheels).
 14. **Folder breadcrumbs in the embedded title** (`title: Docs › Housing › lease | text: …`), which ruggiio/semfind
     measured as a gain with EmbeddingGemma 2. Changes the vectors, so it goes in with the benchmark to prove it.
-15. **PDF page locations** and a two-pass index for long files (first pages now, the rest after everything else),
-    as DigUp does.
 16. **Smaller ones:** an explicit `--mode lexical|vector|hybrid` (fidx, claudegrep); per-folder context strings
     returned with results (qmd contexts); metadata filters on frontmatter fields (qmd); linked-note expansion for
     Obsidian wikilinks (obsidian-rag-mcp); a stale-index hint in search output (fidx); shell completion (grepai);
@@ -38,7 +36,7 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 
 ## Known leftovers
 
-- Images and scanned PDFs in Seafile libraries are found by name only; OCR or image vectors for documents would need the image encoder on the server.
+- Images, recordings, videos and scanned PDFs in Seafile libraries are found by name only; OCR or image vectors for documents would need the image encoder on the server.
 - Audio and video are not indexed.
 - A message that another agent sends into a DSH session through `open_session` without the "[Sent by the agent" prefix is attributed to the web user.
 - Vectors are loaded from SQLite on every search; a memory-mapped cache would help once an index passes a few hundred thousand segments.
@@ -70,7 +68,6 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 
 Same rules as everything else: general, any language family, sources opt-in where they read someone's private
 data, tests.
-- `media`: whisper.cpp publishes no prebuilt binaries for every system, so `rummage setup` can't fetch and pin it the way it does llama.cpp; people install `whisper-cli` and a model themselves. Not yet run against a real whisper.cpp build here (tests use stand-ins for ffmpeg and whisper-cli).
 
 ## After the evaluation
 
@@ -116,3 +113,13 @@ data, tests.
   one. Worth measuring on a real GPU before changing.
 - Not run on a machine with a GPU here (CI and this box have none): the device listing, the download and the
   fall-back-to-CPU path ran for real against the Vulkan build, the GPU-wins path only with stand-ins.
+
+## Media
+
+- `rummage get` on a recording or video has no text to show; a hit's `loc` is the moment. A `get --moment` that cuts
+  the window out with ffmpeg would save the agent a step.
+- On a tiny index (a dozen vectors) the z-score gate hides correct media hits whose cosine already ranks first; the
+  gate is per modality and needs more vectors to be meaningful. Measure on a real folder of recordings.
+- Seafile reads no media: the bytes would have to be downloaded whole.
+- Long recordings are decoded once per pass to find their windows (a cheap streamed decode); a cached window list
+  per fingerprint would save it on reloads.

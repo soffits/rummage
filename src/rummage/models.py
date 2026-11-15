@@ -17,6 +17,8 @@ Profiles come from the files in `rummage/profiles/` (built in; `embeddinggemma-2
     # document_untitled = "{text}"         # used instead when there is no title
     dim = 512                              # keep the first N dimensions (Matryoshka models); default: all
     # pooling = "mean"                     # llama.cpp pooling for a GGUF (mean, cls, last); default: the file's own
+    # mmproj = "https://.../mmproj.gguf"   # a media projector (with mmproj_sha256): pictures and, per `encoders`, sound
+    # encoders = ["image", "audio"]        # what the projector reads; default ["image"]
     # version = "..."                      # names the vectors; default: derived from everything above
 
 A profile's `version` is stored with each of its vectors. Two profiles with the same version must make the same
@@ -89,6 +91,7 @@ class Profile:
     api_key_env: str | None = None
     api_key_file: str | None = None
     description: str = ""
+    media_kinds: tuple[str, ...] = ("image",)   # what its media projector reads (`encoders` in the profile)
     calibration: Calibration | None = None    # fixed thresholds; None: calibrated when the model is switched to
     reference: tuple = field(default=(), compare=False)   # expected reference vectors, when known
 
@@ -98,8 +101,13 @@ class Profile:
 
     @property
     def media(self) -> bool:
-        """Whether it can embed pictures (a local GGUF with its media projector)."""
+        """Whether it can embed media (a local GGUF with its media projector)."""
         return self.local and self.mmproj is not None
+
+    @property
+    def encoders(self) -> tuple[str, ...]:
+        """The media kinds it embeds ("image", "audio"); empty for a text-only model."""
+        return self.media_kinds if self.media else ()
 
     def query_text(self, text: str) -> str:
         return self.query.format(text=text)
@@ -117,7 +125,7 @@ class Profile:
     def summary(self) -> dict:
         where = self.url or (self.gguf.url if self.gguf else self.path)
         return {"name": self.name, "version": self.version, "description": self.description, "dim": self.dim,
-                "runs": "local" if self.local else "remote", "where": where, "media": self.media,
+                "runs": "local" if self.local else "remote", "where": where, "media": list(self.encoders),
                 "calibration": self.calibration.as_dict() if self.calibration else "automatic"}
 
 
@@ -159,7 +167,7 @@ def from_dict(name: str, data: dict) -> Profile:
         pooling=data.get("pooling"), max_tokens=int(data.get("max_tokens", 2048)), gguf=gguf, mmproj=mmproj,
         path=data.get("path"), url=data.get("url"), api_model=data.get("api_model"),
         api_key_env=data.get("api_key_env"), api_key_file=data.get("api_key_file"),
-        description=data.get("description", ""),
+        description=data.get("description", ""), media_kinds=tuple(data.get("encoders", ("image",))),
         calibration=Calibration.from_dict(calibration) if calibration else None,
         reference=tuple(tuple(r) for r in data.get("reference", ())))
 

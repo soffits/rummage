@@ -11,7 +11,9 @@ Third-party material
 The search ranking in src/rummage/search.py (per-modality z-scored similarity, the meaning gate, the word-coverage
 bonus and the lookup weighting) is adapted from DigUp's Searcher (https://github.com/ARahim3/DigUp), and the choice
 of a GPU llama.cpp build in src/rummage/backends.py (used only when a quick check finds it faster and giving the same
-vectors) follows DigUp's setup check, both under the MIT License:
+vectors) follows DigUp's setup check, and the audio windows, keyframe sampling, frame sizing and key-file list in
+src/rummage/media.py and src/rummage/sources/folder.py are adapted from DigUp's extractors and rules, all under the
+MIT License:
 
     MIT License
 
