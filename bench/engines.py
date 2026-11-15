@@ -38,23 +38,27 @@ def _index_rummage(config: Path, embedder_url: str | None) -> None:
     vector, or vectors from a model other than the remote embedder's (the indexer falls back to the local model
     when the remote one does not answer at the start)."""
     from rummage import config as C
+    from rummage import models as M
     from rummage import runtime as R
     from rummage.store import Store
 
     subprocess.run(["rummage", "index", "-q"], check=True, env=dict(os.environ, RUMMAGE_CONFIG=str(config)))
-    store = Store(C.load(config).index_path)
+    cfg = C.load(config)
+    profile = M.by_name(cfg.models, cfg.model)
+    store = Store(cfg.index_path)
     try:
         pending = store.pending_count()
-        reference = store.meta("reference")
+        stored = store.meta(f"reference:{store.model}")
     finally:
         store.close()
+    reference = list(profile.reference) or (json.loads(stored) if stored else None)
     if pending:
         raise RuntimeError(f"index incomplete: {pending} passages have no vector yet")
     if embedder_url and reference:
-        remote = R.RemoteEmbedder(embedder_url, timeout=30)
+        remote = R.RemoteEmbedder(embedder_url, profile, timeout=30)
         remote.start()
-        agreement = R.reference_agreement(remote, json.loads(reference))
-        if agreement < R.REFERENCE_COSINE:
+        agreement = R.reference_agreement(remote, reference)
+        if agreement < M.REFERENCE_COSINE:
             raise RuntimeError(f"index vectors do not come from {embedder_url} (cosine {agreement:.4f})")
 
 
