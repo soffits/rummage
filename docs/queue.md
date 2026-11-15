@@ -69,3 +69,17 @@ data, tests.
    for event-driven recall.
 6. **Golden questions:** a regression set of questions with known answers, run weekly to catch quality drops.
 7. **Optional local cross-encoder rerank** for hard queries, off by default, measured in the evaluation.
+8. **Pluggable model profiles** (after the evaluation, once the cross-model runs show the ranking carries over): what
+   is tied to EmbeddingGemma 2 today and would move into a profile per model:
+   - prompts: `QUERY_PREFIX` and `document_text` (instruction models want `Instruct: ...\nQuery: ...` and plain
+     documents; BGE-style models no prefix at all);
+   - pooling: the local server always runs `--pooling mean`; last-token models (Qwen3-Embedding, harrier) need
+     `last`, and the causal ones have no micro-batch limit, so the halving in `Embedder.texts` is only for
+     non-causal models;
+   - width: `DIM = 512` is a Matryoshka cut that only suits models trained for it; others keep their full width;
+   - identity: model URL, revision and hash, `VECTOR_VERSION` and the reference texts and vectors, so a changed
+     model means a re-embed, never mixed vectors;
+   - calibration: the meaning gate (z 2 in search, 3 in recall) and the word bonus's weight were chosen with this
+     model; the gate's z-scores are model-agnostic in form, but where relevant passages sit in each model's
+     distribution has to be checked per model (`bench/memory.py` sweep, `rummage-ablations --model`);
+   - the special-token count and context size per server.
