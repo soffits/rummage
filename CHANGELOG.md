@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0
 
 - Output says what it leaves out. Masked credentials are counted per result (`masked`) and in the JSON summary (`masked_secrets`), with the same command plus `--show-secrets` in `next_actions` and as a closing note in text output; `recall` names `rummage get <#id> --show-secrets` per item. Items a size limit cut keep a `partial` record at index time (what, kept of total, the setting to raise), shown by `search`, `get`, `recent`, `recall`, `serve` and `mcp`; `rummage status` counts them per source, with the files `exclude` left out. Re-read existing items with `rummage index --reload` to record their cuts.
 - Every size limit is a source setting: `max_chars`, `max_pdf_pages`, `max_archive_names`, `max_attachment_bytes`, `keep_chars` (chat sources) and `limits.<kind>`, besides `max_bytes`. Markdown notes now stop at `max_chars` like other text, instead of at 400 passages.
