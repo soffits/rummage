@@ -444,6 +444,33 @@ def cmd_recent(cfg: C.Config, args) -> int:
     return 0
 
 
+def cmd_about(cfg: C.Config, args) -> int:
+    from . import person
+    from .store import Scope
+
+    if not cfg.index_path.exists():
+        _eprint("no index yet: run `rummage index`")
+        return E.INDEX_MISSING
+    store = Store(cfg.index_path)
+    try:
+        names = person.names_for(store, args.name, args.alias or [], cfg.people)
+        found = person.timeline(store, names, Scope(args.source, None, None, _day(args.since), _day(args.until, 1)),
+                                args.limit)
+    finally:
+        store.close()
+    found = [_show(cfg, args, f) for f in found]
+    if args.json:
+        print(json.dumps({"schema": "rummage.about.v1", "names": names, "results": found}, ensure_ascii=False))
+        return 0
+    print(f"{args.name} (also: {', '.join(n for n in names if n != args.name) or 'no other names'})")
+    for f in found:
+        print(f"{f['date'] or '          '}  {f['id']} [{f['source']}] {f['how']}: {f['title']}  ({f['ref']})\n"
+              f"      {f['snippet']}")
+    if not found:
+        print("nothing found")
+    return 0
+
+
 def cmd_report(cfg: C.Config, args) -> int:
     from . import upkeep
     from .store import Scope
@@ -738,6 +765,17 @@ def main(argv: list[str] | None = None) -> int:
                    help="load the model when no daemon runs (~1.5 s); otherwise fall back to exact words")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_recall)
+
+    p = sub.add_parser("about", help="everything that mentions a person, across sources, newest first")
+    p.add_argument("name")
+    p.add_argument("--alias", action="append", help="another name for them (repeatable)")
+    p.add_argument("-s", "--source", action="append", help="only this source (repeatable)")
+    p.add_argument("--since", metavar="YYYY-MM-DD")
+    p.add_argument("--until", metavar="YYYY-MM-DD")
+    p.add_argument("-n", "--limit", type=int, default=50)
+    p.add_argument("--show-secrets", action="store_true", help="don't mask credentials in the output")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_about)
 
     for name, help_text in (("dupes", "passages in different items that say nearly the same thing"),
                             ("conflicts", "passages about the same thing whose dates, times or numbers differ")):
