@@ -21,9 +21,9 @@ import sys
 import time
 
 from . import config as C
-from . import daemon as D
 from . import runtime as R
 from . import text as T
+from .query import meaning_vector
 from .search import Hit, Searcher, gate_for
 from .secrets import mask_value
 from .store import Store
@@ -84,7 +84,7 @@ def render_item(hit: Hit | dict) -> str:
     return f"- {head}\n  {h['snippet']}"
 
 
-def render(results: list[dict], recent: list[dict]) -> str:
+def render(results: list[dict], recent: list[dict], degraded: str | None = None) -> str:
     lines = ["Recalled from the user's own files by rummage; each line is #id · source · where (path:lines, or "
              "chat session#message) · date · title · why it matched. Open one with `rummage get <#id>` "
              "(`--around 3` for the turns around a chat message)."]
@@ -92,6 +92,8 @@ def render(results: list[dict], recent: list[dict]) -> str:
     if recent:
         lines.append("Said minutes ago in another session:")
         lines += [render_item(h) for h in recent]
+    if degraded and results:
+        lines.append("(Matched by words only: " + degraded.split(";")[0].split(", so")[0] + ".)")
     return "\n".join(lines)
 
 
@@ -126,24 +128,22 @@ def recent_turns(cfg: C.Config, prompt: str, exclude: list[str], minutes: float,
 
 
 def recall(cfg: C.Config, query: str, sources: list[str] | None, paths: list[str] | None, limit: int,
-           allow_model_load: bool) -> tuple[list[Hit], str, int]:
-    """Hits for `query`, how it was matched (`meaning` or `words`), and how many vectors were searched."""
+           allow_model_load: bool) -> tuple[list[Hit], str, int, str | None]:
+    """Hits for `query`, how it was matched (`meaning` or `words`), how many vectors were searched, and why it went
+    by words when it did."""
     if not cfg.index_path.exists():
-        return [], "none", 0
-    vector = D.query_vector(cfg.data_dir, query)
-    if vector is None and allow_model_load:
-        with R.embedder(R.Runtime(cfg.data_dir, cfg.llama_server), media=False, threads=cfg.threads, nice=0) as e:
-            vector = e.query(query)
+        return [], "none", 0, None
+    vector, degraded = meaning_vector(cfg, query, load=allow_model_load)
     store = Store(cfg.index_path)
     try:
         if store.vector_version != R.VECTOR_VERSION:
-            return [], "none", 0
+            return [], "none", 0, None
         searcher = Searcher(store, sources, paths)
         hits = searcher.search(query, vector, limit=limit)
         count = searcher.vector_count()
     finally:
         store.close()
-    return hits, "meaning" if vector is not None else "words", count
+    return hits, "meaning" if vector is not None else "words", count, degraded
 
 
 def _masked(cfg: C.Config, args, value: dict) -> dict:
@@ -168,7 +168,7 @@ def run(cfg: C.Config, args) -> int:
     if not prompt or (args.hook and not worth_recalling(prompt)):
         return 0
     try:
-        hits, mode, count = recall(cfg, prompt, args.source, args.path, 20, args.allow_model_load)
+        hits, mode, count, degraded = recall(cfg, prompt, args.source, args.path, 20, args.allow_model_load)
         # Exact words alone are weaker evidence than a meaning match: ask for more of them.
         min_words = args.min_words if mode == "meaning" else max(args.min_words, 0.75)
         chosen = pick(hits, gate_for(args.min_z, count), min_words, args.max_items, args.max_chars, mode == "words")
@@ -182,12 +182,12 @@ def run(cfg: C.Config, args) -> int:
     if not results and not recent:
         return 0
     if args.json:
-        print(json.dumps({"schema": "rummage.recall.v1", "query": prompt, "mode": mode, "results": results,
-                          "recent": recent}, ensure_ascii=False))
+        print(json.dumps({"schema": "rummage.recall.v1", "query": prompt, "mode": mode, "degraded_reason": degraded,
+                          "results": results, "recent": recent}, ensure_ascii=False))
     elif args.hook:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": HOOK_EVENT,
-                                                 "additionalContext": render(results, recent)}},
+                                                 "additionalContext": render(results, recent, degraded)}},
                          ensure_ascii=False))
     else:
-        print(render(results, recent))
+        print(render(results, recent, degraded))
     return 0

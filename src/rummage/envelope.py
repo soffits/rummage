@@ -120,6 +120,14 @@ def build(args, hits: list[dict], errors: list[str], seconds: float, index_empty
     }
 
 
+def mark_degraded(doc: dict, reason: str | None) -> dict:
+    """Records that a search went by words because meaning wasn't available, and why."""
+    if reason:
+        doc["request"]["mode"] = "words"
+        doc["summary"]["degraded_reason"] = reason
+    return doc
+
+
 def tokens(doc: dict) -> int:
     """A rough token count: compact UTF-8 JSON bytes / 4, rounded up."""
     return math.ceil(len(json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode()) / 4)

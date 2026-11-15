@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Searches never fail for lack of the model: when the model files are missing, `llama-server` won't start within 20 s or stops answering, `search`, `recall`, `serve` and `mcp` go on by words and say why (`request.mode: "words"` and `summary.degraded_reason` in JSON, one line on stderr or in the recall block).
+
 ## 0.8.0
 
 - `rummage export DIR` / `rummage import DIR`: the index as plain files (`rummage.export.v1`: JSONL items and segments, raw float16 vectors, the vector version stamped), so it moves to another machine or storage engine without embedding again. An import gives the same search results as the original.
