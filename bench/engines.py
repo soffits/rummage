@@ -59,9 +59,10 @@ def run_rummage(corpus: Path, queries: dict, home: Path, runtime_dir: Path | Non
 
 VARIANTS = {
     "full": {},
-    "raw-cosine": {"zscore": False},
+    "no-zscore": {"zscore": False},
     "no-gate": {"gate": False},
     "vectors-only": {"words": False},
+    "cosine-only": {"words": False, "zscore": False, "gate": False},
     "words-only": {"meaning": False},
     "no-cjk-pairs": {"cjk_pairs": False},
 }

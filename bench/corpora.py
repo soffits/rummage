@@ -85,16 +85,21 @@ def load_miracl_hn(lang: str, raw: Path):
     return _load_miracl("MIRACLRetrievalHardNegatives", lang, raw)
 
 
+def load(dataset: str, raw: Path):
+    """(documents, queries, judgements) of `beir:<name>` (or a bare BEIR name), `miracl:<lang>` or
+    `miracl-hn:<lang>`, downloaded into `raw` once."""
+    kind, _, name = dataset.partition(":") if ":" in dataset else ("beir", "", dataset)
+    return {"beir": load_beir, "miracl": load_miracl, "miracl-hn": load_miracl_hn}[kind](name, raw)
+
+
 def prepare(dataset: str, work: Path, limit_queries: int | None, limit_docs: int | None) -> tuple[Path, dict, dict]:
     """Downloads the dataset once, writes the corpus as one Markdown file per document, and returns (corpus dir,
     queries, relevance). `beir:<name>` (or a bare BEIR name) or `miracl:<lang>`. With limits, only the first N
     judged queries are kept and the corpus is their judged documents plus others up to `limit_docs`."""
-    kind, _, name = dataset.partition(":") if ":" in dataset else ("beir", "", dataset)
-    loader = {"beir": load_beir, "miracl": load_miracl, "miracl-hn": load_miracl_hn}[kind]
+    kind = dataset.partition(":")[0] if ":" in dataset else "beir"
     root = work / (dataset.replace(":", "-") + (f"-q{limit_queries}-d{limit_docs}" if limit_queries or limit_docs else ""))
     corpus_dir = root / "corpus"
-    raw = work / "raw"
-    documents, queries, judged = loader(name, raw)
+    documents, queries, judged = load(dataset, work / "raw")
     ids = sorted(q for q in judged if q in queries and any(v > 0 for v in judged[q].values()))
     ids = ids[:limit_queries] if limit_queries else ids
     wanted = {d for q in ids for d in judged[q]}
