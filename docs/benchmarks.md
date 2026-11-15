@@ -3,9 +3,30 @@
 rummage compared with two other local search tools, [fidx](https://pypi.org/project/fmdidx/) and
 [qmd](https://github.com/tobi/qmd), on public retrieval sets, measured the same way for each with
 [`bench/run.py`](../bench/run.py), plus ablations of rummage's own ranking. The full-set runs from
-[eval-plan.md](eval-plan.md) are in progress: finished sets are below, the rest is added as it lands. The first
+[eval-plan.md](eval-plan.md) ran on 2026-11-15 and were stopped before all of them finished; "Not run" lists the
+rest. The first
 slices come after them; a slice scores higher than its full set, since there are fewer distractors, so compare tools
 with each other there, not with leaderboards.
+
+## What the evaluation shows
+
+The evaluation ran on 2026-11-15 and was stopped before every planned set finished; what didn't run is listed at the
+end. On what did:
+
+- **The model drives most of the score.** With EmbeddingGemma 2, plain dense retrieval (one vector per document, no
+  rummage code) is within about a point of rummage on SciFact (0.853 against 0.864). Most of rummage's lead over fidx
+  and qmd comes from the model it ships with.
+- **The hybrid ranking adds a small, steady gain on top, with every model tried.** Over cosine on the same index it
+  adds 0.7 to 2.7 points of nDCG@10 on SciFact and NFCorpus across four models, and 3.2 to 6.3 points on Korean.
+- **The 512-dimension cut only suits models trained for it.** It costs harrier-oss-v1-0.6b up to 8 points; the width
+  has to come with the model.
+- **Cross-language questions are a known weakness.** The keyword bonus can only match words in the question's own
+  language, so across languages it can lift same-language items above the right one. It has not been measured on a
+  public set yet (see "Not run"); the fix is in the queue.
+- **As memory, retrieval is not the bottleneck; selection and reading are.** On LongMemEval-S an agent that searches
+  rummage answers 80% right, one recall injection 55%, no memory 3%; in 63 of the agent's 100 misses it had seen a
+  turn from every session holding the answer. Recall's thresholds inject about as often on unanswerable questions
+  as on answerable ones.
 
 ## Full sets
 
@@ -16,7 +37,7 @@ those of a CPU index. Queries go through `rummage search --json` with the daemon
 with 2 threads. Index times aren't comparable across tools here (rummage embedded on the GPU), and latencies were
 taken with other runs sharing the machine.
 
-nDCG@10 with its 95% bootstrap interval; a blank cell is still running or not run yet.
+nDCG@10 with its 95% bootstrap interval; a blank cell was not run.
 
 | System | SciFact (300 / 5,183) | NFCorpus (323 / 3,633) | FiQA (648 / 57,638) | MIRACL ko (213 / 43,293) | MIRACL zh (393 / 81,309) |
 |---|---|---|---|---|---|
@@ -90,19 +111,25 @@ dimensions and at the model's full width. nDCG@10:
 | NFCorpus | EmbeddingGemma 1 | 0.389 | 0.388 | 0.390 | **0.396** |
 | NFCorpus | harrier-oss-v1-270m | 0.353 | 0.365 | 0.351 | 0.362 |
 | NFCorpus | harrier-oss-v1-0.6b | 0.349 | 0.380 | 0.348 | 0.366 |
+| MIRACL ko | EmbeddingGemma 2 | | | 0.648 | **0.680** |
+| MIRACL ko | EmbeddingGemma 1 | 0.648 | 0.657 | 0.649 | **0.683** |
+| MIRACL ko | harrier-oss-v1-270m | 0.562 | 0.585 | 0.562 | 0.625 |
+| MIRACL ko | harrier-oss-v1-0.6b | 0.568 | 0.647 | | |
 
 CPU embedding time per passage on this machine (200 SciFact passages of up to 1,800 characters, 2 threads, other
 runs sharing it): EmbeddingGemma 2 0.79 s, EmbeddingGemma 1 0.61 s, harrier-270m 0.44 s, harrier-0.6b 2.10 s.
 
-- rummage's ranking beats cosine over the same vectors with every model, by 0.7 to 2.7 points. The gain is real and
-  consistent, and small: the model sets the level.
+- rummage's ranking beats cosine over the same vectors with every model, by 0.7 to 2.7 points on SciFact and
+  NFCorpus and by 3.2 to 6.3 on Korean, where its character-pair matching helps most. The gain is real and
+  consistent; the model sets the level.
 - rummage cuts every vector to 512 dimensions. That suits the EmbeddingGemma models, which are trained for it, and
-  costs the harrier models up to 7 points (harrier-0.6b on SciFact: 0.755 at full width, 0.683 at 512), enough
+  costs the harrier models up to 8 points (harrier-0.6b on SciFact: 0.755 at full width, 0.683 at 512; on Korean
+  0.647 and 0.568), enough
   that plain full-width retrieval beats rummage with that model. The width belongs with the model, not in a
   constant (`docs/queue.md`, item 8).
 - The full-width harrier scores match MTEB's published ones (SciFact 0.763 and 0.754, NFCorpus 0.372 and 0.361), so
   the harness reproduces them. EmbeddingGemma 2 is far ahead of the others on SciFact and EmbeddingGemma 1 is best on
-  NFCorpus; MIRACL Korean and Chinese for these models are running.
+  NFCorpus. On Korean, EmbeddingGemma 1 with rummage's ranking edges out EmbeddingGemma 2 (0.683 and 0.680).
 
 ## Agent and retriever together
 
@@ -182,6 +209,11 @@ event and puts it on the other speaker, so a matching turn does exist (39% of th
 that turn). LongMemEval's abstention questions, which ask about things never mentioned, are the cleaner test of
 staying silent; they follow.
 
+Read as leads rather than as an answer (the first items recall's thresholds pass, as pointers an agent then opens),
+an evidence turn is among the first 3 for 47% of answerable questions, the first 10 for 49%, and recall shows
+nothing for 23% of the questions whose evidence plain search has in its top 20; ordering the leads newest first
+changes little. Plain search's own top 10 holds the evidence for 80%, so as leads the thresholds cut too much.
+
 ### LongMemEval-S (500 questions, each over its own ~50 chat sessions)
 
 At recall's defaults, counting an injected item as right when it comes from a session that holds the answer:
@@ -221,6 +253,27 @@ LongMemEval's paper used, so these numbers aren't comparable with published lead
   combined in this run (the agent started without the injection).
 - With the history in reach, the reader declines the abstention questions far more often (0.87) than with nothing
   (0.30, where it mostly guesses).
+- Of the agent's 100 wrong answers, 63 came after its searches had shown a turn from every session that holds the
+  answer (reading or reasoning failed, or the right turn of that session wasn't among those shown), 30 after only
+  some of several answer sessions were found (15 multi-session, 14 temporal: questions that need many sessions or
+  their order at once), 3 after none were found, and 4 were answers to unanswerable questions.
+
+## A language-agnostic keyword side
+
+`--engine rummage-keywords` (`bench/keywords.py`) swaps whole-word matching for character trigrams inside words, so
+inflected forms share pieces without a stemmer per language. It ran on SciFact only before the evaluation stopped:
+words alone rise from 0.423 to 0.462 nDCG@10, the hybrid ranking stays at 0.865. Whether it helps inflected
+languages (MIRACL es, fr, de, ru) without hurting CJK was not measured.
+
+## Not run
+
+Stopped on 2026-11-15 before they finished: MIRACL ja (indexed, queries unfinished), MIRACL es, fr, de and ru,
+MIRACL zh for the other models, harrier-0.6b's ranking on Korean, plain dense EmbeddingGemma 2 beyond SciFact,
+qmd's vector mode on SciFact and its `query` mode anywhere (its CPU-only LLM steps would have run past a day), fidx
+on FiQA and the full Korean set, the trigram keywords beyond SciFact, a public cross-lingual set, the
+leads-then-search QA arm, and the check of the Haiku judge against a stronger one. LongMemEval and LoCoMo answers
+here are graded by Claude Haiku with LongMemEval's prompts on LongMemEval-S, not by GPT-4o, so they don't compare
+directly with published end-to-end results such as Agent Zero Memory's (arXiv 2608.29606).
 
 ## First slices
 
