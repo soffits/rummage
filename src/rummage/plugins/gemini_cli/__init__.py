@@ -15,9 +15,8 @@ import os
 from pathlib import Path
 
 from rummage.chats import (
-    AppendOnlyLogs, Turn, iso_time, keep_chars, read_jsonl, session_files, turn_segments)
-from rummage.sources import Plan, Source
-from rummage.store import Item, Segment
+    AppendOnlyLogs, Turn, iso_time, keep_chars, read_jsonl, session_files, ChatSource)
+from rummage.sources import Plan
 
 
 def default_home() -> Path:
@@ -78,7 +77,7 @@ def replay(records) -> tuple[dict, list[dict]]:
     return meta, list(messages.values())
 
 
-class GeminiCliSource(Source):
+class GeminiCliSource(ChatSource):
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
         self.keep_chars = keep_chars(spec)
@@ -118,6 +117,3 @@ class GeminiCliSource(Source):
     def plan(self, known: dict[str, str | None], state: dict) -> Plan:
         files = session_files([self.root], ["*/chats/session-*.jsonl", "*/chats/session-*.json"])
         return self.logs.plan(files, known, state)
-
-    def load(self, item: Item) -> list[Segment]:
-        return turn_segments(item, self.keep_chars)

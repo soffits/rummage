@@ -35,6 +35,8 @@ class Plan:
 class Source:
     name: str
     media = False                  # needs the image encoders
+    reader = 0                     # how the source reads its data: a saved state from another reader is dropped,
+    #                                so everything is planned again once
 
     def __init__(self, name: str, spec: dict, data_dir: Path):
         self.name = name

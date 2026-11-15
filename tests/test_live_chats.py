@@ -226,7 +226,56 @@ def test_reply_notice_and_quote_are_context_not_the_persons_words():
     item = turn_item("chats", "dsh", turn, "Robin")
     assert item.info["context"].startswith("[Replying to a message") and "First, the backup." in item.info["context"]
     assert item.info["session_title"] == "Telegram-Alex" and item.title.endswith("· Telegram-Alex")
-    assert turn_segments(item, 1000)[1].text == "Alex: ok, go ahead"
+    segments = turn_segments(item, 1000)
+    assert segments[1].text == "Alex: ok, go ahead" and "backup" not in segments[1].embed[1]
+    assert "First, the backup." in segments[2].text and segments[2].text.endswith("Alex: ok, go ahead")
+    assert "First, the backup." in segments[2].embed[1]
 
     plain = turn_item("chats", "dsh", Turn("s1", "m2", 1_700_000_000, "Alex", "> quoting myself\nand more"), "S")
-    assert "context" not in plain.info
+    assert "context" not in plain.info and len(turn_segments(plain, 1000)) == 2
+
+    pointer = ("[Replying to a message from the assistant (sent 2026-11-15 15:20 UTC)]\n> 看板这轮有三件事。\n"
+               "(For more context, open session s-9.)\n\n不用经常演练吧")
+    item = turn_item("chats", "dsh", Turn("s1", "m3", 1_700_000_000, "Alex", pointer), "Robin")
+    assert turn_segments(item, 1000)[1].text == "Alex: 不用经常演练吧" and "s-9" in item.info["context"]
+    same_words = turn_item("chats", "dsh", Turn("s1", "m3", 1_700_000_000, "Alex", "不用经常演练吧"), "Robin")
+    assert same_words.fingerprint != item.fingerprint   # a changed quote reads the turn again
+
+
+def test_a_reply_is_found_by_the_message_it_quotes_and_by_its_own_words(tmp_path, monkeypatch, capsys):
+    project, cfg = _setup(tmp_path, monkeypatch)
+    quote = "\n".join(f"> {line}" for line in [
+        "Three things on the board today.", "", "First, the storage download cap: last night's restore drill",
+        "pulled 4 GB. Adding a payment card lifts the cap.", "Second, the nightly notes run.", "Third, cleanup."])
+    cjk = "\n".join(f"> {line}" for line in ["看板这轮有三件事。", "存储下载上限超了，没绑卡的话每天只能下 1 GB。", "其余都已收尾。"])
+    _lines(project / "a.jsonl", [
+        *_turn("u1", f"[Replying to a message from the assistant (sent 2026-11-15 15:20 UTC)]\n{quote}\n\n"
+                     "we don't need drills that often", "Agreed, drills only after changes.", _iso(900)),
+        *_turn("u2", f"[Replying to a message from the assistant (sent 2026-11-15 15:25 UTC)]\n{cjk}\n\n"
+                     "不用经常演练吧", "好，只在改动后演练。", _iso(600)),
+    ])
+    _run(capsys, "--config", str(cfg), "sources", "enable", "claude-code")
+    _run(capsys, "--config", str(cfg), "index", "--no-embed", "-q")
+    for query, ref in (("payment card cap", "#u1"), ("drills often", "#u1"), ("绑卡", "#u2"), ("演练", "#u2")):
+        code, out = _run(capsys, "--config", str(cfg), "search", query, "--words-only", "--json")
+        hits = json.loads(out)["results"]
+        assert hits and hits[0]["ref"].endswith(ref), (query, hits)
+
+
+def test_a_source_that_reads_differently_now_is_planned_again_once(tmp_path, monkeypatch, capsys):
+    from rummage.chats import CHAT_READER
+    from rummage.plugins.claude_code import ClaudeCodeSource
+    from rummage.store import Store
+
+    project, cfg = _setup(tmp_path, monkeypatch)
+    _lines(project / "a.jsonl", _turn("u1", "where is the router config", "In /etc/router.", _iso(600)))
+    _run(capsys, "--config", str(cfg), "sources", "enable", "claude-code")
+    _run(capsys, "--config", str(cfg), "index", "--no-embed", "-q")
+    seen = []
+    plan = ClaudeCodeSource.plan
+    monkeypatch.setattr(ClaudeCodeSource, "plan", lambda self, known, state: seen.append(state) or plan(self, known, state))
+    monkeypatch.setattr(ClaudeCodeSource, "reader", CHAT_READER + 1)
+    _run(capsys, "--config", str(cfg), "index", "--no-embed", "-q")
+    _run(capsys, "--config", str(cfg), "index", "--no-embed", "-q")
+    assert seen[0] == {} and seen[1].get("files")
+    assert Store(tmp_path / "data" / "index.db").state("claude-code")["reader"] == CHAT_READER + 1

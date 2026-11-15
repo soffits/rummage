@@ -1,3 +1,3 @@
 """Local hybrid search with EmbeddingGemma 2 on llama.cpp."""
 
-__version__ = "0.18.0"
+__version__ = "0.19.0"

@@ -19,11 +19,15 @@ from typing import Callable, Iterable, Iterator
 
 from . import text as T
 from .limits import KEEP_CHARS, Cut, record
-from .sources import Plan
+from .sources import Plan, Source
 from .store import Item, Segment
 
 HUMAN_EMBED_CHARS = 1200
 REPLY_EMBED_CHARS = 600
+QUOTE_EMBED_CHARS = 600
+# Bump when chat sources read their logs differently (what counts as a message, how a turn is cut into passages):
+# every chat log is then planned again once, and items whose fingerprint changed are read again.
+CHAT_READER = 1
 
 
 @dataclass
@@ -39,6 +43,7 @@ class Turn:
     project: str = ""        # the working directory or project the session ran in
     model: str = ""          # the model that replied, when the log says
     offset: int = 0          # byte offset of the person's line in its log file (append-only logs)
+    context: str = ""        # notices and the quoted message a chat client put before the person's words
 
     @property
     def reply(self) -> str:
@@ -57,8 +62,10 @@ def people_map(path: str | None) -> dict:
 
 _NOTICE = re.compile(r"^(?:\[[^\]\n]{0,300}\]\s*)+")
 # Leading notices a chat client adds before a person's words (a sender line, "[Replying to ...]"), with the quoted
-# message after them (`> ` lines), up to the person's own words.
-_SCAFFOLD = re.compile(r"\A\[[^\]\n]{0,300}\][ \t]*(?:\n|\Z)(?:\[[^\]\n]{0,300}\][ \t]*(?:\n|\Z)|>[^\n]*(?:\n|\Z)|[ \t]*\n)*")
+# message after them (`> ` lines, and a parenthesized note right under them, such as where to read more), up to
+# the person's own words.
+_SCAFFOLD = re.compile(r"\A\[[^\]\n]{0,300}\][ \t]*(?:\n|\Z)(?:\[[^\]\n]{0,300}\][ \t]*(?:\n|\Z)"
+                       r"|>[^\n]*(?:\n|\Z)(?:\([^\n]{0,300}\)[ \t]*(?:\n|\Z))?|[ \t]*\n)*")
 # A bracket left open where a title was cut off: the start of a notice, not the title's words.
 _CUT_NOTICE = re.compile(r"\s*\[[^\]]*\Z")
 CONTEXT_CHARS = 400
@@ -89,12 +96,15 @@ def said_key(text: str) -> str:
 def turn_item(source: str, prefix: str, turn: Turn, assistant: str) -> Item:
     """The item for a turn. Notices and a quoted message before the person's words are kept as `context` in the
     info, not as their words; a session title cut inside a notice loses the notice."""
-    context, turn.text = split_scaffold(turn.text)
+    turn.context, turn.text = split_scaffold(turn.text)
+    context = turn.context
     turn.session_title = clean_title(turn.session_title)
     when = dt.datetime.fromtimestamp(turn.time, dt.timezone.utc).astimezone()
     body = f"{turn.speaker}: {turn.text}"
     if turn.reply:
         body += f"\n\n{assistant}: {turn.reply}"
+    if context:
+        body += f"\n\n{context}"
     fingerprint = hashlib.sha256(body.encode("utf-8", "replace")).hexdigest()
     title = f"{turn.speaker}, {when:%Y-%m-%d %H:%M}" + (f" · {turn.session_title}" if turn.session_title else "")
     info = {"session": turn.session, "message": turn.message, "speaker": turn.speaker,
@@ -121,14 +131,17 @@ def keep_chars(spec: dict) -> int:
 
 
 def turn_segments(item: Item, keep: int) -> list[Segment]:
-    """A turn's name line and its text: up to `keep` characters of the message and of the reply (a cut is recorded
-    on the item)."""
+    """A turn's name line, its text (up to `keep` characters of the message and of the reply; a cut is recorded on
+    the item) and, when the person replied to a quoted message, that quote as a passage of its own. The quote
+    matches words and meaning like the rest, but a long quote never shares a vector with a short answer, so the
+    answer's own passage stays about what the person said."""
     turn, assistant = item._turn  # type: ignore[attr-defined]
     when = item.info.get("time", "")[:10]
     human = turn.text.strip()
     reply = turn.reply
+    quote = turn.context
     record(item, [Cut(what, keep, len(text), "chars", "keep_chars")
-                  for what, text in (("message", human), ("reply", reply)) if len(text) > keep])
+                  for what, text in (("message", human), ("reply", reply), ("quote", quote)) if len(text) > keep])
     shown = f"{turn.speaker}: {human[:keep]}"
     if reply:
         shown += f"\n\n{assistant}: {reply[:keep]}"
@@ -138,7 +151,24 @@ def turn_segments(item: Item, keep: int) -> list[Segment]:
         model_text += f"\n{assistant}: {reply[:REPLY_EMBED_CHARS]}"
     if T.has_prose(model_text):
         seg.embed = (f"chat with {turn.speaker}, {when}", model_text)
-    return [Segment("name", " ".join(filter(None, [turn.speaker, turn.session_title, turn.session]))), seg]
+    segments = [Segment("name", " ".join(filter(None, [turn.speaker, turn.session_title, turn.session]))), seg]
+    if quote:
+        quoted = Segment("text", f"{turn.speaker} replied to:\n{quote[:keep]}\n\n{turn.speaker}: {human[:keep]}",
+                         loc=turn.message)
+        quote_text = f"{quote[:QUOTE_EMBED_CHARS]}\n{turn.speaker}: {human[:REPLY_EMBED_CHARS]}"
+        if T.has_prose(quote_text):
+            quoted.embed = (f"message {turn.speaker} replied to, {when}", quote_text)
+        segments.append(quoted)
+    return segments
+
+
+class ChatSource(Source):
+    """A source of chat turns: its items are `turn_item`s, read into passages by `turn_segments`."""
+    reader = CHAT_READER
+    keep_chars: int
+
+    def load(self, item: Item) -> list[Segment]:
+        return turn_segments(item, self.keep_chars)
 
 
 def text_blocks(content, kinds: tuple[str, ...] = ("text", "input_text", "output_text")) -> str:

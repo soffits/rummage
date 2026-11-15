@@ -14,9 +14,9 @@ import os
 import sqlite3
 from pathlib import Path
 
-from rummage.chats import Turn, keep_chars, text_blocks, turn_item, turn_segments
-from rummage.sources import Plan, Source
-from rummage.store import Item, Segment
+from rummage.chats import Turn, keep_chars, text_blocks, turn_item, ChatSource
+from rummage.sources import Plan
+from rummage.store import Item
 
 
 def default_db() -> Path:
@@ -26,7 +26,7 @@ def default_db() -> Path:
     return data / "opencode" / "opencode.db"
 
 
-class OpenCodeSource(Source):
+class OpenCodeSource(ChatSource):
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
         self.keep_chars = keep_chars(spec)
@@ -92,6 +92,3 @@ class OpenCodeSource(Source):
             db.close()
         removed = [k for k in known if k.split(":", 1)[0] not in sessions]
         return Plan(upserts, removed, {"since": top}, len(upserts))
-
-    def load(self, item: Item) -> list[Segment]:
-        return turn_segments(item, self.keep_chars)
