@@ -184,3 +184,22 @@ def test_jmap_account_read_only(tmp_path):
         assert set(seen_methods) <= {"Mailbox/get", "Email/query", "Email/get"}   # nothing that changes mail
     finally:
         server.shutdown()
+
+
+def test_imap_xoauth2_sends_the_token(tmp_path):
+    import sys
+    script = tmp_path / "token.py"
+    script.write_text("print('ya29.token')", encoding="utf-8")
+    src = M.MailSource("school", {"imap_host": "x", "imap_user": "me@school.example",
+                                  "oauth_token_command": [sys.executable, str(script)]})
+    sent = {}
+
+    class Auth:
+        def authenticate(self, mechanism, callback):
+            sent["mechanism"], sent["payload"] = mechanism, callback(b"")
+
+        def login(self, *a):
+            raise AssertionError("no password login with a token")
+
+    src.login(Auth())
+    assert sent == {"mechanism": "XOAUTH2", "payload": b"user=me@school.example\x01auth=Bearer ya29.token\x01\x01"}
