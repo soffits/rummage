@@ -29,6 +29,7 @@ from . import config as C
 from . import runtime as R
 from . import envelope as E
 from .search import Searcher
+from .secrets import mask_value
 from .store import Store
 
 
@@ -47,8 +48,13 @@ class Service:
                 self.embedder.start()
             return self.embedder.query(text)
 
+    def shown(self, value: dict, show_secrets: bool) -> dict:
+        if show_secrets or not C.masks_secrets(self.cfg, value.get("source", "")):
+            return value
+        return mask_value(value)
+
     def search(self, q: str, limit: int, sources: list[str], kinds: list[str], words_only: bool,
-               paths: list[str] | None = None, globs: list[str] | None = None) -> dict:
+               paths: list[str] | None = None, globs: list[str] | None = None, show_secrets: bool = False) -> dict:
         started = time.monotonic()
         store = Store(self.cfg.index_path)
         try:
@@ -61,12 +67,13 @@ class Service:
             store.close()
         args = SimpleNamespace(query=q, limit=limit, source=sources, kind=kinds, words_only=words_only,
                                truncate="off", path=paths, glob=globs)
-        return E.build(args, [h.as_dict() for h in hits], [], time.monotonic() - started, index_empty)
+        return E.build(args, [self.shown(h.as_dict(), show_secrets) for h in hits], [], time.monotonic() - started,
+                       index_empty)
 
-    def get(self, ref: str, loc: str | None) -> dict:
+    def get(self, ref: str, loc: str | None, show_secrets: bool = False) -> dict:
         store = Store(self.cfg.index_path)
         try:
-            return store.item(store.find(ref), loc)
+            return self.shown(store.item(store.find(ref), loc), show_secrets)
         finally:
             store.close()
 
@@ -112,6 +119,7 @@ def handler(service: Service):
             if not hmac.compare_digest(auth.encode(), f"Bearer {service.token}".encode()):
                 return self._send(401, {"error": "unauthorized"})
             params = parse_qs(url.query)
+            show = (params.get("show_secrets") or ["0"])[0] in ("1", "true")
             try:
                 if url.path == "/search":
                     q = (params.get("q") or [""])[0].strip()
@@ -120,11 +128,11 @@ def handler(service: Service):
                     limit = max(1, min(100, int((params.get("limit") or ["10"])[0])))
                     return self._send(200, service.search(q, limit, params.get("source", []), params.get("kind", []),
                                                           (params.get("words_only") or ["0"])[0] in ("1", "true"),
-                                                          params.get("path", []), params.get("glob", [])))
+                                                          params.get("path", []), params.get("glob", []), show))
                 if url.path == "/get":
                     ref = (params.get("ref") or [""])[0]
                     try:
-                        return self._send(200, service.get(ref, (params.get("loc") or [None])[0]))
+                        return self._send(200, service.get(ref, (params.get("loc") or [None])[0], show))
                     except LookupError as error:
                         return self._send(404, {"error": str(error)})
                 if url.path == "/status":

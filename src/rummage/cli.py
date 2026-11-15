@@ -167,6 +167,8 @@ def _remote_search(name: str, spec: dict, args) -> dict:
     params += [("path", p) for p in args.path or []] + [("glob", g) for g in args.glob or []]
     if args.words_only:
         params.append(("words_only", "1"))
+    if args.show_secrets:
+        params.append(("show_secrets", "1"))
     return _remote(spec, "/search", params)
 
 
@@ -353,7 +355,8 @@ def cmd_get(cfg: C.Config, args) -> int:
         doc = None
         for spec in cfg.remotes.values():
             try:
-                doc = _remote(spec, "/get", [("ref", args.ref)] + ([("loc", args.loc)] if args.loc else []))
+                doc = _remote(spec, "/get", [("ref", args.ref)] + ([("loc", args.loc)] if args.loc else [])
+                              + ([("show_secrets", "1")] if args.show_secrets else []))
                 break
             except Exception:
                 continue
