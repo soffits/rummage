@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.1
+
+- Fixed: files named like `secrets.py` or `secret-santa.md` were skipped as key files, and code or notes that only mention a private-key header went in by name only. A name with "secret" or "credential" now counts only for config files (`credentials.json`, `secrets.yaml`), and only a real PEM key block (header plus key body) keeps a text file out.
+
 ## 0.16.0
 
 - Claude Code: `/rummage:pause` and `/rummage:resume`, answered by a hook without a model turn; the plugin's hooks
@@ -13,7 +17,6 @@
 
 ## 0.15.1
 
-- Fixed: files named like `secrets.py` or `secret-santa.md` were skipped as key files, and code or notes that only mention a private-key header went in by name only. A name with "secret" or "credential" now counts only for config files (`credentials.json`, `secrets.yaml`), and only a real PEM key block (header plus key body) keeps a text file out.
 - A search, recall or `recent` run inside a git repository that no source reads saw an empty scope and found nothing (0.14.0). It now sees the default scope and says that `rummage project ensure` adds the repository (`scope.note`, and an `add_project` next action in JSON). Agents' hooks still add the repository by themselves.
 
 ## 0.15.0
