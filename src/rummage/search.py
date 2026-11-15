@@ -32,6 +32,7 @@ class Hit:
     words: float
     segment: str | None
     loc: str | None
+    lines: str | None
     snippet: str
     info: dict
 
@@ -135,8 +136,8 @@ class Searcher:
             semantic = best.get(item)
             use_meaning = semantic is not None and (semantic[0] >= z_gate or item not in word_seg)
             seg_id = semantic[2] if use_meaning else word_seg.get(item)
-            seg = self.db.execute("SELECT kind, loc, text FROM segments WHERE id = ?", (seg_id,)).fetchone()
-            seg_kind, loc, seg_text = seg if seg else (None, None, "")
+            seg = self.db.execute("SELECT kind, loc, text, lines FROM segments WHERE id = ?", (seg_id,)).fetchone()
+            seg_kind, loc, seg_text, lines = seg if seg else (None, None, "", None)
             if seg_kind == "name" or not seg_text:
                 other = self.db.execute(
                     "SELECT text FROM segments WHERE item = ? AND kind = 'text' ORDER BY id LIMIT 1", (item,)).fetchone()
@@ -144,7 +145,7 @@ class Searcher:
             hits.append(Hit(
                 id="#" + item_id(row[0], row[5]), source=row[0], kind=row[1], title=row[2] or "", ref=row[3] or "", score=score,
                 z=semantic[0] if semantic else None, cosine=semantic[1] if semantic else None,
-                words=coverage.get(item, 0.0), segment=seg_kind, loc=loc,
+                words=coverage.get(item, 0.0), segment=seg_kind, loc=loc, lines=lines,
                 snippet=T.snippet(seg_text or "", words), info=json.loads(row[4] or "{}")))
         return hits
 

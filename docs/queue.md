@@ -20,10 +20,6 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 [ruggiio](https://github.com/ruggiio/semfind)), [obsidian-rag-mcp](https://github.com/AdrianBodrug/obsidian-rag-mcp),
 [qkb](https://github.com/miguelarios/qkb). Ideas only; no code is taken from them.
 
-5. **Per-script scale.** Our own vault test: Chinese-heavy passages drift into most Chinese queries at z 3–4.
-   Compute the z-score mean per modality *and* script, as DigUp does per modality.
-6. **Line locations.** Results carry `line_start`/`line_end` of the passage, so editors and agents open at the
-   line (fidx locations, DigUp code focus, vecgrep).
 7. **Warm query daemon.** A per-user Unix socket that keeps the text model loaded; the CLI uses it when it's up, so
    searches take milliseconds instead of ~1 s (fidx `serve`, qmd `mcp --http --daemon`).
 8. **Path and glob scoping.** `--path <prefix>` and `--glob` filters on top of `-s SOURCE`, like ripgrep's path

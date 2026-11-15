@@ -178,7 +178,8 @@ class SeafileSource(Source):
         body = body[:X.MAX_CHARS]
         title = PurePosixPath(path).stem
         for start, piece in T.chunks(body):
-            seg = Segment("text", piece, loc=str(start))
+            seg = Segment("text", piece, loc=str(start),
+                          lines=T.line_span(body, start, piece) if kind == "text" else None)
             if T.has_prose(piece):
                 seg.embed_text = document_text(title, piece)
             segments.append(seg)
