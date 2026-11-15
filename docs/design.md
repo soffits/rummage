@@ -18,7 +18,7 @@ words. Sources are plugins: the core reads folders, plugins add services. It is 
   per-modality mean so pictures and passages compare), only segments 2 deviations above the rest count as meaning
   matches, and a word-coverage bonus brings in names, IDs and numbers. Queries made of IDs or long numbers weigh
   words double and meaning half.
-- **Keyword index: SQLite FTS5** with every CJK character stored as its own token, so two-character Chinese words
+- **Keyword index: SQLite FTS5** with every CJK character stored as its own token, so two-character CJK words
   match (qmd's trick; trigram can't match them).
 - **Not adopted:** DigUp itself (a desktop app; its engine is Swift and crawls local folders only), qmd (its
   vector path took minutes per query here), basic-memory (rewrites notes' frontmatter), sqlite-vec (alpha; a

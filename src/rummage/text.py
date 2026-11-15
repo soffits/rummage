@@ -1,8 +1,10 @@
 """Text as keyword search keeps it, and how documents are cut into passages.
 
-FTS5's unicode61 tokenizer splits on spaces and punctuation, which leaves a run of Chinese or Japanese as one long
-"word". Every CJK character is therefore stored as its own token, and a CJK query word becomes a phrase of its
-characters: "宠物" matches "宠 物" anywhere, as qmd does.
+FTS5's unicode61 tokenizer splits on spaces and punctuation, which leaves a run of CJK text (Chinese, Japanese,
+Korean) as one long "word", though these scripts don't put spaces between words (Korean does, but attaches
+particles to them). Every CJK character is therefore stored as its own token, and a CJK query run becomes
+overlapping two-character phrases: "宠物" matches "宠 物" anywhere, and "학교에서" still matches a note that says
+"학교에" through "학교" and "교에", as a share of its pairs. NFKC folds full-width and half-width forms first.
 """
 
 from __future__ import annotations
@@ -36,18 +38,30 @@ def for_index(text: str) -> str:
 
 
 def terms(query: str) -> list[str]:
-    """The content words of a query, normalized: stopwords out, Latin words of one letter out, duplicates out."""
+    """The content words of a query, normalized: stopwords out, Latin words of one letter out, duplicates out. A CJK
+    run longer than two characters becomes its overlapping character pairs."""
     seen: list[str] = []
+
+    def add(word: str) -> None:
+        if word not in seen:
+            seen.append(word)
+
     for word in _WORD.findall(normalize(query)):
         if _CJK_RUN.fullmatch(word):
-            if word not in seen:
-                seen.append(word)
+            if len(word) <= 2:
+                add(word)
+            else:
+                for i in range(len(word) - 1):
+                    add(word[i:i + 2])
             continue
         if word in STOPWORDS or (len(word) < 2 and not word.isdigit()):
             continue
-        if word not in seen:
-            seen.append(word)
+        add(word)
     return seen
+
+
+def cjk_count(text: str) -> int:
+    return len(_CJK_CHAR.findall(text))
 
 
 def fts_pattern(term: str, prefix: bool = False) -> str:
