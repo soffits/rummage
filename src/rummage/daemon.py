@@ -2,7 +2,9 @@
 costs milliseconds instead of a model load. `rummage search` uses it when it answers and loads the model itself
 otherwise.
 
-Protocol: one JSON line per request, `{"embed": "<query>"}`, answered by `{"vector": [...]}` or `{"error": "..."}`.
+Protocol: one JSON line per request, `{"embed": "<query>", "model": "<version>"}`, answered by `{"vector": [...]}`
+or `{"error": "..."}`. The daemon embeds with the model the request names (the index's), loading another when a
+model switch changes it.
 The socket is created with owner-only permissions, in the data directory (or /tmp when that path is too long).
 """
 
@@ -22,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import runtime as R
+from . import config as C
 
 SOCKET_NAME = "query.sock"
 
@@ -38,8 +40,8 @@ def socket_path(data_dir: Path) -> Path:
     return base / f"rummage-{os.getuid() if hasattr(os, 'getuid') else 0}-{key}.sock"
 
 
-def query_vector(data_dir: Path, text: str, timeout: float = 10.0) -> np.ndarray | None:
-    """The query vector from a running daemon, or None when there is none (or it fails)."""
+def query_vector(data_dir: Path, text: str, version: str | None, timeout: float = 10.0) -> np.ndarray | None:
+    """The query vector of model `version` from a running daemon, or None when there is none (or it fails)."""
     path = socket_path(data_dir)
     if not hasattr(socket, "AF_UNIX") or not path.exists():
         return None
@@ -47,7 +49,7 @@ def query_vector(data_dir: Path, text: str, timeout: float = 10.0) -> np.ndarray
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
             conn.settimeout(timeout)
             conn.connect(str(path))
-            conn.sendall(json.dumps({"embed": text}).encode() + b"\n")
+            conn.sendall(json.dumps({"embed": text, "model": version}).encode() + b"\n")
             data = b""
             while not data.endswith(b"\n"):
                 chunk = conn.recv(65536)
@@ -60,29 +62,34 @@ def query_vector(data_dir: Path, text: str, timeout: float = 10.0) -> np.ndarray
         return None
 
 
-def run(runtime: R.Runtime, data_dir: Path, threads: int, idle_minutes: float | None) -> int:
+def run(cfg: C.Config, idle_minutes: float | None) -> int:
+    from .query import QueryModel
+    from .store import Store
+
+    data_dir = cfg.data_dir
     if not hasattr(socket, "AF_UNIX"):
         print("this system has no Unix sockets; searches load the model themselves", file=sys.stderr)
         return 1
     path = socket_path(data_dir)
-    if query_vector(data_dir, "ping") is not None:
+    if path.exists() and _answers(path):
         print(f"a daemon already answers on {path}", file=sys.stderr)
         return 0
     path.unlink(missing_ok=True)
     data_dir.mkdir(parents=True, exist_ok=True)
-    embedder = R.Embedder(runtime, media=False, threads=threads, nice=0, die_with_parent=False)
-    embedder.start()
-    lock = threading.Lock()
+    model = QueryModel(cfg)
+    if cfg.index_path.exists():
+        store = Store(cfg.index_path)
+        try:
+            model.vector(store.model, "ping")
+        finally:
+            store.close()
     last_used = [time.monotonic()]
 
     class Handler(socketserver.StreamRequestHandler):
         def handle(self):
             try:
                 request = json.loads(self.rfile.readline())
-                with lock:
-                    if embedder.process is None or embedder.process.poll() is not None:
-                        embedder.start()
-                    vector = embedder.query(str(request["embed"]))
+                vector = model.vector(request.get("model"), str(request["embed"]))
                 last_used[0] = time.monotonic()
                 reply = {"vector": [round(float(x), 6) for x in vector]}
             except Exception as error:
@@ -112,5 +119,15 @@ def run(runtime: R.Runtime, data_dir: Path, threads: int, idle_minutes: float | 
     finally:
         server.server_close()
         path.unlink(missing_ok=True)
-        embedder.stop()
+        model.close()
     return 0
+
+
+def _answers(path: Path) -> bool:
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.settimeout(2)
+            conn.connect(str(path))
+        return True
+    except OSError:
+        return False

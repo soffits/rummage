@@ -6,7 +6,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 
-from rummage.runtime import DIM, RemoteEmbedder
+from conftest import DIM, PROFILE
+from rummage.runtime import RemoteEmbedder
 
 LIMIT = 2048
 
@@ -52,7 +53,7 @@ def test_dense_text_is_embedded_in_pieces():
     seen = []
     server = _server(seen)
     try:
-        embedder = RemoteEmbedder(f"http://127.0.0.1:{server.server_port}")
+        embedder = RemoteEmbedder(f"http://127.0.0.1:{server.server_port}", PROFILE)
         padding = "Your limit has changed.\n" + " ͏ " * 450  # ~1,400 characters, over 3,000 tokens
         plain = "a short passage"
         assert _tokens(padding) > LIMIT > len(padding)
@@ -70,7 +71,7 @@ def test_ordinary_text_is_sent_whole():
     seen = []
     server = _server(seen)
     try:
-        embedder = RemoteEmbedder(f"http://127.0.0.1:{server.server_port}")
+        embedder = RemoteEmbedder(f"http://127.0.0.1:{server.server_port}", PROFILE)
         text = "word " * 360
         embedder.texts([text])
         assert seen == [text]

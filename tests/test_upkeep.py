@@ -3,7 +3,8 @@ import json
 import numpy as np
 
 from rummage.cli import main
-from rummage.runtime import DIM
+from conftest import DIM, PROFILE
+from rummage import switch
 from rummage.store import Item, Segment, Store
 from rummage.upkeep import facts
 
@@ -20,6 +21,7 @@ def test_facts_pick_dates_times_amounts():
 
 def test_dupes_and_conflicts_reports(tmp_path, capsys):
     store = Store(tmp_path / "data" / "index.db")
+    switch.activate(store, PROFILE)
     lease = _vec(1)
     trip = _vec(2)
     docs = [
@@ -29,7 +31,7 @@ def test_dupes_and_conflicts_reports(tmp_path, capsys):
         ("trip.md", "The train leaves at 9:00 on Friday.", trip),
     ]
     for key, text, vec in docs:
-        store.put(Item("notes", key, "note", key, key), [Segment("text", text, loc="0", vector=vec)])
+        store.put(Item("notes", key, "note", key, key), [Segment("text", text, loc="0", vectors={PROFILE.version: vec})])
     store.commit()
     store.close()
     cfg = tmp_path / "config.toml"

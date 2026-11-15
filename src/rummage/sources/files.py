@@ -13,7 +13,6 @@ from pathlib import Path, PurePosixPath
 
 from .. import extract as X
 from .. import text as T
-from ..runtime import document_text
 from ..store import Item, Segment
 from .folder import FolderSource
 from .markdown import note_segments
@@ -64,6 +63,6 @@ class FilesSource(FolderSource):
             seg = Segment("text", piece, loc=str(start),
                           lines=T.line_span(body, start, piece) if kind == "text" else None)
             if T.has_prose(piece):
-                seg.embed_text = document_text(title, piece)
+                seg.embed = (title, piece)
             segments.append(seg)
         return segments

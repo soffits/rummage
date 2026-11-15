@@ -28,9 +28,8 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 from . import config as C
-from . import runtime as R
 from . import envelope as E
-from .query import FALLBACK_ERRORS, reason_for
+from .query import FALLBACK_ERRORS, QueryModel, reason_for
 from .search import Searcher
 from .when import understand
 from .secrets import mask_value
@@ -57,16 +56,9 @@ class Service:
         self.cfg = cfg
         self.token = token
         self.scoped = scoped or []
-        self.embedder = R.Embedder(R.Runtime(cfg.data_dir, cfg.llama_server), media=False, threads=cfg.threads,
-                                   nice=0, die_with_parent=False)
-        self.embed_lock = threading.Lock()
+        self.model = QueryModel(cfg)
         self.last_index: dict = {}
 
-    def query_vector(self, text: str):
-        with self.embed_lock:
-            if self.embedder.process is None or self.embedder.process.poll() is not None:
-                self.embedder.start()
-            return self.embedder.query(text)
 
     def shown(self, value: dict, show_secrets: bool) -> dict:
         if show_secrets or not C.masks_secrets(self.cfg, value.get("source", "")):
@@ -78,15 +70,15 @@ class Service:
         started = time.monotonic()
         store = Store(self.cfg.index_path)
         try:
-            store.check_version()
+            model = store.model
             index_empty = store.item_count() == 0
             vector, degraded = None, None
             if not (words_only or index_empty):
                 try:
-                    vector = self.query_vector(q)
+                    vector = self.model.vector(model, q)
                 except FALLBACK_ERRORS as error:
                     degraded = reason_for(error)
-            hits = Searcher(store, sources or None, paths, globs).search(q, vector, limit=limit, when=understand(q),
+            hits = Searcher(store, sources or None, paths, globs, model=model).search(q, vector, limit=limit, when=understand(q),
                                                                             kinds=set(kinds) or None)
         finally:
             store.close()
@@ -201,7 +193,6 @@ def run(cfg: C.Config, host: str, port: int, token_file: str | None, reindex_min
         return 2
     service = Service(cfg, token, scoped_tokens(cfg))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
-    service.embedder.start()
     if reindex_minutes:
         threading.Thread(target=service.reindex_forever, args=(reindex_minutes,), daemon=True).start()
     server = ThreadingHTTPServer((host, port), handler(service))
@@ -211,5 +202,5 @@ def run(cfg: C.Config, host: str, port: int, token_file: str | None, reindex_min
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        service.embedder.stop()
+        service.model.close()
     return 0

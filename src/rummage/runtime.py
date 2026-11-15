@@ -1,8 +1,8 @@
-"""EmbeddingGemma 2 on llama.cpp: the pinned files, and a llama-server process that lives as long as one run.
+"""Embedders: a model profile (`models.py`) run by a llama-server child that lives as long as one run, or by an
+OpenAI-compatible endpoint someone else runs.
 
-The vectors depend on the model files, the llama.cpp build, the prompts and the dimension. All of that is pinned here,
-and `VECTOR_VERSION` names the combination: an index made with another version must be embedded again. A llama.cpp
-update that reproduces the stored reference vectors (`rummage doctor`) keeps the version.
+The llama.cpp build is pinned here; the model files are pinned by their profiles. A llama.cpp update that reproduces
+a profile's reference vectors (`rummage doctor`) keeps the vectors' version.
 """
 
 from __future__ import annotations
@@ -22,37 +22,13 @@ import time
 import zipfile
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 from . import net
+from .models import Pinned, Profile
 
-MODEL_REPO = "ggml-org/embeddinggemma-2-GGUF"
-MODEL_REVISION = "bfcd298762cc34d0357ece5ebdd31791a3a374d8"
-
-
-@dataclass(frozen=True)
-class Pinned:
-    name: str
-    url: str
-    size: int
-    sha256: str
-
-
-TEXT_MODEL = Pinned(
-    "embeddinggemma-2-Q8_0.gguf",
-    f"https://huggingface.co/{MODEL_REPO}/resolve/{MODEL_REVISION}/embeddinggemma-2-Q8_0.gguf",
-    309_855_456,
-    "2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135",
-)
-MEDIA_MODEL = Pinned(
-    "mmproj-embeddinggemma-2-Q8_0.gguf",
-    f"https://huggingface.co/{MODEL_REPO}/resolve/{MODEL_REVISION}/mmproj-embeddinggemma-2-Q8_0.gguf",
-    554_821_024,
-    "c4a8a52691ecef40618438928bdf9e68379b854e24166f292592353db0aab64f",
-)
 LLAMA_TAG = "b12387"
 _RELEASE = f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_TAG}/llama-{LLAMA_TAG}-bin-"
 
@@ -77,16 +53,6 @@ LLAMA_BUILDS = {
                                  "d77e3fae0f188e2232b481eda455fca3b43f869ef3a6589e3499964f8df62358"),
 }
 SERVER_NAME = "llama-server.exe" if platform.system() == "Windows" else "llama-server"
-
-# Matryoshka cut: 512 of 768 dimensions keeps nearly all quality (model card: MTEB multilingual 61.17 vs 61.36).
-DIM = 512
-VECTOR_VERSION = f"eg2-q8-{MODEL_REVISION[:8]}-d{DIM}-v1"
-
-QUERY_PREFIX = "task: search result | query: "
-
-
-def document_text(title: str | None, text: str) -> str:
-    return f"title: {title.strip() if title and title.strip() else 'none'} | text: {text}"
 
 
 class RuntimeMissing(RuntimeError):
@@ -118,17 +84,25 @@ class Runtime:
     def model_path(self, pinned: Pinned) -> Path:
         return self.models / pinned.name
 
-    def missing(self, media: bool) -> list[str]:
-        missing = []
-        if not self.server_binary.exists():
-            missing.append(str(self.server_binary))
-        for pinned in (TEXT_MODEL, MEDIA_MODEL) if media else (TEXT_MODEL,):
-            if not self.model_path(pinned).exists():
-                missing.append(str(self.model_path(pinned)))
-        return missing
+    def files(self, profile: Profile, media: bool) -> list[Path]:
+        """The model files `profile` runs with (the media projector too when `media`)."""
+        if not profile.local:
+            return []
+        if profile.path:
+            return [Path(profile.path).expanduser()]
+        return [self.model_path(p) for p in (profile.gguf, profile.mmproj if media else None) if p]
 
-    def setup(self, media: bool, log=print) -> None:
-        """Fetches whatever is missing, checks each file's size and SHA-256, and drops older llama.cpp builds."""
+    def missing(self, profile: Profile, media: bool) -> list[str]:
+        if not profile.local:
+            return []
+        missing = [] if self.server_binary.exists() else [str(self.server_binary)]
+        return missing + [str(f) for f in self.files(profile, media) if not f.exists()]
+
+    def setup(self, profile: Profile, media: bool, log=print) -> None:
+        """Fetches whatever `profile` needs and is missing, checks each file's size and SHA-256, and drops older
+        llama.cpp builds."""
+        if not profile.local:
+            return
         self.models.mkdir(parents=True, exist_ok=True)
         if not self._llama_server and not self.server_binary.exists():
             build = LLAMA_BUILDS.get((platform.system(), platform.machine()))
@@ -155,14 +129,13 @@ class Runtime:
         for old in self.root.glob("llama-b*"):
             if old != self.llama_dir and old.is_dir():
                 shutil.rmtree(old)
-        for pinned in (TEXT_MODEL, MEDIA_MODEL) if media else (TEXT_MODEL,):
-            target = self.model_path(pinned)
-            if not target.exists():
-                _download(pinned, target, log)
+        for pinned in (profile.gguf, profile.mmproj if media else None):
+            if pinned and not self.model_path(pinned).exists():
+                _download(pinned, self.model_path(pinned), log)
 
 
 def _download(pinned: Pinned, target: Path, log) -> None:
-    log(f"downloading {pinned.name} ({pinned.size / 1e6:.0f} MB)")
+    log(f"downloading {pinned.name}" + (f" ({pinned.size / 1e6:.0f} MB)" if pinned.size else ""))
     partial = target.with_name(target.name + ".part")
     digest = hashlib.sha256()
     request = urllib.request.Request(pinned.url)
@@ -171,7 +144,7 @@ def _download(pinned: Pinned, target: Path, log) -> None:
             digest.update(chunk)
             out.write(chunk)
     size = partial.stat().st_size
-    if size != pinned.size or digest.hexdigest() != pinned.sha256:
+    if (pinned.size is not None and size != pinned.size) or digest.hexdigest() != pinned.sha256:
         partial.unlink()
         raise RuntimeMissing(f"{pinned.name}: got {size} bytes, sha256 {digest.hexdigest()}; expected the pinned file")
     partial.rename(target)
@@ -198,30 +171,13 @@ SPECIAL_TOKENS = 2
 
 
 class Embedder:
-    """A llama-server child bound to 127.0.0.1 on a free port, started for one run and stopped with it.
+    """Embeds texts (and pictures) with one model profile. Subclasses say where the model runs."""
 
-    `media`: also load the image and audio encoders (1.2 GB resident instead of ~0.3 GB).
-    """
-
-    def __init__(self, runtime: Runtime, media: bool, threads: int = 2, nice: int = 10, log_path: Path | None = None,
-                 die_with_parent: bool = True, ready_timeout: float = 120):
-        missing = runtime.missing(media)
-        if missing:
-            raise RuntimeMissing("missing " + ", ".join(missing) + ": run `rummage setup`")
-        self.runtime = runtime
-        self.media = media
-        self.threads = threads
-        self.nice = nice
-        self.log_path = log_path
-        # PR_SET_PDEATHSIG follows the starting *thread*: a server that starts it from a request thread opts out.
-        self.die_with_parent = die_with_parent
-        self.ready_timeout = ready_timeout
-        self.port = 0
-        self.process: subprocess.Popen | None = None
-        self.marker: str | None = None
-        # A non-causal input must fit one micro-batch. `texts` measures what could be longer than that and embeds it
-        # in pieces, so no character count has to promise a token count.
-        self.max_tokens = 2048
+    profile: Profile
+    media: bool = False
+    marker: str | None = None
+    process: subprocess.Popen | None = None
+    threads: int = 0
 
     def __enter__(self) -> "Embedder":
         self.start()
@@ -231,18 +187,146 @@ class Embedder:
         self.stop()
 
     def start(self) -> None:
+        raise NotImplementedError
+
+    def stop(self) -> None:
+        pass
+
+    @property
+    def endpoint(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def max_tokens(self) -> int:
+        return self.profile.max_tokens
+
+    def _headers(self) -> dict:
+        return {"Content-Type": "application/json"}
+
+    def _request(self, url: str, body: dict | None = None, timeout: float = 600) -> object:
+        request = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None,
+                                         headers=self._headers())
+        try:
+            with net.urlopen(request, timeout=timeout) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as error:
+            raise EmbedError(f"{url}: HTTP {error.code} {error.read()[:300]!r}") from None
+
+    def token_count(self, text: str) -> int | None:
+        """The server's token count, or None when it can't count (an endpoint without `/tokenize`)."""
+        return None
+
+    def _pieces(self, text: str) -> list[tuple[str, int]]:
+        """`text` as pieces that each fit one micro-batch, with their weights. A token is at least a byte long
+        (unknown characters fall back to bytes), so a text of few enough bytes needs no measuring."""
+        if len(text.encode("utf-8")) + SPECIAL_TOKENS <= self.max_tokens:
+            return [(text, 1)]
+        return self._fit(text)
+
+    def _fit(self, text: str) -> list[tuple[str, int]]:
+        """A text that is too long is halved, at a space near the middle when there is one, until every piece fits:
+        by the server's token count, or by size where it can't count (no tokenizer puts fewer than two bytes in a
+        token on average)."""
+        tokens = self.token_count(text)
+        size = tokens if tokens is not None else len(text.encode("utf-8")) // 2
+        if size + SPECIAL_TOKENS <= self.max_tokens or len(text) < 2:
+            return [(text, max(size, 1))]
+        middle = len(text) // 2
+        cut = text.find(" ", middle, len(text) * 3 // 4)
+        cut = middle if cut < 0 else cut + 1
+        return self._fit(text[:cut]) + self._fit(text[cut:])
+
+    def _embed(self, inputs: list[str]) -> np.ndarray:
+        body: dict = {"input": inputs}
+        if self.profile.api_model:
+            body["model"] = self.profile.api_model
+        out = self._request(self.endpoint, body)
+        return np.array([r["embedding"] for r in sorted(out["data"], key=lambda d: d["index"])], np.float32)
+
+    def texts(self, texts: list[str]) -> np.ndarray:
+        """One normalized row per text, cut to the profile's dimensions. A text longer than a micro-batch is
+        embedded in pieces and its vector is the weighted mean of theirs."""
+        if not texts:
+            return np.zeros((0, self.profile.dim or 0), np.float32)
+        pieces = [(n, piece, weight) for n, text in enumerate(texts) for piece, weight in self._pieces(text)]
+        rows = self.cut(self._embed([piece for _, piece, _ in pieces]))
+        if len(pieces) == len(texts):
+            return rows
+        merged = np.zeros((len(texts), rows.shape[1]), np.float32)
+        for (n, _, weight), row in zip(pieces, rows):
+            merged[n] += weight * row
+        return self.cut(merged)
+
+    def query(self, text: str) -> np.ndarray:
+        return self.texts([self.profile.query_text(text)])[0]
+
+    def image(self, data: bytes) -> np.ndarray:
+        """`data`: PNG or JPEG bytes (what stb_image reads; flatten transparency first)."""
+        if not self.media or not self.marker:
+            raise EmbedError("this embedder was started without the media encoders")
+        out = self._request(self.endpoint.rsplit("/v1/", 1)[0] + "/embeddings", {"content": {
+            "prompt_string": self.marker, "multimodal_data": [base64.b64encode(data).decode()]}})
+        return self.cut(np.array([out[0]["embedding"][0]], np.float32))[0]
+
+    def cut(self, rows: np.ndarray) -> np.ndarray:
+        if self.profile.dim:
+            rows = rows[:, : self.profile.dim]
+        norms = np.linalg.norm(rows, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        return rows / norms
+
+
+class LocalEmbedder(Embedder):
+    """A llama-server child bound to 127.0.0.1 on a free port, started for one run and stopped with it.
+
+    `media`: also load the profile's image and audio encoders.
+    """
+
+    def __init__(self, runtime: Runtime, profile: Profile, media: bool = False, threads: int = 2, nice: int = 10,
+                 log_path: Path | None = None, die_with_parent: bool = True, ready_timeout: float = 120):
+        media = media and profile.media
+        missing = runtime.missing(profile, media)
+        if missing:
+            raise RuntimeMissing("missing " + ", ".join(missing) + ": run `rummage setup`")
+        self.runtime = runtime
+        self.profile = profile
+        self.media = media
+        self.threads = threads
+        self.nice = nice
+        self.log_path = log_path
+        # PR_SET_PDEATHSIG follows the starting *thread*: a server that starts it from a request thread opts out.
+        self.die_with_parent = die_with_parent
+        self.ready_timeout = ready_timeout
+        self.port = 0
+        self.process = None
+        self.marker = None
+
+    @property
+    def base(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    @property
+    def endpoint(self) -> str:
+        return self.base + "/v1/embeddings"
+
+    def token_count(self, text: str) -> int:
+        return len(self._request(self.base + "/tokenize", {"content": text})["tokens"])
+
+    def start(self) -> None:
         self.port = _free_port()
         binary = self.runtime.server_binary
+        files = self.runtime.files(self.profile, self.media)
+        # A non-causal input must fit one micro-batch: `texts` embeds what could be longer than that in pieces.
+        n = self.max_tokens
         args = [
-            str(binary),
-            "-m", str(self.runtime.model_path(TEXT_MODEL)),
-            "--embeddings", "--pooling", "mean",
+            str(binary), "-m", str(files[0]),
+            "--embeddings", "--pooling", self.profile.pooling,
             "-t", str(self.threads), "-tb", str(self.threads),
-            "-c", str(self.max_tokens * 2), "-b", str(self.max_tokens), "-ub", str(self.max_tokens), "-np", "2",
+            "-c", str(n * 2), "-b", str(n), "-ub", str(n), "-np", "2",
             "--host", "127.0.0.1", "--port", str(self.port), "--no-webui",
         ]
         if self.media:
-            args += ["--mmproj", str(self.runtime.model_path(MEDIA_MODEL))]
+            args += ["--mmproj", str(files[1])]
         if self.nice and shutil.which("nice"):
             args = ["nice", "-n", str(self.nice), *args]
         env = dict(os.environ)
@@ -269,11 +353,7 @@ class Embedder:
                 raise EmbedError(f"llama-server did not become ready in {self.ready_timeout:g} s")
             time.sleep(0.05)
         if self.media:
-            self.marker = self._get("/props").get("media_marker")
-
-    @property
-    def base(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
+            self.marker = self._request(f"{self.base}/props").get("media_marker")
 
     def stop(self) -> None:
         if self.process and self.process.poll() is None:
@@ -285,126 +365,95 @@ class Embedder:
                 self.process.wait()
         self.process = None
 
-    def _get(self, path: str) -> dict:
-        with net.urlopen(f"{self.base}{path}", timeout=30) as r:
-            return json.load(r)
 
-    def _post(self, path: str, body: dict, timeout: float = 600) -> object:
-        request = urllib.request.Request(
-            f"{self.base}{path}", data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        try:
-            with net.urlopen(request, timeout=timeout) as r:
-                return json.load(r)
-        except urllib.error.HTTPError as error:
-            raise EmbedError(f"{path}: HTTP {error.code} {error.read()[:300]!r}") from None
-
-    def token_count(self, text: str) -> int:
-        return len(self._post("/tokenize", {"content": text})["tokens"])
-
-    def _pieces(self, text: str) -> list[tuple[str, int]]:
-        """`text` as pieces that each fit one micro-batch, with their token counts. A token is at least a byte long
-        (unknown characters fall back to bytes), so a text of few enough bytes needs no measuring."""
-        if len(text.encode("utf-8")) + SPECIAL_TOKENS <= self.max_tokens:
-            return [(text, 1)]
-        return self._fit(text)
-
-    def _fit(self, text: str) -> list[tuple[str, int]]:
-        """The server counts the tokens; a text that is too long is halved, at a space near the middle when there
-        is one, until every piece fits."""
-        tokens = self.token_count(text)
-        if tokens + SPECIAL_TOKENS <= self.max_tokens:
-            return [(text, tokens)]
-        middle = len(text) // 2
-        cut = text.find(" ", middle, len(text) * 3 // 4)
-        cut = middle if cut < 0 else cut + 1
-        return self._fit(text[:cut]) + self._fit(text[cut:])
-
-    def texts(self, texts: list[str]) -> np.ndarray:
-        """One normalized DIM-wide float32 row per text. A text longer than a micro-batch is embedded in pieces and
-        its vector is the token-weighted mean of theirs."""
-        if not texts:
-            return np.zeros((0, DIM), np.float32)
-        pieces = [(n, piece, weight) for n, text in enumerate(texts) for piece, weight in self._pieces(text)]
-        out = self._post("/v1/embeddings", {"input": [piece for _, piece, _ in pieces]})
-        rows = _cut(np.array([r["embedding"] for r in sorted(out["data"], key=lambda d: d["index"])], np.float32))
-        if len(pieces) == len(texts):
-            return rows
-        merged = np.zeros((len(texts), rows.shape[1]), np.float32)
-        for (n, _, weight), row in zip(pieces, rows):
-            merged[n] += weight * row
-        return _cut(merged)
-
-    def query(self, text: str) -> np.ndarray:
-        return self.texts([QUERY_PREFIX + text])[0]
-
-    def image(self, data: bytes) -> np.ndarray:
-        """`data`: PNG or JPEG bytes (what stb_image reads; flatten transparency first)."""
-        if not self.media or not self.marker:
-            raise EmbedError("this embedder was started without the media encoders")
-        out = self._post("/embeddings", {"content": {
-            "prompt_string": self.marker, "multimodal_data": [base64.b64encode(data).decode()]}})
-        return _cut(np.array([out[0]["embedding"][0]], np.float32))[0]
+def endpoint_for(url: str) -> str:
+    """The embeddings URL of an OpenAI-compatible base (`.../v1`) or of a llama-server's root."""
+    url = url.rstrip("/")
+    if url.endswith("/embeddings"):
+        return url
+    return url + ("/embeddings" if url.endswith("/v1") else "/v1/embeddings")
 
 
 class RemoteEmbedder(Embedder):
-    """A `llama-server` someone else runs (a GPU machine, say) with the same pinned model, used like the local one.
-    Whether its vectors agree with the index's is checked by the caller against the reference vectors."""
+    """An embeddings endpoint someone else runs: the profile's own `url`, or an accelerator (a GPU machine running
+    the same model as a local profile; whether its vectors agree is checked against the reference vectors)."""
 
-    def __init__(self, url: str, threads: int = 0, timeout: float = 5):
+    def __init__(self, url: str, profile: Profile, timeout: float = 5):
         self.url = url.rstrip("/")
-        self.threads = threads
+        self.profile = profile
         self.timeout = timeout
         self.process = None
-        self.marker: str | None = None
-        self.max_tokens = 2048
+        self.marker = None
         self.media = False
+        self.threads = 0
+        self._tokenize = True
 
     @property
-    def base(self) -> str:
-        return self.url
+    def endpoint(self) -> str:
+        return endpoint_for(self.url)
+
+    @property
+    def root(self) -> str:
+        return self.endpoint.rsplit("/v1/", 1)[0] if "/v1/" in self.endpoint else self.url
+
+    def _headers(self) -> dict:
+        headers = {"Content-Type": "application/json"}
+        key = api_key(self.profile)
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        return headers
+
+    def token_count(self, text: str) -> int | None:
+        if self._tokenize:
+            try:
+                return len(self._request(self.root + "/tokenize", {"content": text}, timeout=30)["tokens"])
+            except (EmbedError, OSError, KeyError, ValueError, urllib.error.URLError):
+                self._tokenize = False
+        return None
 
     def start(self) -> None:
+        """Checks that it answers: one tiny embedding. A llama-server also says whether it embeds pictures."""
+        body: dict = {"input": ["ok"]}
+        if self.profile.api_model:
+            body["model"] = self.profile.api_model
         try:
-            with net.urlopen(f"{self.url}/health", timeout=self.timeout) as r:
-                if r.status != 200:
-                    raise EmbedError(f"{self.url}: not ready (HTTP {r.status})")
-            self.marker = self._get("/props").get("media_marker")
-        except (urllib.error.URLError, OSError, ValueError) as error:
+            self._request(self.endpoint, body, timeout=self.timeout)["data"][0]["embedding"]
+        except (urllib.error.URLError, OSError, ValueError, KeyError, IndexError, TypeError) as error:
             raise EmbedError(f"{self.url}: {error}") from None
-        self.media = bool(self.marker)
-
-    def stop(self) -> None:
-        pass
-
-
-REFERENCE_TEXTS = [
-    "task: search result | query: a cat drinking tea",
-    "title: none | text: 今天下雨了，我们在家看电影。",
-    "title: invoice | text: Order 4815162342 shipped on 2026-11-02.",
-]
-# Vectors from another llama.cpp build or machine count as the same when every reference text agrees this well.
-REFERENCE_COSINE = 0.999
+        try:
+            self.marker = self._request(self.root + "/props", timeout=self.timeout).get("media_marker")
+        except (EmbedError, urllib.error.URLError, OSError, ValueError, AttributeError):
+            self.marker = None
+        self.media = bool(self.marker) and self.profile.media
 
 
-def reference_agreement(embedder: Embedder, stored: list) -> float:
-    """The lowest cosine between this embedder's reference vectors and the stored ones."""
-    fresh = embedder.texts(REFERENCE_TEXTS)
-    stored = np.array(stored, np.float32)
-    return float(((fresh * stored).sum(axis=1) / np.linalg.norm(stored, axis=1)).min())
+def api_key(profile: Profile) -> str | None:
+    if profile.api_key_env:
+        return os.environ.get(profile.api_key_env) or None
+    if profile.api_key_file:
+        return Path(profile.api_key_file).expanduser().read_text(encoding="utf-8").strip()
+    return None
 
 
-def _cut(rows: np.ndarray) -> np.ndarray:
-    rows = rows[:, :DIM]
-    norms = np.linalg.norm(rows, axis=1, keepdims=True)
-    norms[norms == 0] = 1
-    return rows / norms
+def reference_agreement(embedder: Embedder, expected) -> float:
+    """The lowest cosine between this embedder's reference vectors and the expected ones."""
+    fresh = embedder.texts(embedder.profile.reference_texts())
+    expected = np.array(expected, np.float32)
+    if expected.shape != fresh.shape:
+        return 0.0
+    return float(((fresh * expected).sum(axis=1) / np.linalg.norm(expected, axis=1)).min())
+
+
+def open_embedder(runtime: Runtime, profile: Profile, media: bool = False, **kwargs) -> Embedder:
+    """An embedder for `profile`, not started: a llama-server child for a local GGUF, its endpoint otherwise."""
+    if profile.local:
+        return LocalEmbedder(runtime, profile, media, **kwargs)
+    return RemoteEmbedder(profile.url, profile, timeout=30)
 
 
 @contextlib.contextmanager
-def embedder(runtime: Runtime, media: bool, **kwargs):
-    e = Embedder(runtime, media, **kwargs)
+def embedder(runtime: Runtime, profile: Profile, media: bool = False, **kwargs):
+    e = open_embedder(runtime, profile, media, **kwargs)
     e.start()
     try:
         yield e
