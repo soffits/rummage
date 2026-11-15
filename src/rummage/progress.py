@@ -161,8 +161,9 @@ def _running(part: dict | None) -> bool:
 def _vectors(read: dict, embed: dict, embedding: bool) -> tuple[int, int]:
     """Passages still without a vector of the active model, and all passages: from the running embed, else from
     whichever run counted last."""
+    # On a tie (a coarse clock, as on Windows) the embed counted last: it runs after the read.
     parts = [embed] if embedding else sorted((p for p in (read, embed) if p.get("vectors_at")),
-                                             key=lambda p: p["vectors_at"], reverse=True)
+                                             key=lambda p: (p["vectors_at"], p is embed), reverse=True)
     for part in parts:
         counts = part.get("vectors") or {}
         if counts:

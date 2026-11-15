@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.2
+
+- Fixed: the index summary could read a finished index as paused when a read and an embed stamped their vector counts at the same clock tick (a coarse clock, as on Windows). The embed's count now wins a tie.
+
 ## 0.16.1
 
 - Fixed: files named like `secrets.py` or `secret-santa.md` were skipped as key files, and code or notes that only mention a private-key header went in by name only. A name with "secret" or "credential" now counts only for config files (`credentials.json`, `secrets.yaml`), and only a real PEM key block (header plus key body) keeps a text file out.
