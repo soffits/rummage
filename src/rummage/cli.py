@@ -830,7 +830,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("watch", help="keep the index current as files change")
     p.add_argument("-s", "--source", action="append", help="only this source (repeatable)")
     p.add_argument("--poll-minutes", type=float, default=10, help="how often to re-plan every source (those without watched folders only get this)")
-    p.add_argument("--settle-seconds", type=float, default=3, help="wait for changes to settle before indexing")
+    p.add_argument("--settle-seconds", type=float, default=3,
+                   help="read a batch once its folders were quiet this long (at most 4x this while they keep changing)")
     p.set_defaults(func=cmd_watch)
 
     p = sub.add_parser("mcp", help="a stdio MCP server with read-only search, get and status tools (needs rummage[mcp])")
