@@ -22,9 +22,20 @@ def _run(capsys, *argv):
     return code, capsys.readouterr().out
 
 
+def _pdf(password: str | None = None) -> bytes:
+    from pypdf import PdfWriter
+    writer = PdfWriter()
+    writer.add_blank_page(100, 100)
+    if password is not None:
+        writer.encrypt(user_password=password, owner_password="owner", algorithm="AES-256")
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
 def _folder(tmp_path):
-    """A notes folder with a long note, a zip with many names, a file over the text byte limit, a dotfile, and a
-    note holding a token; and a config with small limits."""
+    """A notes folder with a long note, a zip with many names, a file over the text byte limit, a dotfile, a note
+    holding a token and a PDF that needs a password; and a config with small limits."""
     root = tmp_path / "docs"
     root.mkdir()
     (root / "long.txt").write_text("alpha beta gamma. " * 400, encoding="utf-8")       # 7200 chars
@@ -34,6 +45,7 @@ def _folder(tmp_path):
     (root / "huge.log").write_text("y" * 9000, encoding="utf-8")
     (root / ".secret-notes.md").write_text("hidden", encoding="utf-8")
     (root / "keys.md").write_text(f"deploy key for the server: {TOKEN}\n", encoding="utf-8")
+    (root / "locked-statement.pdf").write_bytes(_pdf(password="open sesame"))
     cfg = tmp_path / "config.toml"
     cfg.write_text(
         f"data_dir = '{tmp_path / 'data'}'\n[sources.docs]\ntype = 'files'\nroot = '{root}'\nmax_chars = 1000\n"
@@ -43,7 +55,8 @@ def _folder(tmp_path):
 
 def test_partial_items_are_recorded_shown_and_counted(tmp_path, capsys):
     root, cfg = _folder(tmp_path)
-    assert _run(capsys, "--config", str(cfg), "index", "--no-embed", "-q")[0] == 0
+    assert _run(capsys, "--config", str(cfg), "index", "--no-embed", "-q") == (0, "")
+    assert capsys.readouterr().err == ""
 
     code, out = _run(capsys, "--config", str(cfg), "search", "alpha gamma", "--words-only", "--json")
     doc = json.loads(out)
@@ -59,6 +72,11 @@ def test_partial_items_are_recorded_shown_and_counted(tmp_path, capsys):
     names = next(h for h in json.loads(out)["results"] if h["ref"] == "bundle.zip")
     assert names["partial"][0] == {"what": "archive names", "kept": 2, "total": 5, "unit": "names",
                                         "setting": "sources.docs.max_archive_names"}
+
+    code, out = _run(capsys, "--config", str(cfg), "search", "locked statement", "--words-only", "--json")
+    locked = next(h for h in json.loads(out)["results"] if h["ref"] == "locked-statement.pdf")
+    assert locked["partial"] == [{"what": "PDF text", "kept": 0, "total": None, "unit": "pages",
+                                  "reason": "it needs a password to open"}]
 
     code, out = _run(capsys, "--config", str(cfg), "get", "docs:huge.log", "--json")
     got = json.loads(out)
@@ -84,11 +102,11 @@ def test_partial_items_are_recorded_shown_and_counted(tmp_path, capsys):
     code, out = _run(capsys, "--config", str(cfg), "status", "--json")
     status = json.loads(out)
     entry = status["sources"]["docs"]
-    assert entry["partial_items"] == 3 and entry["name_only_items"] == 1
-    assert "sources.docs.max_chars" in entry["settings"]
+    assert entry["partial_items"] == 4 and entry["name_only_items"] == 2
+    assert "sources.docs.max_chars" in entry["settings"] and None not in entry["settings"]
     assert entry["left_out"]["excluded"]["count"] == 1
     assert entry["left_out"]["excluded"]["examples"] == [".secret-notes.md"]
-    assert any("3 items indexed only in part" in n for n in status["notes"])
+    assert any("4 items indexed only in part" in n for n in status["notes"])
     assert any("1 paths excluded by sources.docs.exclude" in n for n in status["notes"])
 
 
@@ -176,10 +194,4 @@ def test_repaired_pdfs_print_nothing(caplog):
 
 
 def test_aes_encrypted_pdfs_are_read():
-    from pypdf import PdfWriter
-    writer = PdfWriter()
-    writer.add_blank_page(100, 100)
-    writer.encrypt(user_password="", owner_password="owner", algorithm="AES-256")
-    buf = io.BytesIO()
-    writer.write(buf)
-    assert X.pdf_pages(io.BytesIO(buf.getvalue()), Limits.of({}))[1] == 1
+    assert X.pdf_pages(io.BytesIO(_pdf(password="")), Limits.of({}))[1] == 1

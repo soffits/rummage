@@ -76,9 +76,10 @@ def note_hidden(doc: dict, results: list[dict], show_command, original_for=origi
                         "command": show_command})
     if partial:
         first = partial[0]
+        setting = next((p["setting"] for h in partial for p in h["partial"] if p.get("setting")), None)
+        lift = f" ({setting} and similar settings lift the limits)" if setting else ""
         actions.append({"intent": "read_original",
-                        "reason": f"{len(partial)} results were indexed only in part ({first['partial'][0]['setting']} "
-                                  "and similar settings lift the limits); read the whole original.",
+                        "reason": f"{len(partial)} results were indexed only in part{lift}; read the whole original.",
                         "command": original_for(first["id"])})
     return doc
 
