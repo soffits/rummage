@@ -66,6 +66,7 @@ rummage search "query"     # --json, -s SOURCE, -k KIND, -n LIMIT, --words-only 
 rummage get "#3f2a9c"     # a result's text by its id (or ref); --loc for one passage, --head N
 rummage status --json      # counts, last run per source, failures
 rummage doctor             # runtime files, vector version, freshness; exit 1 on a problem
+rummage daemon --idle-minutes 30   # keep the query model loaded; searches use it automatically
 rummage serve --token-file F --reindex-minutes 60   # HTTP search API for an index kept on a server
 ```
 
@@ -107,7 +108,8 @@ A plugin of your own is a class registered in the `rummage.sources` entry-point 
 ## Speed
 
 On a desktop CPU (Intel i5-13400, 2 threads): ~1.35 s per passage of ~500 tokens while indexing, ~2 s per picture,
-and a search takes about 1 s to load the text model plus a few milliseconds. `--words-only` needs no model at all.
+and a search takes about 1.5 s when it loads the text model itself, or about 0.25 s with `rummage daemon` running
+(mostly Python starting up). `--words-only` needs no model at all.
 After the first index, a run only embeds what changed.
 
 ## How it ranks
