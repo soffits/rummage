@@ -52,9 +52,7 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 Same rules as everything else: general, any language family, sources opt-in where they read someone's private
 data, tests.
 
-1. **Person view:** `rummage about <name or alias>`, everything that mentions a person across sources as a
-   timeline.
-2. **Audio and video:** a source that transcribes with a local whisper.cpp and indexes the transcript with times.
-3. **Per-token scopes in `serve`:** each API token sees only its own sources, so two homes can share one server.
-4. Small: implicit feedback (a `get` right after a `search` counts for that result) to tune ranking.
+1. **Audio and video:** a source that transcribes with a local whisper.cpp and indexes the transcript with times.
+2. **Per-token scopes in `serve`:** each API token sees only its own sources, so two homes can share one server.
+3. Small: implicit feedback (a `get` right after a `search` counts for that result) to tune ranking.
 - Time phrases: a date written in a note's name or path (`todo/2026-W44.md`, `weather/2026-10-15.md`) could count as the note's time; today only the file's modification time does.
