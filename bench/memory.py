@@ -17,6 +17,7 @@ evidence found in the top 10 of plain search (what a reader asking `rummage sear
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import statistics
@@ -36,6 +37,13 @@ def _fetch(url: str, target: Path) -> Path:
             target.with_suffix(".part").write_bytes(r.read())
         target.with_suffix(".part").rename(target)
     return target
+
+
+def _when(text: str, form: str) -> float:
+    try:
+        return datetime.datetime.strptime(text.strip(), form).timestamp()
+    except ValueError:
+        return 0.0
 
 
 def _write(path: Path, rows: list[dict]) -> None:
@@ -60,8 +68,10 @@ def locomo(work: Path) -> tuple[Path, list[dict]]:
             _write(logs / f"{name}.jsonl", [{"session": name, "id": t["dia_id"], "role": "user",
                                              "content": f"{t['speaker']}: {t['text']}",
                                              "time": conv.get(f"{key}_date_time", "")} for t in conv[key]])
+        dates = {f"{sample['sample_id']}-{k}": _when(conv.get(f"{k}_date_time", ""), "%I:%M %p on %d %B, %Y")
+                 for k in sessions}
         for q in sample["qa"]:
-            questions.append({"question": q["question"], "sessions": names,
+            questions.append({"question": q["question"], "sessions": names, "dates": dates,
                               "evidence": {(e if ":" in e else e) for e in q.get("evidence", [])},
                               "answerable": q["category"] != 5, "category": q["category"]})
     return logs, questions
@@ -77,6 +87,8 @@ def longmemeval(work: Path) -> tuple[Path, list[dict]]:
             _write(logs / f"{sid}.jsonl", [{"session": sid, "id": str(n), "role": t["role"], "content": t["content"]}
                                            for n, t in enumerate(session)])
         questions.append({"question": q["question"], "sessions": list(q["haystack_session_ids"]),
+                          "dates": {sid: _when(d, "%Y/%m/%d (%a) %H:%M")
+                                    for sid, d in zip(q["haystack_session_ids"], q["haystack_dates"])},
                           "answer_sessions": set(q.get("answer_session_ids") or []),
                           "answerable": not q["question_id"].endswith("_abs"), "category": q["question_type"]})
     return logs, questions
@@ -141,7 +153,29 @@ def evaluate(config: Path, questions: list[dict], embedder_url: str | None, thre
                          "good_items": sum(flags), "hit": any(flags), "top10": any(goods[:10])})
         return summarize(rows, by_category)
 
+    def pointers(order: str) -> dict:
+        """Recall as leads: the items that pass its thresholds, best first or newest first, as pointers the agent
+        then opens; is the evidence among the first 3, 5 or 10, and how often is nothing shown although the
+        evidence is in plain search's top 20?"""
+        found = {k: [] for k in (3, 5, 10)}
+        silent = []
+        for q, hits, goods, count in asked:
+            if not q["answerable"]:
+                continue
+            shown = pick(hits, gate_for(3.0, count), 0.67, 20, 10**9, False)
+            if order == "recent":
+                shown = sorted(shown, key=lambda h: -q["dates"].get(h.ref.split(":", 1)[1].partition("#")[0], 0.0))
+            flags = [goods[hits.index(h)] for h in shown]
+            for k in found:
+                found[k].append(any(flags[:k]))
+            if any(goods):
+                silent.append(not shown)
+        mean = lambda xs: round(statistics.fmean(1.0 if x else 0.0 for x in xs), 4) if xs else None
+        return {**{f"evidence_in_top{k}": mean(v) for k, v in found.items()},
+                "nothing_shown_while_evidence_in_search": mean(silent)}
+
     defaults = score(3.0, 0.67, by_category=True)
+    defaults["pointers"] = {"by_score": pointers("score"), "newest_first": pointers("recent")}
     defaults["sweep"] = [{"min_z": z, "min_words": w, **score(z, w)} for z in MIN_Z for w in MIN_WORDS]
     return defaults
 

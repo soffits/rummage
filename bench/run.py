@@ -8,7 +8,8 @@ same way.
 
 Datasets: a BEIR name, `miracl:<lang>` (dev queries among their judged passages), `miracl-hn:<lang>` (MTEB's
 hard-negative corpus). Engines: `rummage`, `rummage-ablations` (ranking variants over one index),
-`fidx`, `qmd-search`, `qmd-vsearch`, `qmd-query`. `--model` runs the ablations over another embedding model's
+`rummage-keywords` (other keyword sides, `bench/keywords.py`), `fidx`, `qmd-search`, `qmd-vsearch`, `qmd-query`.
+`--model` runs the ablations over another embedding model's
 vectors (see `bench/model_proxy.py` for its prompts). Each document becomes one Markdown file in
 `<work>/<dataset>/corpus/`. A finished run's result file (`<work>/<dataset>/results/<engine>.json`) is kept and the
 run skipped next time unless `--force`, so a long series of runs resumes where it stopped.
@@ -75,7 +76,8 @@ def summarize(per_query: list[dict], latencies: list[float]) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dataset", default="scifact")
-    parser.add_argument("--engine", default="rummage", choices=["rummage", "rummage-ablations", "fidx",
+    parser.add_argument("--engine", default="rummage", choices=["rummage", "rummage-ablations", "rummage-keywords",
+                                                              "fidx",
                                                               "qmd-search", "qmd-vsearch", "qmd-query"])
     parser.add_argument("--work", type=Path, default=Path("bench/work"))
     parser.add_argument("--runtime-dir", type=Path, help="an existing rummage runtime/ folder to reuse")
@@ -110,9 +112,9 @@ def main() -> int:
     meta = {"dataset": args.dataset, "limit_queries": args.limit_queries, "documents": len(list(corpus.glob("*.md"))),
             "threads": args.threads, "embedder": "remote" if args.embedder_url else "local",
             **({"model": args.model or "embeddinggemma-2"} if family == "rummage" else {})}
-    if args.engine == "rummage-ablations":
-        variants = engines.run_rummage_ablations(corpus, queries, home, args.runtime_dir, args.threads,
-                                                 args.embedder_url)
+    if args.engine in ("rummage-ablations", "rummage-keywords"):
+        run = engines.run_rummage_ablations if args.engine == "rummage-ablations" else engines.run_rummage_keywords
+        variants = run(corpus, queries, home, args.runtime_dir, args.threads, args.embedder_url)
         summary = {name: summarize([metrics(ranked.get(q, []), qrels[q]) for q in queries], [])
                    for name, ranked in variants.items()}
         summary.update({"engine": label, **meta})

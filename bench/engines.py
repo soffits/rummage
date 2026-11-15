@@ -127,6 +127,43 @@ def run_rummage_ablations(corpus: Path, queries: dict, home: Path, runtime_dir: 
     return out
 
 
+def run_rummage_keywords(corpus: Path, queries: dict, home: Path, runtime_dir: Path | None, threads: int,
+                         embedder_url: str | None = None) -> dict[str, dict]:
+    """rummage's ranking with other keyword sides (`bench/keywords.py`), each with the vectors and alone."""
+    import keywords as K
+    from rummage import config as C
+    from rummage import runtime as R
+    from rummage.search import Ranking, Searcher
+    from rummage.store import Store
+
+    config = _rummage_config(corpus, home, runtime_dir, threads, embedder_url)
+    cfg = C.load(config)
+    _index_rummage(config, embedder_url)
+    side = home / "keywords-trigram.db"
+    K.build(cfg.index_path, side)
+    if embedder_url:
+        embedder = R.RemoteEmbedder(embedder_url, timeout=30)
+        embedder.start()
+        vectors = {qid: embedder.query(text) for qid, text in queries.items()}
+    else:
+        with R.embedder(R.Runtime(cfg.data_dir, cfg.llama_server), media=False, threads=threads, nice=15) as e:
+            vectors = {qid: e.query(text) for qid, text in queries.items()}
+    store = Store(cfg.index_path)
+    wrapped = K.SideStore(store, side)
+    out = {}
+    try:
+        for name in ("words", "trigrams", "trigrams-all"):
+            with K.variant(name):
+                for mode, ranking in (("", Ranking()), ("-alone", Ranking(meaning=False))):
+                    searcher = Searcher(wrapped, ranking=ranking)
+                    out[name + mode] = {qid: [Path(h.ref).name for h in searcher.search(text, vectors[qid],
+                                                                                          limit=DEPTH)]
+                                        for qid, text in queries.items()}
+    finally:
+        store.close()
+    return out
+
+
 def run_fidx(corpus: Path, queries: dict, home: Path, threads: int, profile: str | None = None) -> tuple:
     db = home / "fidx.db"
     env = dict(os.environ, OMP_NUM_THREADS=str(threads), ORT_DISABLE_TELEMETRY="1")
