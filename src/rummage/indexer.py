@@ -21,7 +21,7 @@ from .progress import Run
 from .runtime import (EmbedError, Embedder, RemoteEmbedder, Runtime, open_embedder,
                       reference_agreement)
 from .sources import Source
-from .store import MEDIA, Item, Store, media_hash, text_hash
+from .store import MEDIA, Item, Scope, Store, media_hash, text_hash
 
 
 class Busy(RuntimeError):
@@ -198,13 +198,17 @@ def _read_item(store: Store, source: Source, item: Item, embedders: list[Embedde
 
 def index_source(store: Store, source: Source, embedders: list[Embedders], log, warn, limit: int | None = None,
                  deadline: float | None = None, reload: bool = False, again: set[str] | frozenset = frozenset(),
-                 progress: Run | None = None) -> dict:
+                 progress: Run | None = None, excluded: list[Scope] | None = None,
+                 held: list[Scope] | None = None) -> dict:
     """Reads what changed into keyword search; vectors that can be reused go in now, the rest wait as pending
     segments for `embed_pending` (media are embedded here, with every model in `embedders` that reads their kind,
     since their bytes aren't kept; `MEDIA_STEP` at a time per item). `log` gets progress, `warn` gets problems.
     `reload` reads every item again (vectors are reused, so it only costs the reading), to pick up what a newer
-    version stores about items; `again` reads these keys again on top of what changed. `progress` gets how far it got, item by item."""
-    counts = {"added": 0, "updated": 0, "removed": 0, "failed": 0, "reused": 0, "seconds_embedding": 0.0}
+    version stores about items; `again` reads these keys again on top of what changed. `progress` gets how far it got, item by item.
+    Items in `excluded` (exclusion marks) are never kept; items in `held` (paused for now) are skipped and the
+    source's read position isn't saved, so the next run after the pause reads them."""
+    counts = {"added": 0, "updated": 0, "removed": 0, "failed": 0, "reused": 0, "seconds_embedding": 0.0,
+              "excluded": 0, "held": 0}
     report = progress.source if progress else (lambda *a, **k: None)
     report(source.name, phase="planning", done=0, total=0, failed=0, last_error=None)
     known = store.fingerprints(source.name)
@@ -239,13 +243,22 @@ def index_source(store: Store, source: Source, embedders: list[Embedders], log, 
         if (limit is not None and done >= limit) or (deadline is not None and time.monotonic() > deadline):
             complete = False
             break
+        if excluded and store.matches(item, excluded):
+            if item.key in known:
+                store.remove(source.name, item.key)
+                store.commit()
+            counts["excluded"] += 1
+            continue
+        if held and store.matches(item, held):
+            counts["held"] += 1
+            continue
         if read(item) >= 0:
             counts["updated" if item.key in known else "added"] += 1
         done += 1
         report(source.name, done=done)
         if total and total > 25 and (done % 100 == 0 or done == total):
             log(f"{source.name}: read {done}/{total}")
-    if complete and counts["failed"] == 0 and plan.state is not None:
+    if complete and counts["failed"] == 0 and counts["held"] == 0 and plan.state is not None:
         store.set_state(source.name, plan.state)
         store.commit()
     if complete:

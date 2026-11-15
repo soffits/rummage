@@ -72,6 +72,6 @@ def test_watch_leaves_out_switched_off_sources(tmp_path, monkeypatch):
     cfg.write_text(f"data_dir = '{tmp_path / 'data'}'\n[sources.on]\ntype = 'markdown'\nroot = '{notes}'\n"
                    f"[sources.off]\ntype = 'markdown'\nroot = '{notes}'\nenabled = false\n", encoding="utf-8")
     seen = []
-    monkeypatch.setattr(W, "run", lambda cfg, names, *a: seen.append(names) or 0)
+    monkeypatch.setattr(W, "_watch", lambda cfg, names, *a: seen.append(names) or 0)
     assert main(["--config", str(cfg), "watch"]) == 0
     assert seen == [["on"]]

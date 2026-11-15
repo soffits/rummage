@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 from . import text as T
-from .store import Scope, Store, same_message_key
+from .store import Scope, Store, Within, same_message_key
 from .switch import calibration
 
 WORD_WEIGHT = 2.0
@@ -71,12 +71,12 @@ class Hit:
 class Searcher:
     def __init__(self, store: Store, sources: list[str] | None = None, paths: list[str] | None = None,
                  globs: list[str] | None = None, since: float | None = None, until: float | None = None,
-                 ranking: Ranking = Ranking(), model: str | None = None):
+                 ranking: Ranking = Ranking(), model: str | None = None, within: Within | None = None):
         """`sources`: only these sources. `paths`: only items whose ref starts with one of these prefixes. `globs`:
         only items whose ref matches one of these patterns (`*` crosses folders, as in SQLite's GLOB). `model`: the
-        model the query vector was made with (default: the index's)."""
+        model the query vector was made with (default: the index's). `within`: the part of the index a scope sees."""
         self.store = store
-        self.scope = Scope(sources, paths, globs, since, until)
+        self.scope = Scope(sources, paths, globs, since, until, within)
         self.ranking = ranking
         self.model = model or store.model
         self.calibration = calibration(store, self.model)

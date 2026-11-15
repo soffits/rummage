@@ -73,6 +73,7 @@ class FolderSource(Source):
         self.max_bytes = int(spec.get("max_bytes", self.default_max_bytes))
         self.limits = Limits.of(spec)
         self.skip_secrets = not spec.get("read_secret_files", False)
+        self.git = bool(spec.get("git"))   # list the files git tracks or would track (what .gitignore leaves)
 
     def watch_roots(self) -> list[Path]:
         return [self.root]
@@ -86,6 +87,13 @@ class FolderSource(Source):
         and password files into `secret`."""
         excluded = [] if excluded is None else excluded
         secret = [] if secret is None else secret
+        if self.git:
+            listed = self._git_files()
+            if listed is not None:
+                for rel in listed:
+                    if self._keep(rel, excluded, secret):
+                        yield rel
+                return
         for dirpath, dirnames, filenames in os.walk(self.root):
             rel_dir = os.path.relpath(dirpath, self.root)
             rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
@@ -101,14 +109,36 @@ class FolderSource(Source):
             dirnames[:] = kept
             for f in sorted(filenames):
                 rel = f"{rel_dir}/{f}".lstrip("/")
-                if self.extensions is not None and not f.lower().endswith(self.extensions):
-                    continue
-                if self._skip(rel):
-                    excluded.append(rel)
-                elif self.skip_secrets and is_secret(f):
-                    secret.append(rel)
-                else:
+                if self._keep(rel, excluded, secret):
                     yield rel
+
+    def _keep(self, rel: str, excluded: list[str], secret: list[str]) -> bool:
+        """Whether file `rel` is indexed; one left out goes into `excluded` or `secret`."""
+        parts = rel.split("/")
+        if self.extensions is not None and not parts[-1].lower().endswith(self.extensions):
+            return False
+        if self._skip(rel):
+            excluded.append(rel)
+            return False
+        if self.skip_secrets and (is_secret(parts[-1]) or any(is_secret(d, folder=True) for d in parts[:-1])):
+            secret.append(rel)
+            return False
+        return True
+
+    def _git_files(self) -> list[str] | None:
+        """Tracked and untracked-but-not-ignored files, or None when git can't list them (then the folder is
+        walked)."""
+        import subprocess
+
+        try:
+            run = subprocess.run(["git", "-C", str(self.root), "ls-files", "-co", "--exclude-standard", "-z"],
+                                 capture_output=True, timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if run.returncode != 0:
+            return None
+        return sorted(p for p in run.stdout.decode("utf-8", "replace").split("\0")
+                      if p and (self.root / p).is_file())
 
     def not_indexed(self, rel: str) -> str:
         """Why file `rel` under the root has no item."""

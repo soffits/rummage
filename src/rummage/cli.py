@@ -32,6 +32,10 @@ from . import backends
 from . import config as C
 from . import daemon as D
 from . import envelope as E
+from . import scopes as S
+from .memory_cli import cmd_exclude, cmd_pause, cmd_project, cmd_resume
+from .projects import HARNESSES
+from . import memory
 from . import models as M
 from . import models_cli
 from . import progress as P
@@ -44,7 +48,7 @@ from .query import meaning_vector
 from .limits import describe
 from .secrets import masked_total, shown
 from .sources import available, build, load_type
-from .store import Ambiguous, NotFound, Store
+from .store import Ambiguous, NotFound, Scope, Store
 
 
 
@@ -95,8 +99,11 @@ def cmd_index(cfg: C.Config, args) -> int:
     deadline = time.monotonic() + args.max_minutes * 60 if args.max_minutes else None
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
     opened: list[Embedders] = []
+    marks, held, everything = memory.holds(cfg, memory.load(cfg.data_dir))
     try:
-        if not args.embed_only:
+        if not args.embed_only and everything:
+            log("reading is paused (`rummage resume index`); what changes meanwhile is read afterwards")
+        elif not args.embed_only:
             try:
                 with lock(cfg.data_dir, "index", wait=args.wait):
                     if args.rebuild and cfg.index_path.exists():
@@ -112,7 +119,7 @@ def cmd_index(cfg: C.Config, args) -> int:
                         reading = P.Run(cfg.data_dir, "read")
                         try:
                             _read_sources(cfg, store, names, live, again, args, deadline, log, report, failures,
-                                          reading)
+                                          reading, marks, held)
                         finally:
                             _finish_reading(store, reading)
                     finally:
@@ -163,13 +170,15 @@ def cmd_index(cfg: C.Config, args) -> int:
     return 0
 
 
-def _read_sources(cfg, store, names, embedders, again, args, deadline, log, report, failures, progress) -> None:
+def _read_sources(cfg, store, names, embedders, again, args, deadline, log, report, failures, progress, marks,
+                  held) -> None:
     for name in names:
         source = build(name, cfg.sources[name], cfg.data_dir)
         run = store.start_run(name)
         try:
             counts = index_source(store, source, embedders, log, _eprint, limit=args.limit, deadline=deadline,
-                                  reload=args.reload, again=set(again.get(name, ())), progress=progress)
+                                  reload=args.reload, again=set(again.get(name, ())), progress=progress,
+                                  excluded=marks, held=held)
         except Exception as error:
             store.rollback()
             progress.source(name, phase="failed", last_error=f"{type(error).__name__}: {error}")
@@ -274,6 +283,7 @@ def cmd_search(cfg: C.Config, args) -> int:
     if not cfg.index_path.exists():
         return _fail(args, "index_missing", E.INDEX_MISSING, "no index yet: run `rummage index`",
                      [{"intent": "build_index", "reason": "Nothing is indexed yet.", "command": ["rummage", "index"]}])
+    scope = S.resolve(cfg, args.cwd or os.getcwd(), args.all)
     store = Store(cfg.index_path)
     try:
         version = store.model
@@ -282,7 +292,7 @@ def cmd_search(cfg: C.Config, args) -> int:
         if not args.words_only and not index_empty:
             vector, degraded = meaning_vector(cfg, version, args.query, use_daemon=not args.no_daemon)
         searcher = Searcher(store, args.source, args.path, args.glob, _day(args.since), _day(args.until, 1),
-                            model=version)
+                            model=version, within=scope.within)
         hits += [h.as_dict() for h in searcher.search(
             args.query, vector, limit=args.limit, kinds=set(args.kind) if args.kind else None)]
         pending = store.pending_count(sources=args.source)
@@ -299,6 +309,7 @@ def cmd_search(cfg: C.Config, args) -> int:
         doc["index"] = index
     E.note_hidden(doc, hits, E.show_secrets_command(args.argv))
     E.mark_degraded(doc, degraded)
+    E.note_scope(doc, scope.describe(), scope.line(), scope.limited(), args.argv)
     _remember_search(cfg, args.query, hits)
     if args.files:
         refs = list(dict.fromkeys(h["ref"] for h in hits))
@@ -316,6 +327,8 @@ def cmd_search(cfg: C.Config, args) -> int:
         print("nothing found" if doc["status"] != "empty_index" else "nothing indexed yet: run `rummage index`")
         if index:
             print(f"note: {index['note']}")
+        if scope.limited():
+            print(f"note: {scope.line()}")
         return E.OK if doc["status"] != "error" else E.FAILED
     cut = doc["summary"]["strong"] if args.sort == "score" else len(hits)
     for n, h in enumerate(hits):
@@ -337,6 +350,8 @@ def cmd_search(cfg: C.Config, args) -> int:
         print(f"note: {index['note']}")
     for line in _hidden_lines(args, hits):
         print(line)
+    if scope.limited():
+        print(f"note: {scope.line()}")
     return E.OK
 
 
@@ -578,17 +593,19 @@ def cmd_recent(cfg: C.Config, args) -> int:
     if not cfg.index_path.exists():
         _eprint("no index yet: run `rummage index`")
         return E.INDEX_MISSING
+    scope = S.resolve(cfg, args.cwd or os.getcwd(), args.all)
     store = Store(cfg.index_path)
     try:
-        items = store.recent(time.time() - args.minutes * 60, args.source, args.exclude_session, args.limit)
+        items = store.recent(time.time() - args.minutes * 60, Scope(sources=args.source, within=scope.within),
+                             args.exclude_session, args.limit)
     finally:
         store.close()
     items = [_show(cfg, args, _lift_partial({k: v for k, v in i.items() if k != "row"})) for i in items]
     for item in items:
         item["text"] = T.snippet_head(item["text"], args.chars)
     if args.json:
-        print(json.dumps({"schema": "rummage.recent.v1", "minutes": args.minutes, "results": items,
-                          **_hidden_summary(args, items)}, ensure_ascii=False))
+        print(json.dumps({"schema": "rummage.recent.v1", "minutes": args.minutes, "scope": scope.describe(),
+                          "results": items, **_hidden_summary(args, items)}, ensure_ascii=False))
         return 0
     for item in items:
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(item["mtime"] or 0))
@@ -597,6 +614,8 @@ def cmd_recent(cfg: C.Config, args) -> int:
               + f" · {item['title']}\n  {item['text']}")
     for line in _hidden_lines(args, items):
         print(line)
+    if scope.limited():
+        print(f"note: {scope.line()}")
     return 0
 
 
@@ -651,13 +670,22 @@ def cmd_recall(cfg: C.Config, args) -> int:
 def cmd_watch(cfg: C.Config, args) -> int:
     from .watch import run
 
-    names = args.source or C.enabled(cfg)
-    unknown = [n for n in names if n not in cfg.sources]
+    unknown = [n for n in args.source or [] if n not in cfg.sources]
     if unknown:
         _eprint("unknown source:", ", ".join(unknown))
         return 2
+
+    def setup_first() -> None:
+        profile = M.by_name(cfg.models, cfg.model)
+        if args.setup and _runtime(cfg).missing(profile, _media(cfg)):
+            _eprint("model files missing: fetching them first")
+            _runtime(cfg).setup(profile, media=_media(cfg), log=_eprint)
+
     try:
-        return run(cfg, names, args.poll_minutes, args.settle_seconds)
+        return run(cfg, args.source, args.poll_minutes, args.settle_seconds, setup_first)
+    except Busy:
+        _eprint(f"a watch already runs for {cfg.data_dir}")
+        return 0
     except KeyboardInterrupt:
         return 0
 
@@ -700,6 +728,13 @@ def cmd_status(cfg: C.Config, args) -> int:
             lines.append(f"  the config asks for {cfg.model}: the next index run starts the switch")
         lines += switch.describe(out["switch"])
     out["configured_sources"] = list(cfg.sources)
+    held = memory.load(cfg.data_dir)
+    pauses = [memory.describe_pause(p) for p in held["pauses"] if memory.live(p)]
+    out["memory"] = {"paused": pauses, "exclusion_marks": len(held["marks"]),
+                     "excluded_items": sum(sum((m.get("dropped") or {}).values()) for m in held["marks"])}
+    lines += [memory.pause_line(p) for p in held["pauses"] if memory.live(p)]
+    if held["marks"]:
+        lines.append(f"{len(held['marks'])} exclusion marks (`rummage exclude --list`)")
     out["backend"] = _runtime(cfg).backend_record if not cfg.llama_server else {"backend": "custom"}
     out["daemon"] = {"running": D.running(cfg.data_dir), "socket": str(D.socket_path(cfg.data_dir)),
                      "idle_minutes": cfg.daemon_idle_minutes}
@@ -834,6 +869,11 @@ def cmd_doctor(cfg: C.Config, args) -> int:
     return 0 if not problems else 1
 
 
+def _scope_args(p) -> None:
+    p.add_argument("--cwd", help="the folder the query runs in, which picks its scope (default: this one)")
+    p.add_argument("--all", action="store_true", help="see the whole index, whatever the folder")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="rummage", description="Local search by meaning and exact words.")
     parser.add_argument("--config", help="config file (default $RUMMAGE_CONFIG or ~/.config/rummage/config.toml)")
@@ -882,6 +922,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--files", action="store_true", help="only the refs of matching items, one per line")
     p.add_argument("--budget-tokens", type=int, help="with --json: trim the output to about this many tokens")
     p.add_argument("--show-secrets", action="store_true", help="don't mask credentials in the output")
+    _scope_args(p)
     p.add_argument("--json", action="store_true", help=f"one {E.SCHEMA} object")
     p.set_defaults(func=cmd_search)
 
@@ -913,13 +954,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-n", "--limit", type=int, default=20)
     p.add_argument("--chars", type=int, default=240, help="how much of each item's text to show")
     p.add_argument("--show-secrets", action="store_true", help="don't mask credentials in the output")
+    _scope_args(p)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_recent)
 
     p = sub.add_parser("recall", help="a few cited passages for a prompt, for agents' prompt hooks (quiet otherwise)")
     p.add_argument("query", nargs="?", help="the prompt (default: read stdin)")
     p.add_argument("--hook", action="store_true",
-                   help="stdin is a prompt hook's JSON (its `prompt` field); reply with the hook's JSON")
+                   help="stdin is a prompt hook's JSON (`prompt`, `session_id`, `cwd`, `harness`); always reply with "
+                        "the hook's JSON, and make the project at `cwd` part of memory")
+    p.add_argument("--harness", choices=sorted(HARNESSES),
+                   help="with --hook: the harness calling, whose own chat history is switched on")
     p.add_argument("-s", "--source", action="append", help="only this source (repeatable)")
     p.add_argument("--path", action="append", help="only items under this ref prefix (repeatable)")
     p.add_argument("--max-items", type=int, default=4)
@@ -936,8 +981,45 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--show-secrets", action="store_true", help="don't mask credentials in the output")
     p.add_argument("--allow-model-load", action="store_true",
                    help="load the model when no daemon runs (~1.5 s); otherwise fall back to exact words")
+    _scope_args(p)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_recall)
+
+    p = sub.add_parser("project", help="make the project a folder is in part of memory (for agents' hooks)")
+    p.add_argument("action", choices=["ensure"])
+    p.add_argument("--cwd", help="a folder in the project (default: this one)")
+    p.add_argument("--harness", choices=sorted(HARNESSES), help="also remember this harness's own chats")
+    p.add_argument("--no-start", action="store_true", help="don't start the background reader")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_project)
+
+    for verb, text in (("pause", "switch memory off for a while"), ("resume", "switch it back on")):
+        p = sub.add_parser(verb, help=text)
+        p.add_argument("what", nargs="?", choices=memory.WHAT, default="all",
+                       help="recall (no leads), index (read nothing new), or all")
+        if verb == "pause":
+            p.add_argument("--for", dest="duration", help="how long, like 30m or 2h (default: until resume)")
+            p.add_argument("--private", action="store_true",
+                           help="keep nothing from this time: never indexed, not even later")
+        where = p.add_mutually_exclusive_group()
+        where.add_argument("--here", nargs="?", const=".", metavar="DIR",
+                           help="only for queries from this folder (default: the current one)")
+        where.add_argument("--session", help="only for this chat session")
+        p.add_argument("--hook", action="store_true",
+                       help="stdin is a slash-command hook's JSON (command_args, cwd, session_id); reply with it")
+        p.add_argument("--json", action="store_true")
+        p.set_defaults(func=cmd_pause if verb == "pause" else cmd_resume)
+
+    p = sub.add_parser("exclude", help="keep a time window, session or folder out of the index (marks)")
+    p.add_argument("--since", help="from this time on (YYYY-MM-DD or YYYY-MM-DDTHH:MM, local time)")
+    p.add_argument("--until", help="up to this time")
+    p.add_argument("--here", nargs="?", const=".", metavar="DIR", help="items under this folder")
+    p.add_argument("--session", help="this chat session's turns")
+    p.add_argument("-s", "--source", action="append", default=[], help="only this source (repeatable)")
+    p.add_argument("--list", action="store_true", help="list the marks")
+    p.add_argument("--remove", metavar="ID", help="remove a mark: its items are read again on the next run")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_exclude)
 
     p = sub.add_parser("service", help="run `rummage watch` under the OS supervisor (systemd, launchd, Task Scheduler)")
     p.add_argument("action", choices=["show", "install", "uninstall"])
@@ -956,6 +1038,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--poll-minutes", type=float, default=10, help="how often to re-plan every source (those without watched folders only get this)")
     p.add_argument("--settle-seconds", type=float, default=3,
                    help="read a batch once its folders were quiet this long (at most 4x this while they keep changing)")
+    p.add_argument("--setup", action="store_true", help="fetch the model files first when they are missing")
     p.set_defaults(func=cmd_watch)
 
     p = sub.add_parser("daemon", help="keep the query model loaded so searches take milliseconds")
