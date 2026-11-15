@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.0
 
 - Indexing progress is visible while it runs: `rummage status --watch` follows it live per source (read, with
   vectors, pace, time left, pauses and errors, also in Windows Terminal and PowerShell), and `rummage status --line`
