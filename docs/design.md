@@ -50,6 +50,7 @@ name and the items' keys and fingerprints are part of the index format.
 | `claude-code`, `codex`, `jsonl-chat` | plugin | the same, in append-only JSONL session logs | per-file size+mtime; reading resumes at the last turn's first line |
 | `gemini-cli` | plugin | the same, in Gemini CLI's JSONL logs, replayed with their patch and rewind records | per-file size+mtime, whole file |
 | `mail` | plugin | a mail message with its attached documents' text, from a Maildir, an mbox or IMAP | Maildir key / message hash; IMAP UIDVALIDITY + highest UID per folder |
+| `media` | plugin | an audio or video file's transcript (whisper.cpp), in passages by start time | size+mtime; transcripts cached by file |
 | `opencode` | plugin | the same, in OpenCode 2's `opencode.db` | message `time_updated` cursor |
 | `telegram-stickers` | plugin | a sticker in dsh-telegram-bot's library: saved meaning as text, picture as an image vector | hash of meaning, emoji, file id |
 
