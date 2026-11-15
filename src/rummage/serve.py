@@ -6,7 +6,9 @@
     GET /status                                                   the same JSON as `rummage status --json`
     GET /health                                                   200 "ok"
 
-Every request needs `Authorization: Bearer <token>` (the token comes from $RUMMAGE_TOKEN or --token-file). The
+Every request needs `Authorization: Bearer <token>`: the main token ($RUMMAGE_TOKEN or --token-file) sees every
+source; tokens under `[serve.tokens.<label>]` (`token_env` or `token_file`, and `sources`) see only theirs, so
+several homes can share one server. The
 query model stays loaded; with --reindex-minutes, `rummage index` runs in the background on that interval.
 """
 
@@ -35,10 +37,26 @@ from .secrets import mask_value
 from .store import Store
 
 
+def scoped_tokens(cfg: C.Config) -> list[tuple[str, list[str]]]:
+    """`[serve.tokens.<label>]` entries: a token (`token_env` or `token_file`) and the `sources` it may see."""
+    out = []
+    for label, entry in ((cfg.serve or {}).get("tokens") or {}).items():
+        if entry.get("token_env"):
+            token = os.environ.get(entry["token_env"], "")
+        else:
+            token = Path(os.path.expanduser(entry.get("token_file", ""))).read_text(encoding="utf-8").strip() \
+                if entry.get("token_file") else ""
+        if len(token) < 24:
+            raise SystemExit(f"serve token {label!r} is missing or shorter than 24 characters")
+        out.append((token, list(entry.get("sources") or [])))
+    return out
+
+
 class Service:
-    def __init__(self, cfg: C.Config, token: str):
+    def __init__(self, cfg: C.Config, token: str, scoped: list[tuple[str, list[str]]] | None = None):
         self.cfg = cfg
         self.token = token
+        self.scoped = scoped or []
         self.embedder = R.Embedder(R.Runtime(cfg.data_dir, cfg.llama_server), media=False, threads=cfg.threads,
                                    nice=0, die_with_parent=False)
         self.embed_lock = threading.Lock()
@@ -77,19 +95,35 @@ class Service:
         return E.mark_degraded(E.build(args, [self.shown(h.as_dict(), show_secrets) for h in hits], [],
                                        time.monotonic() - started, index_empty), degraded)
 
-    def get(self, ref: str, loc: str | None, show_secrets: bool = False) -> dict:
+    def allowed(self, auth: str) -> list[str] | None | bool:
+        """The sources a request's bearer token may see: None for all (the main token), a list for a scoped token,
+        False for no valid token."""
+        if hmac.compare_digest(auth.encode(), f"Bearer {self.token}".encode()):
+            return None
+        for token, sources in self.scoped:
+            if hmac.compare_digest(auth.encode(), f"Bearer {token}".encode()):
+                return sources
+        return False
+
+    def get(self, ref: str, loc: str | None, show_secrets: bool = False, allowed: list[str] | None = None) -> dict:
         store = Store(self.cfg.index_path)
         try:
-            return self.shown(store.item(store.find(ref), loc), show_secrets)
+            doc = store.item(store.find(ref), loc)
         finally:
             store.close()
+        if allowed is not None and doc["source"] not in allowed:
+            raise LookupError(f"no item {ref!r}")
+        return self.shown(doc, show_secrets)
 
-    def status(self) -> dict:
+    def status(self, allowed: list[str] | None = None) -> dict:
         store = Store(self.cfg.index_path)
         try:
             out = store.summary()
         finally:
             store.close()
+        if allowed is not None:
+            out["sources"] = {k: v for k, v in out["sources"].items() if k in allowed}
+            return out
         out["last_index"] = self.last_index
         return out
 
@@ -122,10 +156,16 @@ def handler(service: Service):
             url = urlsplit(self.path)
             if url.path == "/health":
                 return self._send(200, "ok")
-            auth = self.headers.get("Authorization", "")
-            if not hmac.compare_digest(auth.encode(), f"Bearer {service.token}".encode()):
+            allowed = service.allowed(self.headers.get("Authorization", ""))
+            if allowed is False:
                 return self._send(401, {"error": "unauthorized"})
             params = parse_qs(url.query)
+            sources = params.get("source", [])
+            if allowed is not None:   # a scoped token searches its own sources, whatever it asks for
+                sources = [s for s in sources if s in allowed] if sources else list(allowed)
+                if not sources:
+                    return self._send(200, {"schema": E.SCHEMA, "status": "no_results", "results": []}) \
+                        if url.path == "/search" else self._send(404, {"error": "not found"})
             show = (params.get("show_secrets") or ["0"])[0] in ("1", "true")
             try:
                 if url.path == "/search":
@@ -133,17 +173,18 @@ def handler(service: Service):
                     if not q:
                         return self._send(400, {"error": "q is required"})
                     limit = max(1, min(100, int((params.get("limit") or ["10"])[0])))
-                    return self._send(200, service.search(q, limit, params.get("source", []), params.get("kind", []),
+                    return self._send(200, service.search(q, limit, sources, params.get("kind", []),
                                                           (params.get("words_only") or ["0"])[0] in ("1", "true"),
                                                           params.get("path", []), params.get("glob", []), show))
                 if url.path == "/get":
                     ref = (params.get("ref") or [""])[0]
                     try:
-                        return self._send(200, service.get(ref, (params.get("loc") or [None])[0], show))
+                        return self._send(200, service.get(ref, (params.get("loc") or [None])[0], show,
+                                                           None if allowed is None else sources))
                     except LookupError as error:
                         return self._send(404, {"error": str(error)})
                 if url.path == "/status":
-                    return self._send(200, service.status())
+                    return self._send(200, service.status(None if allowed is None else sources))
                 return self._send(404, {"error": "not found"})
             except Exception as error:
                 return self._send(500, {"error": f"{type(error).__name__}: {error}"})
@@ -158,7 +199,7 @@ def run(cfg: C.Config, host: str, port: int, token_file: str | None, reindex_min
     if len(token) < 24:
         print("serve needs a token of 24+ characters in $RUMMAGE_TOKEN or --token-file", file=sys.stderr)
         return 2
-    service = Service(cfg, token)
+    service = Service(cfg, token, scoped_tokens(cfg))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     service.embedder.start()
     if reindex_minutes:

@@ -40,6 +40,7 @@ class Config:
     llama_server: str | None = None
     embedder_url: str | None = None
     people: dict[str, dict] = field(default_factory=dict)
+    serve: dict = field(default_factory=dict)
     sources: dict[str, dict] = field(default_factory=dict)
     remotes: dict[str, dict] = field(default_factory=dict)
 
@@ -90,6 +91,7 @@ def load(path: Path | None = None) -> Config:
         llama_server=os.environ.get("RUMMAGE_LLAMA_SERVER") or runtime.get("llama_server"),
         embedder_url=(data.get("embedder") or {}).get("url"),
         people=dict(data.get("people", {})),
+        serve=dict(data.get("serve", {})),
         sources=dict(data.get("sources", {})),
         remotes=dict(data.get("remotes", {})),
     )
