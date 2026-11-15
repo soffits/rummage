@@ -28,6 +28,7 @@ from urllib.parse import parse_qs, urlsplit
 from . import config as C
 from . import runtime as R
 from . import envelope as E
+from .query import FALLBACK_ERRORS, reason_for
 from .search import Searcher
 from .secrets import mask_value
 from .store import Store
@@ -60,15 +61,20 @@ class Service:
         try:
             store.check_version()
             index_empty = store.item_count() == 0
-            vector = None if words_only or index_empty else self.query_vector(q)
+            vector, degraded = None, None
+            if not (words_only or index_empty):
+                try:
+                    vector = self.query_vector(q)
+                except FALLBACK_ERRORS as error:
+                    degraded = reason_for(error)
             hits = Searcher(store, sources or None, paths, globs).search(q, vector, limit=limit,
                                                                             kinds=set(kinds) or None)
         finally:
             store.close()
         args = SimpleNamespace(query=q, limit=limit, source=sources, kind=kinds, words_only=words_only,
                                truncate="off", path=paths, glob=globs)
-        return E.build(args, [self.shown(h.as_dict(), show_secrets) for h in hits], [], time.monotonic() - started,
-                       index_empty)
+        return E.mark_degraded(E.build(args, [self.shown(h.as_dict(), show_secrets) for h in hits], [],
+                                       time.monotonic() - started, index_empty), degraded)
 
     def get(self, ref: str, loc: str | None, show_secrets: bool = False) -> dict:
         store = Store(self.cfg.index_path)
