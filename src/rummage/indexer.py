@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .models import REFERENCE_COSINE, Profile
+from .progress import Run
 from .runtime import (EmbedError, Embedder, RemoteEmbedder, Runtime, open_embedder,
                       reference_agreement)
 from .sources import Source
@@ -155,13 +156,16 @@ class Embedders:
 
 
 def index_source(store: Store, source: Source, embedders: list[Embedders], log, warn, limit: int | None = None,
-                 deadline: float | None = None, reload: bool = False, again: set[str] | frozenset = frozenset()) -> dict:
+                 deadline: float | None = None, reload: bool = False, again: set[str] | frozenset = frozenset(),
+                 progress: Run | None = None) -> dict:
     """Reads what changed into keyword search; vectors that can be reused go in now, the rest wait as pending
     segments for `embed_pending` (pictures are embedded here, with every model in `embedders` that reads pictures,
     since their bytes aren't kept). `log` gets progress, `warn` gets problems. `reload` reads every item again
     (vectors are reused, so it only costs the reading), to pick up what a newer version stores about items; `again`
-    reads these keys again on top of what changed."""
+    reads these keys again on top of what changed. `progress` gets how far it got, item by item."""
     counts = {"added": 0, "updated": 0, "removed": 0, "failed": 0, "reused": 0, "seconds_embedding": 0.0}
+    report = progress.source if progress else (lambda *a, **k: None)
+    report(source.name, phase="planning", done=0, total=0, failed=0, last_error=None)
     known = store.fingerprints(source.name)
     if reload:
         plan = source.plan({key: None for key in known}, {})
@@ -176,6 +180,7 @@ def index_source(store: Store, source: Source, embedders: list[Embedders], log, 
     total = plan.total
     done = 0
     complete = True
+    report(source.name, phase="reading", total=total or 0)
     for item in plan.upserts:
         if (limit is not None and done >= limit) or (deadline is not None and time.monotonic() > deadline):
             complete = False
@@ -208,16 +213,19 @@ def index_source(store: Store, source: Source, embedders: list[Embedders], log, 
         except Exception as error:  # one unreadable item must not sink the run
             store.rollback()
             counts["failed"] += 1
+            report(source.name, failed=counts["failed"], last_error=f"{item.key}: {type(error).__name__}: {error}")
             warn(f"{source.name}: {item.key}: {type(error).__name__}: {error}")
             if counts["failed"] <= 3:
                 warn("".join(traceback.format_exception(error)[-3:]).rstrip())
         done += 1
+        report(source.name, done=done)
         if total and total > 25 and (done % 100 == 0 or done == total):
             log(f"{source.name}: read {done}/{total}")
     if complete and counts["failed"] == 0 and plan.state is not None:
         store.set_state(source.name, plan.state)
         store.commit()
     counts["complete"] = complete
+    report(source.name, phase="done" if complete else "stopped")
     return counts
 
 
@@ -254,32 +262,59 @@ def embed_pending(store: Store, embedders: Embedders, log, sources: list[str] | 
     return {"made": done, "seconds": seconds, "waiting": store.pending_count(version, sources)}
 
 
+COUNT_EVERY = 10   # seconds between recounts of the passages still waiting, for the progress file
+
+
 def embed_models(store: Store, active: Embedders | None, building: Embedders | None, configured: dict, log,
                  sources: list[str] | None = None, deadline: float | None = None,
-                 readable: list[str] | None = None) -> dict:
+                 readable: list[str] | None = None, progress: Run | None = None) -> dict:
     """The embedding half of a run: the active model's missing vectors first, then the vectors of the model a switch
     is building, going back to the active model whenever new passages wait for it. When the new model's vectors are
     complete, the switch goes on to calibrating, comparing and the swap (`switch.finish`). `readable`: the sources
-    this machine reads, so items to read again elsewhere don't hold the switch up."""
+    this machine reads, so items to read again elsewhere don't hold the switch up. `progress` gets the active
+    model's passages left per source, the pace, and the switch's."""
     from . import switch
 
     report: dict = {}
+    made_before = [0]   # active-model vectors made by earlier calls of embed_pending in this run
+    counted = [0.0]
+
+    def tell(made_now: int = 0, force: bool = False) -> None:
+        if progress is None:
+            return
+        progress.sample(made_before[0] + made_now)
+        if force or time.monotonic() - counted[0] >= COUNT_EVERY:
+            counted[0] = time.monotonic()
+            if store.model:
+                progress.vectors(store.pending_by_source(store.model))
+            info = switch.status(store) if building is not None else None
+            progress.value["switch"] = None if not info or info["phase"] == "swapped" else {
+                "to_name": info["to_name"], "done": info.get("done", 0), "total": info.get("total", 0),
+                "eta_seconds": info.get("eta_seconds")}
+        progress.save(force)
 
     def active_waiting(*_):
         return active is not None and store.pending_count(active.version, sources) > 0
+
+    def active_batch(made, _):
+        tell(made)
 
     def building_batch(made, _):
         rec = switch.record(store)
         if not rec or rec["to"] != building.version or rec["phase"] == "swapped":
             return True   # cancelled or finished elsewhere meanwhile
         switch.note_progress(store, store.pending_count(building.version))
+        tell()
         return active_waiting()
+
+    tell(force=True)
 
     while True:
         if active is not None:
-            made = embed_pending(store, active, log, sources, deadline)
+            made = embed_pending(store, active, log, sources, deadline, after_batch=active_batch)
             report.setdefault(active.version, {"made": 0, "seconds": 0.0})
             report[active.version]["made"] += made["made"]
+            made_before[0] += made["made"]
             report[active.version]["seconds"] += made["seconds"]
             _remember_reference(store, active)
         if building is None or (deadline is not None and time.monotonic() > deadline):

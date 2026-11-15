@@ -97,7 +97,7 @@ class Run:
 
     def source(self, name: str, **fields) -> None:
         self.value["sources"].setdefault(name, {}).update(fields)
-        self.save(force=fields.get("phase") in ("planning", "done", "failed"))
+        self.save(force="phase" in fields)
 
     def update(self, force: bool = False, **fields) -> None:
         self.value.update(fields)
@@ -237,6 +237,18 @@ def state(data_dir: Path, pending: int | None = None, now: float | None = None) 
     return out
 
 
+AGENT_FIELDS = ("state", "note", "items", "vectors", "eta_seconds", "paused", "error")
+
+
+def agent_view(info: dict) -> dict | None:
+    """The part of a `state` summary an agent's output carries, or None when the index is complete."""
+    return {k: info[k] for k in AGENT_FIELDS} if info["state"] != "complete" else None
+
+
+def for_agents(data_dir: Path, pending: int | None = None) -> dict | None:
+    return agent_view(state(data_dir, pending))
+
+
 def _line(out: dict, read: dict, switch: dict | None, stalled: list, now: float) -> str:
     parts = []
     if out["items"] is not None:
@@ -246,7 +258,8 @@ def _line(out: dict, read: dict, switch: dict | None, stalled: list, now: float)
                      else f"reading {_n(items['done'])}/{_n(items['total'])}")
     vectors = out["vectors"]
     if vectors and vectors.get("total"):
-        parts.append(f"{'indexing' if not parts else 'vectors'} {_n(vectors['done'])}/{_n(vectors['total'])}")
+        label = "indexing" if out["state"] == "building" and not parts else "vectors"
+        parts.append(f"{label} {_n(vectors['done'])}/{_n(vectors['total'])}")
     elif vectors:
         parts.append(f"{_n(vectors['waiting'])} passages wait for vectors")
     if out["eta_seconds"] is not None and out["state"] == "building":

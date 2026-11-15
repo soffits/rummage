@@ -57,7 +57,7 @@ def test_a_run_that_died_reads_as_stopped(tmp_path):
     embed.save(force=True)
     info = P.state(tmp_path)
     assert info["state"] == "stopped"
-    assert info["line"] == "rummage: indexing 500/1,000, stopped (`rummage index` goes on)"
+    assert info["line"] == "rummage: vectors 500/1,000, stopped (`rummage index` goes on)"
     assert info["eta_seconds"] is None
 
 
@@ -180,3 +180,79 @@ def test_alive():
     assert P.alive(P.os.getpid())
     assert not P.alive(dead_pid())
     assert not P.alive(None)
+
+
+def test_agents_and_people_follow_a_real_index_run(tmp_path, capsys, monkeypatch):
+    """`rummage index` against an embedding endpoint: while it runs, `status --line` shows it; before and after,
+    search, get and the recall hook say what is missing, and nothing once complete."""
+    import io
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from rummage.cli import main
+
+    during = []
+    config = tmp_path / "config.toml"
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if len(body["input"]) == 1 and not during:
+                during.append(P.state(tmp_path / "data"))
+            rows = [[1.0, float(len(t) % 7), 2.0, 0.5] for t in body["input"]]
+            data = json.dumps({"data": [{"index": n, "embedding": r} for n, r in enumerate(rows)]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    for n in range(12):
+        (notes / f"n{n}.md").write_text(f"# note {n}\n\nthe heron nests by the river, entry {n}\n", encoding="utf-8")
+    config.write_text(f"data_dir = '{(tmp_path / 'data').as_posix()}'\n[embedder]\nmodel = 'tiny'\n"
+                      f"[models.tiny]\nurl = 'http://127.0.0.1:{server.server_port}/v1'\ndim = 4\n"
+                      f"[sources.notes]\ntype = 'markdown'\nroot = '{notes.as_posix()}'\n", encoding="utf-8")
+
+    def run(*argv, stdin=None):
+        if stdin is not None:
+            monkeypatch.setattr("sys.stdin", io.StringIO(stdin))
+        code = main(["--config", str(config), *argv])
+        return code, capsys.readouterr().out
+
+    try:
+        assert run("index", "--no-embed", "-q")[0] == 0
+        line = run("status", "--line")[1].strip()
+        assert line == "rummage: vectors 0/12, paused: nothing is making the missing vectors now"
+        doc = json.loads(run("search", "heron", "--words-only", "--json")[1])
+        assert doc["index"]["state"] == "paused" and doc["index"]["vectors"] == {"done": 0, "total": 12}
+        assert "0 of 12 passages have vectors" in doc["index"]["note"]
+        first = doc["results"][0]["id"]
+        assert json.loads(run("get", first, "--json")[1])["index"]["state"] == "paused"
+        assert "note: Index incomplete" in run("get", first)[1]
+        hook = json.dumps({"prompt": "where does the heron nest", "session_id": "s1"})
+        reply = json.loads(run("recall", "--hook", stdin=hook)[1])
+        assert reply["systemMessage"] == line and reply["rummage"]["index"]["state"] == "paused"
+        assert "0 of 12 passages have vectors" in reply["hookSpecificOutput"]["additionalContext"]
+
+        assert run("index", "-q")[0] == 0
+        assert during and during[0]["state"] == "building" and during[0]["vectors"]["total"] == 12
+        assert during[0]["line"].startswith("rummage: indexing ")
+        assert run("status", "--line")[1] == ""
+        assert json.loads(run("status", "--line", "--json")[1])["state"] == "complete"
+        assert "index" not in json.loads(run("search", "heron", "--words-only", "--json")[1])
+        reply = json.loads(run("recall", "--hook", stdin=hook)[1])
+        assert "systemMessage" not in reply and reply["rummage"]["index"]["state"] == "complete"
+        doc = json.loads((tmp_path / "data" / "progress.json").read_text(encoding="utf-8"))
+        assert doc["read"]["finished"] and doc["embed"]["finished"]
+        assert doc["embed"]["vectors"] == {"notes": {"left": 0, "total": 12}}
+        assert doc["read"]["sources"]["notes"]["phase"] == "done"
+        assert json.loads(run("status", "--json")[1])["progress"]["state"] == "complete"
+    finally:
+        server.shutdown()
