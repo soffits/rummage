@@ -10,6 +10,7 @@ Format `rummage.export.v1`, a folder:
   `vectors.f16` or null, and `pending` the model input of a vector not made yet.
 - `vectors.f16`: the vectors, `dim` float16 values per row, one row after another.
 - `state.json`: each source's read position, so the next index run goes on from where the exported one stopped.
+- `opened.jsonl`: which results were opened after which searches (the feedback that nudges ranking).
 """
 
 from __future__ import annotations
@@ -43,6 +44,8 @@ def export(store: Store, folder: Path) -> dict:
             counts["items"] += 1
             counts["segments"] += len(out)
     (folder / "state.json").write_text(json.dumps(store.states(), ensure_ascii=False), encoding="utf-8")
+    (folder / "opened.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in store.opened_rows()),
+                                         encoding="utf-8")
     manifest = {"format": FORMAT, "vector_version": store.vector_version, "dim": DIM, "dtype": "float16", **counts}
     (folder / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
@@ -71,5 +74,8 @@ def load(store: Store, folder: Path) -> dict:
             store.put(Item(**row), segments)
     for source, value in json.loads((folder / "state.json").read_text(encoding="utf-8")).items():
         store.set_state(source, value)
+    if (folder / "opened.jsonl").exists():
+        store.add_opened([json.loads(line) for line in (folder / "opened.jsonl").read_text(encoding="utf-8").splitlines()
+                          if line.strip()])
     store.commit()
     return manifest

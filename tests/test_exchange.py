@@ -31,6 +31,7 @@ def test_export_import_round_trip_gives_identical_results(tmp_path, capsys):
     (notes / "late.md").write_text("A late note about apples that has no vector yet.", encoding="utf-8")
     from rummage.indexer import index_source
     index_source(store, MarkdownSource("notes", {"root": str(notes)}, tmp_path), model, lambda *a: None, print)
+    store.record_open(["apple", "invoice"], store.find("notes:n3.md"))
     store.close()
 
     cfg_a, cfg_b = tmp_path / "a.toml", tmp_path / "b.toml"
@@ -48,7 +49,7 @@ def test_export_import_round_trip_gives_identical_results(tmp_path, capsys):
         searcher = Searcher(store)
         results.append([[h.as_dict() for h in searcher.search(q, v, limit=8)]
                         for q, v in (("apple invoice", query), ("INV-1007", None), ("late apples", None))])
-        results[-1].append((store.pending_count(), store.states(), store.item_count()))
+        results[-1].append((store.pending_count(), store.states(), store.item_count(), len(store.opened_rows())))
         store.close()
     assert results[0] == results[1]
     assert results[0][-1][0] >= 1   # the pending vector came along

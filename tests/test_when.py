@@ -44,3 +44,21 @@ def test_items_from_the_named_time_rank_first(tmp_path):
                                    when=understand("dentist appointment last Wednesday", NOW))
     assert len(plain) == 2 and dated[0].ref == "recent" and len(dated) == 2
     store.close()
+
+
+def test_dated_note_names_count_as_their_time(tmp_path):
+    from rummage.sources.folder import path_dates
+
+    assert path_dates("weather/2026-10-15.md")["when"] == _day("2026-10-15")
+    assert path_dates("weekly/2026-W44.md")["when"] == _day("2026-10-26")
+    assert path_dates("finance/months/2026-10.md")["when_end"] == _day("2026-11-01")
+    assert path_dates("notes/lease.md") == {} and path_dates("ids/4815162342.md") == {}
+
+    store = Store(tmp_path / "index.db")
+    for key, info in (("weekly/2026-W45.md", path_dates("weekly/2026-W45.md")), ("plan.md", {})):
+        store.put(Item("notes", key, "note", key, key, NOW.timestamp(), None, info),
+                  [Segment("text", "the weekly plan and its open tasks", loc="0")])
+    store.commit()
+    hits = Searcher(store).search("plan tasks last week", None, limit=2, when=understand("plan tasks last week", NOW))
+    assert hits[0].ref == "weekly/2026-W45.md"
+    store.close()
