@@ -108,7 +108,7 @@ request, a summary (result count, how many are strong, meaning and word matches)
 for `get`), and `next_actions`, runnable commands with a reason (open the best match, trim the weak tail, broaden the
 scope, search exact words). `--truncate knee` drops the weak tail at the score curve's elbow, `--files` prints only
 refs, and `--budget-tokens N` trims the JSON to about N tokens, keeping the top result. Exit codes: 0 success
-(including no results), 1 failure, 2 usage, 3 index missing or made with other vectors, 4 index busy, 5 model files
+(including no results), 1 failure, 2 usage, 3 index missing, 4 index busy, 5 model files
 missing; with `--json`, failures print a `rummage.error.v1` object with `next_actions` too.
 
 ### Switching models
