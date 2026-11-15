@@ -16,7 +16,7 @@ import traceback
 from contextlib import contextmanager
 from pathlib import Path
 
-from .runtime import Embedder, Runtime
+from .runtime import REFERENCE_COSINE, EmbedError, Embedder, RemoteEmbedder, Runtime, reference_agreement
 from .sources import Source
 from .store import Store
 
@@ -76,7 +76,12 @@ class Embedders:
 
     RECHECK_SECONDS = 60
 
-    def __init__(self, runtime: Runtime, threads: int, nice: int, log_path: Path, max_threads: int = 0):
+    def __init__(self, runtime: Runtime, threads: int, nice: int, log_path: Path, max_threads: int = 0,
+                 remote: str | None = None, warn=lambda *a: None):
+        self.remote_url = remote
+        self.remote: RemoteEmbedder | None = None
+        self.reference: list | None = None
+        self.warn = warn
         self.runtime = runtime
         self.threads = threads
         self.max_threads = max_threads
@@ -89,7 +94,30 @@ class Embedders:
         mine = self.current.threads if self.current else 0
         return spare_threads(self.threads, self.max_threads, mine, _load(), os.cpu_count() or 1)
 
+    def _remote(self, media: bool) -> Embedder | None:
+        """The remote embedder, once it answered and agreed with the index's reference vectors; None otherwise
+        (checked once per run)."""
+        if not self.remote_url:
+            return None
+        if self.remote is None:
+            candidate = RemoteEmbedder(self.remote_url)
+            try:
+                candidate.start()
+                if self.reference is not None:
+                    agreement = reference_agreement(candidate, self.reference)
+                    if agreement < REFERENCE_COSINE:
+                        raise EmbedError(f"its vectors differ from the index's (cosine {agreement:.4f})")
+                self.remote = candidate
+            except EmbedError as error:
+                self.warn(f"remote embedder {self.remote_url} not used: {error}")
+                self.remote_url = None
+                return None
+        return self.remote if (self.remote.media or not media) else None
+
     def get(self, media: bool) -> Embedder:
+        remote = self._remote(media)
+        if remote is not None:
+            return remote
         threads = None
         if self.current and (self.current.media or not media):
             if self.max_threads <= self.threads or time.monotonic() - self.checked < self.RECHECK_SECONDS:

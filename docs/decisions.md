@@ -44,3 +44,4 @@
 ## Runtime
 
 - Threads follow the load by restarting `llama-server` (about a second) when the wanted count changes, checked at most once a minute: llama.cpp fixes the thread count at start, and a minute-scale check matches the 1-minute load average it reads.
+- A remote embedder is trusted by result, not by name: it is used only when its vectors for three fixed reference texts agree with the ones stored at the index's first run (cosine ≥ 0.999, the same bar `doctor` applies to a llama.cpp upgrade). Queries keep using the local model or daemon, so search never depends on another machine.

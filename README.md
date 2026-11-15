@@ -48,6 +48,10 @@ threads = 2                           # CPU threads for llama.cpp
 # max_threads = "auto"                # while indexing, use up to cores - 1 when the machine is otherwise idle
 nice = 10
 
+# [embedder]
+# url = "http://gpu-box:8080"         # index with a llama-server elsewhere running the same pinned model (faster
+#                                     # backfills); used only while it answers and its vectors agree with the index's
+
 [sources.documents]
 type = "files"                        # text, Markdown, HTML, PDF, Office/OpenDocument, pictures, archive listings
 root = "~/Documents"

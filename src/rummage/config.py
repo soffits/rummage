@@ -9,6 +9,10 @@
     nice = 10
     # llama_server = "/usr/bin/llama-server"  # instead of the pinned build
 
+    # [embedder]
+    # url = "http://gpu-box:8080"             # a llama-server with the same pinned model, used for indexing when
+    #                                         # it answers and agrees with the index's reference vectors
+
     [sources.notes]
     type = "files"
     root = "~/Documents"
@@ -34,6 +38,7 @@ class Config:
     max_threads: int = 0
     nice: int = 10
     llama_server: str | None = None
+    embedder_url: str | None = None
     sources: dict[str, dict] = field(default_factory=dict)
     remotes: dict[str, dict] = field(default_factory=dict)
 
@@ -82,6 +87,7 @@ def load(path: Path | None = None) -> Config:
         max_threads=_max_threads(runtime.get("max_threads", 0)),
         nice=int(runtime.get("nice", 10)),
         llama_server=os.environ.get("RUMMAGE_LLAMA_SERVER") or runtime.get("llama_server"),
+        embedder_url=(data.get("embedder") or {}).get("url"),
         sources=dict(data.get("sources", {})),
         remotes=dict(data.get("remotes", {})),
     )
