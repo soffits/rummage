@@ -30,47 +30,88 @@ from pathlib import Path
 BEIR = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/{name}.zip"
 
 
+def _name(doc_id: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in doc_id) + ".md"
+
+
+def _fetch(url: str, target: Path) -> Path:
+    if not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with urllib.request.urlopen(url, timeout=600) as r:
+            target.with_suffix(".part").write_bytes(r.read())
+        target.with_suffix(".part").rename(target)
+    return target
+
+
+def load_beir(name: str, raw: Path):
+    """(documents, queries, judgements) of a BEIR dataset's test split; documents are (id, title, text)."""
+    if not (raw / name / "corpus.jsonl").exists():
+        zip_path = _fetch(BEIR.format(name=name), raw / f"{name}.zip")
+        zipfile.ZipFile(zip_path).extractall(raw)
+    base = raw / name
+    queries = {q["_id"]: q["text"] for q in map(json.loads, open(base / "queries.jsonl", encoding="utf-8"))}
+    judged: dict[str, dict[str, int]] = {}
+    with open(base / "qrels" / "test.tsv", encoding="utf-8") as f:
+        for row in csv.DictReader(f, delimiter="\t"):
+            judged.setdefault(row["query-id"], {})[row["corpus-id"]] = int(row["score"])
+
+    def documents():
+        for line in open(base / "corpus.jsonl", encoding="utf-8"):
+            doc = json.loads(line)
+            yield doc["_id"], doc.get("title") or "", doc["text"]
+    return documents, queries, judged
+
+
+def load_miracl(lang: str, raw: Path):
+    """MIRACL dev (from the MTEB copy): the corpus is every passage judged for the kept queries, relevant or not,
+    so each query is ranked among its own hard negatives."""
+    import pyarrow.parquet as pq
+
+    hub = "https://huggingface.co/datasets/mteb/MIRACLRetrieval/resolve/main"
+    api = f"https://huggingface.co/api/datasets/mteb/MIRACLRetrieval/tree/main/{lang}-corpus"
+    read = lambda part: pq.read_table(_fetch(f"{hub}/{part}", raw / part.replace("/", "_"))).to_pylist()
+    queries = {q["_id"]: q["text"] for q in read(f"{lang}-queries/dev-00000-of-00001.parquet")}
+    judged: dict[str, dict[str, int]] = {}
+    for row in read(f"{lang}-qrels/dev-00000-of-00001.parquet"):
+        judged.setdefault(row["query-id"], {})[row["corpus-id"]] = int(row["score"])
+    with urllib.request.urlopen(api, timeout=60) as r:
+        parts = [f["path"] for f in json.load(r) if f["path"].endswith(".parquet")]
+
+    def documents():
+        for part in parts:
+            for doc in read(part):
+                yield doc["_id"], doc.get("title") or "", doc["text"]
+    return documents, queries, judged
+
+
 def prepare(dataset: str, work: Path, limit_queries: int | None, limit_docs: int | None) -> tuple[Path, dict, dict]:
-    """Downloads the dataset once, writes the corpus as files, returns (corpus dir, queries, qrels). With limits, a
-    smaller corpus (the judged documents of the kept queries, then others up to `limit_docs`) goes to its own
-    folder, for smoke runs."""
-    root = work / (dataset if not (limit_queries or limit_docs) else f"{dataset}-q{limit_queries}-d{limit_docs}")
+    """Downloads the dataset once, writes the corpus as one Markdown file per document, and returns (corpus dir,
+    queries, relevance). `beir:<name>` (or a bare BEIR name) or `miracl:<lang>`. With limits, only the first N
+    judged queries are kept and the corpus is their judged documents plus others up to `limit_docs`."""
+    kind, _, name = dataset.partition(":") if ":" in dataset else ("beir", "", dataset)
+    root = work / (dataset.replace(":", "-") + (f"-q{limit_queries}-d{limit_docs}" if limit_queries or limit_docs else ""))
     corpus_dir = root / "corpus"
-    raw = work / dataset / "raw"
-    if not (raw / dataset / "corpus.jsonl").exists():
-        raw.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(BEIR.format(name=dataset), timeout=300) as r:
-            zipfile.ZipFile(io.BytesIO(r.read())).extractall(raw)
-    base = raw / dataset
+    raw = work / "raw"
+    documents, queries, judged = (load_miracl if kind == "miracl" else load_beir)(name, raw)
+    ids = sorted(q for q in judged if q in queries and any(v > 0 for v in judged[q].values()))
+    ids = ids[:limit_queries] if limit_queries else ids
+    wanted = {d for q in ids for d in judged[q]}
+    whole_corpus = kind != "miracl" and not limit_docs
     if not corpus_dir.exists():
         tmp = corpus_dir.with_suffix(".part")
         shutil.rmtree(tmp, ignore_errors=True)
         tmp.mkdir(parents=True)
-        for line in open(base / "corpus.jsonl", encoding="utf-8"):
-            doc = json.loads(line)
-            name = "".join(c if c.isalnum() or c in "-_" else "_" for c in doc["_id"])
-            title = (doc.get("title") or name).replace('"', "'")
-            (tmp / f"{name}.md").write_text(f'---\ntitle: "{title}"\n---\n{doc["text"]}\n', encoding="utf-8")
+        extra = 0
+        for doc_id, title, text in documents():
+            keep = whole_corpus or doc_id in wanted
+            if not keep and limit_docs and len(wanted) + extra < limit_docs:
+                keep, extra = True, extra + 1
+            if keep:
+                safe_title = (title or doc_id).replace('"', "'")
+                (tmp / _name(doc_id)).write_text(f'---\ntitle: "{safe_title}"\n---\n{text}\n', encoding="utf-8")
         tmp.rename(corpus_dir)
-    queries = {}
-    for line in open(base / "queries.jsonl", encoding="utf-8"):
-        q = json.loads(line)
-        queries[q["_id"]] = q["text"]
-    qrels: dict[str, dict[str, int]] = {}
-    with open(base / "qrels" / "test.tsv", encoding="utf-8") as f:
-        for row in csv.DictReader(f, delimiter="\t"):
-            if int(row["score"]) > 0:
-                name = "".join(c if c.isalnum() or c in "-_" else "_" for c in row["corpus-id"])
-                qrels.setdefault(row["query-id"], {})[f"{name}.md"] = int(row["score"])
-    ids = sorted(qrels)[:limit_queries] if limit_queries else sorted(qrels)
-    if limit_docs:
-        keep = {d for i in ids for d in qrels[i]}
-        for path in sorted(corpus_dir.glob("*.md")):
-            if path.name not in keep and len(keep) >= limit_docs:
-                path.unlink()
-            else:
-                keep.add(path.name)
-    return corpus_dir, {i: queries[i] for i in ids}, {i: qrels[i] for i in ids}
+    relevance = {q: {_name(d): g for d, g in judged[q].items() if g > 0} for q in ids}
+    return corpus_dir, {q: queries[q] for q in ids}, relevance
 
 
 def metrics(ranked: list[str], relevant: dict[str, int]) -> dict:
@@ -178,7 +219,7 @@ def run_qmd(corpus: Path, queries: dict, home: Path, threads: int, mode: str) ->
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--dataset", default="scifact")
+    parser.add_argument("--dataset", default="scifact", help="a BEIR name (scifact, nfcorpus...) or miracl:<lang>")
     parser.add_argument("--engine", default="rummage", choices=["rummage", "fidx", "qmd-search", "qmd-query"])
     parser.add_argument("--work", type=Path, default=Path("bench/work"))
     parser.add_argument("--runtime-dir", type=Path, help="an existing rummage runtime/ folder to reuse")
@@ -198,7 +239,7 @@ def main() -> int:
     index_seconds, index_bytes, ranked, latencies = result
     per_query = [metrics(ranked.get(q, []), qrels[q]) for q in queries]
     summary = summarize(per_query, latencies)
-    summary.update({"engine": args.engine, "dataset": args.dataset, "documents": len(list(corpus.glob("*.md"))),
+    summary.update({"engine": args.engine, "dataset": args.dataset, "limit_queries": args.limit_queries, "documents": len(list(corpus.glob("*.md"))),
                     "index_seconds": round(index_seconds, 1), "index_mb": round(index_bytes / 1e6, 1),
                     "threads": args.threads})
     out = corpus.parent / "results" / f"{args.engine}.json"
