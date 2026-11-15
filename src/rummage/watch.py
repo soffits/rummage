@@ -136,8 +136,10 @@ def run(cfg: C.Config, names: list[str], poll_minutes: float, settle_seconds: fl
     except ImportError:
         watch = None
     if watch and roots:
-        for changes in watch(*roots, debounce=int(settle_seconds * 1000), yield_on_timeout=True,
-                             rust_timeout=5000):
+        # A batch goes once its folders have been quiet for `settle_seconds`, or at the latest after four times
+        # that while they keep changing (a chat log written to all the time).
+        for changes in watch(*roots, step=int(settle_seconds * 1000), debounce=int(settle_seconds * 4000),
+                             yield_on_timeout=True, rust_timeout=5000):
             batch({n for _, changed in changes if (n := owner(changed))})
         return 0
     last = _snapshot(roots)
