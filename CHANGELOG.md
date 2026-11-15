@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Unchanged passages keep their vectors: an edited file only embeds what changed, and a moved file embeds nothing, by matching a hash of each passage's model input (or picture bytes) against stored vectors.
+
 ## 0.3.0
 
 - Relicensed from MIT to AGPL-3.0-or-later; 0.2.x and earlier stay MIT. Third-party notices in `NOTICE`.
