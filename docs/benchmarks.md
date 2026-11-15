@@ -12,39 +12,65 @@ with each other there, not with leaderboards.
 Every test query against the whole corpus. rummage 0.9.1 with EmbeddingGemma 2 Q8_0 (512 dimensions); for these runs
 the vectors came from the same pinned GGUF on a GPU machine's `llama-server` (`--embedder-url`), which agrees with the
 local CPU build on rummage's reference vectors (cosine 0.9997, above the 0.999 the index requires), so the scores are
-those of a CPU index. Queries go through `rummage search --json` with the daemon warm; qmd and fidx run on the CPU.
+those of a CPU index. Queries go through `rummage search --json` with the daemon warm; qmd and fidx run on the CPU
+with 2 threads. Index times aren't comparable across tools here (rummage embedded on the GPU), and latencies were
+taken with other runs sharing the machine.
 
-| Set | queries / documents | rummage nDCG@10 (95% CI) | recall@10 | recall@100 | MRR@10 | hit@1 |
-|---|---|---|---|---|---|---|
-| SciFact | 300 / 5,183 | **0.864** (0.830–0.896) | 0.938 | 0.977 | 0.844 | 0.787 |
-| NFCorpus | 323 / 3,633 | **0.377** (0.344–0.412) | 0.192 | 0.346 | 0.584 | 0.486 |
+nDCG@10 with its 95% bootstrap interval; a blank cell is still running or not run yet.
 
-qmd's keyword mode on full SciFact: nDCG@10 0.045. Its vector and hybrid modes, fidx, FiQA, MIRACL and the memory
-benchmarks follow.
+| System | SciFact (300 / 5,183) | NFCorpus (323 / 3,633) | FiQA (648 / 57,638) | MIRACL ko (213 / 43,293) | MIRACL zh (393 / 81,309) |
+|---|---|---|---|---|---|
+| rummage | **0.864** (0.830–0.896) | **0.377** (0.344–0.412) | 0.357 (0.332–0.386) | 0.681 (0.637–0.725) | 0.639 (0.607–0.669) |
+| plain dense, same model (EmbeddingGemma 2) | 0.853 (0.818–0.884) | | | | |
+| fidx, default profile | 0.718 (0.677–0.757) | 0.357 (0.324–0.391) | | | |
+| fidx, `e5-768` profile | 0.729 (0.688–0.769) | 0.361 (0.328–0.395) | | | |
+| qmd `search` (BM25) | 0.045 (0.023–0.070) | 0.202 (0.170–0.237) | | 0.001 (0.000–0.002) | |
+| qmd `vsearch` (EmbeddingGemma 1) | | 0.373 (0.339–0.407) | | | |
+| qmd `query` (EmbeddingGemma 1, reranker) | | | | | |
+
+Recall@100: rummage 0.977, 0.346, 0.692, 0.979, 0.987 on the five sets; on NFCorpus fidx reaches 0.287 (default) and
+0.305 (`e5-768`), qmd `vsearch` 0.307.
+
+Reading these:
+
+- Against plain dense retrieval with the same model, rummage gains about a point on SciFact (0.864 against 0.853,
+  inside each other's intervals). Most of its lead over fidx on SciFact comes from the model, not the method.
+- On NFCorpus, rummage and qmd's vector mode are level (0.377 and 0.373). qmd's `vsearch` also expands each query with
+  its own 1.7B model before searching, and uses EmbeddingGemma 1 rather than 2.
+- qmd's `search` mode requires every query word in a document, so it finds almost nothing for sentence-long
+  queries; that describes its keyword mode, not qmd's hybrid search.
+- An earlier qmd `vsearch` run on SciFact scored 0.177 because `qmd embed` stops after 30 minutes by default and had
+  embedded 703 of 5,214 chunks. That result was discarded; the benchmark now embeds without a time limit and refuses
+  to score any index with passages still waiting for a vector (rummage's or qmd's).
+- qmd can't load EmbeddingGemma 2: its llama.cpp binding reports `unknown model architecture: 'gemma-embedding2'`.
+  The same-model comparison therefore runs the other way, rummage over qmd's EmbeddingGemma 1 (below, with two more
+  models).
 
 ### What each part is worth
 
 `--engine rummage-ablations` reranks the same index with one part changed (`bench/engines.py`, `VARIANTS`), so only
-the ranking differs. nDCG@10, with recall@100 in brackets:
+the ranking differs. nDCG@10:
 
-| Variant | SciFact | NFCorpus |
-|---|---|---|
-| full ranking | 0.864 (0.977) | 0.378 (0.346) |
-| cosine only: no words, no z-scores, no gate | 0.843 (0.977) | 0.368 (0.361) |
-| vectors only: no words | 0.843 (0.977) | 0.368 (0.333) |
-| words only | 0.423 (0.501) | 0.218 (0.164) |
-| no gate | 0.864 (0.977) | 0.378 (0.367) |
-| no z-scores: raw cosine plus the word bonus | 0.623 (0.896) | 0.338 (0.328) |
-| no CJK character pairs | 0.864 (0.977) | 0.378 (0.346) |
+| Variant | SciFact | NFCorpus | FiQA | MIRACL ko | MIRACL zh |
+|---|---|---|---|---|---|
+| full ranking | 0.864 | 0.378 | 0.356 | 0.680 | 0.640 |
+| cosine only: no words, no z-scores, no gate | 0.843 | 0.368 | 0.333 | 0.648 | 0.620 |
+| vectors only: no words | 0.843 | 0.368 | 0.333 | 0.648 | 0.620 |
+| words only | 0.423 | 0.218 | 0.114 | 0.310 | 0.082 |
+| no gate | 0.864 | 0.378 | 0.356 | 0.680 | 0.640 |
+| no z-scores: raw cosine plus the word bonus | 0.623 | 0.338 | 0.237 | 0.510 | 0.286 |
+| no CJK character pairs | 0.864 | 0.378 | 0.356 | 0.667 | 0.618 |
 
-- Adding words to the vectors gains 1 to 2 points of nDCG@10 here; the rest of the score is the model.
+- Adding words to the vectors gains 1 to 3 points of nDCG@10 on every set (SciFact +2.1, NFCorpus +1.0, FiQA +2.4,
+  Korean +3.2, Chinese +2.0). That is the method's share; the rest of the score is the model.
 - The z-scores are what make the mix work. Raw cosines of relevant passages sit around 0.3 to 0.6 while the word
   bonus goes up to 2, so without the per-query scale the words swamp the meaning and the ranking falls toward the
   words-only one. "no z-scores" is therefore not a vector baseline; "cosine only" is.
-- The gate changes nothing in the top 10 on these sets. On NFCorpus it drops some weak vector candidates from the top
-  100 (recall@100 0.346 against 0.367 without it): that is its job, to keep loose matches out of short result lists
-  and recall, at a small cost deep in the list.
-- CJK pairs only matter on CJK text; the MIRACL runs measure them.
+- The gate changes nothing in the top 10 on any of these sets. On NFCorpus it drops some weak vector candidates from
+  the top 100 (recall@100 0.346 against 0.367 without it): that is its job, to keep loose matches out of short result
+  lists and recall, at a small cost deep in the list.
+- Matching CJK queries by character pairs is worth 1.4 points on Korean and 2.2 on Chinese; words alone are weak on
+  Chinese (0.082) because a question shares few exact runs with its passage.
 
 ### Is 0.864 on SciFact right?
 
@@ -67,6 +93,48 @@ by cosine:
 ```sh
 uv run --with pyarrow --with pytrec_eval-terrier python bench/dense_check.py --dataset scifact --embedder-url <url>
 ```
+
+## Memory: what `rummage recall` injects
+
+`bench/memory.py` writes each conversation as a chat log, indexes it, and asks every question through recall's own
+selection over that conversation's history. Recall injects at most 4 items: a passage that stands out by meaning
+(z-score of at least 3) or holds at least two thirds of the question's words. The answer itself isn't graded here.
+
+### LoCoMo (10 conversations, 1,986 questions)
+
+At recall's defaults:
+
+| | |
+|---|---|
+| answerable questions where an injected item is an evidence turn (hit rate) | 0.479 |
+| answerable questions where recall injected nothing | 0.281 |
+| injected items, on answerable questions, that are an evidence turn | 0.330 |
+| "unanswerable" questions where recall injected something | 0.666 |
+| evidence turn in the top 10 of plain `rummage search` | 0.797 |
+
+By category, the hit rate is 0.33 for single-hop questions, 0.59 for multi-hop, 0.28 for open-domain and 0.51 for
+temporal ones.
+
+The same selection over a grid of thresholds (min z, min share of words; "off" means words alone never inject):
+
+| min z | words | hit rate | silent when answerable | injects on unanswerable | precision of injected items |
+|---|---|---|---|---|---|
+| 2.0 | 0.67 | 0.696 | 0.011 | 0.991 | 0.206 |
+| 2.5 | 0.67 | 0.608 | 0.096 | 0.861 | 0.248 |
+| **3.0** | **0.67** | **0.479** | **0.281** | **0.666** | **0.330** |
+| 3.0 | off | 0.431 | 0.364 | 0.610 | 0.342 |
+| 3.5 | 0.67 | 0.351 | 0.459 | 0.437 | 0.407 |
+| 4.0 | 0.67 | 0.256 | 0.592 | 0.312 | 0.433 |
+| 4.0 | off | 0.143 | 0.803 | 0.175 | 0.566 |
+| 5.0 | off | 0.033 | 0.960 | 0.043 | 0.667 |
+
+This is a real weakness. At every setting recall injects on LoCoMo's unanswerable questions about as often as on
+the answerable ones, so its threshold controls how much it says, not whether the history holds an answer; and only
+a third to a half of what it injects is an evidence turn. Precision is a lower bound (a neighbouring turn often holds
+the same fact but isn't the annotated one), and LoCoMo's unanswerable questions are adversarial: each takes a real
+event and puts it on the other speaker, so a matching turn does exist (39% of the injections on them are exactly
+that turn). LongMemEval's abstention questions, which ask about things never mentioned, are the cleaner test of
+staying silent; they follow.
 
 ## First slices
 
@@ -110,10 +178,9 @@ among its own hard negatives.
   natural-language queries, not how good qmd's hybrid mode is.
 - fidx indexes faster here; rummage embeds every ~1,800-character passage with a 300M-parameter model on the CPU.
 - On Korean, rummage's model (EmbeddingGemma 2, trained on over 100 languages) and its CJK word matching by
-  character pairs hold up much better than fidx's default profile; how much of that is the model is what the
-  same-model runs in the plan will show.
-- Same-model runs (qmd with EmbeddingGemma 2), qmd's hybrid mode, the full corpora, more languages and ablations of
-  rummage's own parts are in the evaluation plan.
+  character pairs hold up much better than fidx's default profile; the full sets and the same-model runs measure
+  how much of that is the model.
+- The full-set runs above replace these slices for comparing tools.
 
 ## Embedding speed
 
