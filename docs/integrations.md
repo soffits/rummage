@@ -68,6 +68,7 @@ Output, always one JSON object, even when nothing matched:
   "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "Recalled from …"},
   "systemMessage": "rummage: recall paused until 16:30",
   "rummage": {
+    "index": {"state": "complete", "line": "", "note": "", "…": "…"},
     "scope": {"name": "app", "kind": "project", "folder": "/work/app", "sources": [], "folders": ["/work/app"],
               "hidden_sources": []},
     "project": {"cwd": "/work/app/src", "project": {"folder": "/work/app", "source": "project-app-1a2b3c",
@@ -79,9 +80,10 @@ Output, always one JSON object, even when nothing matched:
 }
 ```
 
-`hookSpecificOutput` is there only when something matched; `systemMessage` only when there is something to tell the
-person (a pause); `paused` only while one applies. Adapters ignore fields they don't know, so later versions can add
-to `rummage` (index progress, for example).
+`hookSpecificOutput` is there only when there is a block for the model; `systemMessage` only when there is something
+to tell the person: the pause while recall is paused, else the index status line while the index is incomplete.
+`paused` is there only while a pause applies; `index` is described under
+[Index progress for adapters](#index-progress-for-adapters). Adapters ignore fields they don't know.
 
 ## Projects without setup
 
@@ -250,7 +252,8 @@ harness knows them. It always replies with JSON, also when it has nothing to rec
 
 - `hookSpecificOutput.additionalContext`: the block for the model, when there is one. While the index is
   incomplete it ends with one sentence saying so; when nothing matched it is only that sentence.
-- `systemMessage`: the status line for the person, only while the index isn't complete.
+- `systemMessage`: the status line for the person, only while the index isn't complete (or the pause, while recall
+  is paused).
 - `rummage.index`: the whole summary, the same object `rummage status --line --json` prints:
 
 | Field | Meaning |
