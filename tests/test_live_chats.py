@@ -51,6 +51,10 @@ def test_agent_history_is_off_until_enabled(tmp_path, monkeypatch, capsys):
 
     _run(capsys, "--config", str(cfg), "sources", "enable", "claude-code")
     assert "[sources.claude-code]" in cfg.read_text()
+    cfg.write_text(cfg.read_text().replace("[sources.claude-code]", "[sources.my-claude]"), encoding="utf-8")
+    code, out = _run(capsys, "--config", str(cfg), "sources", "--json")
+    assert "claude-code" not in json.loads(out)["detected"]   # configured under another name: not offered again
+    cfg.write_text(cfg.read_text().replace("[sources.my-claude]", "[sources.claude-code]"), encoding="utf-8")
     code, _ = _run(capsys, "--config", str(cfg), "index", "--no-embed", "-q")
     assert code == 0
     code, out = _run(capsys, "--config", str(cfg), "search", "router config", "--words-only", "--json")
