@@ -92,6 +92,21 @@ class Item:
     info: dict = field(default_factory=dict)
 
 
+def item_id(source: str, key: str) -> str:
+    """A short id that stays the same for an item across runs and machines (shown as `#<id>`)."""
+    return hashlib.sha1(f"{source}\0{key}".encode("utf-8")).hexdigest()[:10]
+
+
+class NotFound(LookupError):
+    pass
+
+
+class Ambiguous(LookupError):
+    def __init__(self, ref: str, candidates: list[str]):
+        super().__init__(f"{ref!r} matches {len(candidates)} items")
+        self.candidates = candidates
+
+
 class VersionMismatch(RuntimeError):
     pass
 
@@ -219,6 +234,37 @@ class Store:
                         (self.db.execute("SELECT source FROM runs WHERE id = ?", (run,)).fetchone()[0],) * 2)
         self.db.commit()
 
+    def find(self, ref: str) -> int:
+        """The row id of an item named by `#<id prefix>`, its `ref`, or `source:key`."""
+        if ref.startswith("#") and len(ref) >= 5:
+            prefix = ref[1:].lower()
+            hits = [(row, f"{src}:{key}") for row, src, key in self.db.execute("SELECT id, source, key FROM items")
+                    if item_id(src, key).startswith(prefix)]
+        else:
+            hits = [(row, f"{src}:{key}") for row, src, key in self.db.execute(
+                "SELECT id, source, key FROM items WHERE ref = ? OR source || ':' || key = ?", (ref, ref))]
+        if not hits:
+            raise NotFound(f"no item {ref!r}")
+        if len(hits) > 1:
+            raise Ambiguous(ref, [name for _, name in hits[:10]])
+        return hits[0][0]
+
+    def item(self, row: int, loc: str | None = None) -> dict:
+        """An item's metadata and its text: one passage when `loc` is given, else every passage stitched in order."""
+        source, key, kind, title, ref, mtime, info = self.db.execute(
+            "SELECT source, key, kind, title, ref, mtime, info FROM items WHERE id = ?", (row,)).fetchone()
+        segments = self.db.execute(
+            "SELECT kind, loc, text FROM segments WHERE item = ? AND kind = 'text' ORDER BY id", (row,)).fetchall()
+        if loc is not None:
+            segments = [s for s in segments if s[1] == loc]
+            if not segments:
+                raise NotFound(f"no passage at {loc!r} in {ref}")
+        text = ""
+        for _, _, piece in segments:
+            text = _stitch(text, piece or "")
+        return {"id": "#" + item_id(source, key), "source": source, "key": key, "kind": kind, "title": title,
+                "ref": ref, "mtime": mtime, "info": json.loads(info or "{}"), "loc": loc, "text": text}
+
     def summary(self) -> dict:
         out: dict = {"path": str(self.path), "vector_version": self.vector_version,
                      "bytes": self.path.stat().st_size if self.path.exists() else 0, "sources": {}}
@@ -238,3 +284,13 @@ class Store:
             entry["last_run"] = dict(zip(keys, last))
             entry["last_ok"] = good
         return out
+
+
+def _stitch(text: str, piece: str, longest: int = 400) -> str:
+    """Appends `piece` to `text`, dropping the start of `piece` that repeats the end of `text` (passages overlap)."""
+    if not text:
+        return piece
+    for size in range(min(longest, len(text), len(piece)), 20, -1):
+        if text.endswith(piece[:size]):
+            return text + piece[size:]
+    return text + "\n\n" + piece
