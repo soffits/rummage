@@ -10,9 +10,12 @@ uv run python bench/run.py --dataset scifact --engine rummage
 uv run python bench/run.py --dataset scifact --engine fidx        # needs uvx
 uv run python bench/run.py --dataset scifact --engine qmd-query   # needs npx; also qmd-search
 uv run python bench/run.py --dataset scifact --engine rummage --limit-queries 10 --limit-docs 120   # smoke run
+uv run --with pyarrow python bench/run.py --dataset miracl:ko --limit-queries 100   # Korean, MIRACL dev
 ```
 
-Every engine indexes the same folder of Markdown files (one per document, the title in the frontmatter). Data and
+`miracl:<lang>` uses the MIRACL dev split (from MTEB's copy on Hugging Face): the corpus is every passage judged
+for the kept queries, relevant or not, so each query is ranked among its own hard negatives. Every engine indexes
+the same folder of Markdown files (one per document, the title in the frontmatter). Data and
 indexes go under `bench/work/` (ignored by git). `--runtime-dir` reuses an existing rummage `runtime/` folder instead
 of downloading the model again. Results are in `bench/work/<dataset>/results/<engine>.json`; published numbers are
 in [docs/benchmarks.md](../docs/benchmarks.md).

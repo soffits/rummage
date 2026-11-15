@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `bench/run.py --dataset miracl:<lang>`: MIRACL dev slices (each query among its judged hard negatives), for CJK and other languages next to the English BEIR sets.
+
 ## 0.6.1
 
 - Small indexes find things by meaning again: the meaning gate (z ≥ 2) is lowered to what the top match can reach when an index has only a handful of passages (found by the install check, where a three-file index returned nothing).
