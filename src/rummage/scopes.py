@@ -43,6 +43,10 @@ class Resolved:
             out["hidden_sources"] = self.within.hidden
         return out
 
+    def limited(self) -> bool:
+        """Whether the query saw only part of the index."""
+        return self.within is not None and not (self.within.everything and not self.within.hidden)
+
     def line(self) -> str:
         """One sentence for text output: what this query saw and how to see more."""
         if self.kind == "everything":

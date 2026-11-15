@@ -310,6 +310,16 @@ class Store:
         self.db.commit()
         return len(keys)
 
+    def matches(self, item: Item, scopes: list[Scope]) -> bool:
+        """Whether `item` (not necessarily stored) lies in one of `scopes`."""
+        row = "(SELECT ? AS source, ? AS ref, ? AS mtime, ? AS info) i"
+        values = [item.source, item.ref, item.mtime, json.dumps(item.info, ensure_ascii=False)]
+        for scope in scopes:
+            where, args = scope.where("i")
+            if self.db.execute(f"SELECT 1 FROM {row} WHERE 1{where}", [*values, *args]).fetchone():
+                return True
+        return False
+
     def drop_where(self, scope: Scope) -> dict[str, int]:
         """Removes the items `scope` selects; how many per source."""
         where, args = scope.where("i")
