@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.2
+
+- Agent integrations: this repository is a Claude Code and Codex plugin marketplace (recall hook plus the rummage skill), with an OpenCode 2 plugin in `integrations/opencode` (published as `@soffits/opencode-rummage`) and a Hermes Agent plugin in `integrations/hermes`.
+
 ## 0.11.1
 
 - `rummage setup` tries llama.cpp's GPU build (Vulkan on Linux and Windows, Metal on macOS) and uses it only when it sees a GPU, embeds clearly faster than the CPU build and gives the model's reference vectors; otherwise the CPU build stays. `rummage status` shows the backend and why; `rummage setup --backend auto|cpu` checks again or stays on the CPU.

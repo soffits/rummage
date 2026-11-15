@@ -1,0 +1,11 @@
+{
+  "name": "rummage",
+  "owner": { "name": "Sakina" },
+  "plugins": [
+    {
+      "name": "rummage",
+      "source": "./",
+      "description": "Recall from your own files before each prompt, and a skill for searching them with the rummage CLI."
+    }
+  ]
+}

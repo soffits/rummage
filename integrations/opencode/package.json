@@ -1,0 +1,16 @@
+{
+  "name": "@soffits/opencode-rummage",
+  "version": "0.1.0",
+  "description": "OpenCode plugin for rummage: recall from your own files on each prompt, and a skill for searching them.",
+  "license": "AGPL-3.0-or-later",
+  "author": "Sakina",
+  "homepage": "https://github.com/soffits/rummage/blob/main/docs/integrations.md#opencode",
+  "repository": { "type": "git", "url": "git+https://github.com/soffits/rummage.git", "directory": "integrations/opencode" },
+  "keywords": ["opencode", "opencode-plugin", "memory", "recall", "search"],
+  "type": "module",
+  "exports": { ".": "./index.js" },
+  "files": ["index.js", "skills"],
+  "scripts": {
+    "prepack": "node -e \"require('fs').cpSync('../../skills/rummage', 'skills/rummage', { recursive: true })\""
+  }
+}
