@@ -39,7 +39,6 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 - Images, recordings, videos and scanned PDFs in Seafile libraries are found by name only; OCR or image vectors for documents would need the image encoder on the server.
 - Audio and video are not indexed.
 - A document that can't be read at all (a corrupt PDF or Office file) fails its whole item: it isn't findable even by name, and since a run with failures saves no state, it is read again on every run and a Seafile library is listed again on every poll. Storing it by name with a `partial` note would fix both, but needs a line between permanent read errors and network ones, which should stay retried.
-- A message that another agent sends into a DSH session through `open_session` without the "[Sent by the agent" prefix is attributed to the web user.
 - Vectors are loaded from SQLite on every search; a memory-mapped cache would help once an index passes a few hundred thousand segments.
 - **Cross-language miss is in the meaning score.** A Chinese question ("车库钥匙放在哪里", where is the garage key
   kept) whose answer is an English note section stays below Chinese chat lines: the model scores passages in the

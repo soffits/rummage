@@ -92,3 +92,45 @@ def test_messages_sent_while_a_turn_runs_are_read_once(tmp_path):
         ("9", "Ana", "还有发票那件事", ""),
         ("9.2", "Mara", "and the receipt", "好的，发票和收据都看了。"),
     ]
+
+
+def test_what_agents_send_and_the_replies_to_it_are_left_out(tmp_path):
+    session = {"kind": "dsh-session", "channel": "dsh", "id": "session-parent"}
+    source = source_for(tmp_path, [
+        message("[Telegram message from Someone (user id 100)]\nhow is the backup", 1, TG),
+        reply("Checking.", 2),
+        message("You are the assistant, doing one small job", 3, {**WEB, "principal": session}),
+        reply("Job done.", 4),
+        message("[Sent by the agent in dsh session x through prompt_session, not typed by the user.]\n\nmore", 5, WEB),
+        reply("More done.", 6),
+        message("Run the digest", 7, {"kind": "schedule"}),
+        reply("Digest sent.", 8),
+        message("from the web", 9, WEB),
+        reply("Hi.", 10),
+    ])
+    turns = source.turns(tmp_path / "sessions" / "proj" / "s1" / LOG_NAME)
+    assert [(t.speaker, t.text, t.replies) for t in turns] == [
+        ("Ana", "how is the backup", ["Checking."]), ("Ana", "from the web", ["Hi."])]
+
+
+def test_a_web_prompt_with_no_sender_is_an_agents_once_the_login_records_senders(tmp_path):
+    source = source_for(tmp_path, [
+        message("typed before", 100, WEB),
+        message("[Web message from mara (oidc sub sub-m)]", 299, {"kind": "oidc-sender", "subject": "sub-m"}),
+        message("typed with a notice", 300, WEB),
+        message("an agent's brief", 400, WEB),
+    ])
+    source.web_senders_since = 200.0
+    turns = source.turns(tmp_path / "sessions" / "proj" / "s1" / LOG_NAME)
+    assert [(t.speaker, t.text) for t in turns] == [("Ana", "typed before"), ("Mara", "typed with a notice")]
+
+
+def test_turns_a_session_no_longer_yields_are_removed_when_it_is_read_again(tmp_path):
+    session = {"kind": "dsh-session", "channel": "dsh", "id": "session-parent"}
+    source = source_for(tmp_path, [
+        message("You are the assistant, doing one small job", 1, {**WEB, "principal": session}),
+        message("from the web", 2, WEB),
+    ])
+    plan = source.plan({"s1:1": "old", "s1:2": "old", "gone:1": "old"}, {})
+    assert sorted(plan.removed) == ["gone:1", "s1:1"]
+    assert [item.key for item in plan.upserts] == ["s1:2"]

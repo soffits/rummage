@@ -9,6 +9,11 @@ Who wrote it comes first from `source.principal`, DSH's field for the caller beh
 dsh-oidc (`oidc-user`) and dsh-telegram-bot (`telegram-user`) fill with `{kind, channel, id, name?, ...}`. Older
 messages fall back to the Telegram sender tag in the text or the dsh-oidc sender notice before a Web message. Ids
 are mapped to names through the `people` file.
+
+Agents send `user` messages too (one session prompting another, a job, a script); their principal kinds are
+`AGENT_PRINCIPALS`, and older ones only start with a `skip_prefixes` line. They are not a person's words, so they and
+the replies to them are left out. With `web_senders_since` set (the time the home's Web login began recording every
+sender), a Web prompt with no sender at all from then on is an agent's too.
 """
 
 from __future__ import annotations
@@ -23,6 +28,8 @@ from rummage.sources import Plan
 from rummage.chats import Turn, keep_chars, people_map, turn_item, ChatSource
 
 LOG_NAME = "session.v4.jsonl.zstd"
+# Principal kinds DSH plugins record for senders that are not people: another session, a job, an outside caller.
+AGENT_PRINCIPALS = frozenset({"dsh-session", "cron-job", "external"})
 _TG_TAG = re.compile(r"^\[Telegram message from .*?user id (\d+)\)\]")
 
 
@@ -49,6 +56,17 @@ def principal_of(data: dict) -> dict | None:
     return None
 
 
+def _moment(value) -> float | None:
+    """Unix seconds of a TOML date-time or an ISO 8601 string (UTC when it names no zone), else None."""
+    import datetime as dt
+
+    if isinstance(value, str):
+        value = dt.datetime.fromisoformat(value)
+    if isinstance(value, dt.datetime):
+        return (value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc)).timestamp()
+    return None
+
+
 def delivered(event: dict) -> list[dict]:
     """The messages an event puts into the conversation: a message event's own data, or the messages an inbox
     splice inserts (one sent while a turn was running, delivered at the next step or turn). DSH usually logs a
@@ -67,6 +85,10 @@ def _text(data: dict) -> str:
 
 
 class DshSessionSource(ChatSource):
+    # A newer way of reading which messages are a person's: every log is planned again once, and turns it no longer
+    # yields are removed (2: what agents send is left out).
+    reader = 2
+
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
         self.keep_chars = keep_chars(spec)
@@ -76,6 +98,7 @@ class DshSessionSource(ChatSource):
         self.people = people_map(spec.get("people"))
         self.assistant = spec.get("assistant_name", "assistant")
         self.skip_prefixes = tuple(spec.get("skip_prefixes", ["[Sent by the agent in dsh session"]))
+        self.web_senders_since = _moment(spec.get("web_senders_since"))
 
     def _project_dirs(self) -> list[Path]:
         if self.projects:
@@ -123,6 +146,7 @@ class DshSessionSource(ChatSource):
         title = ""
         oidc: str | None = None
         turns: list[Turn] = []
+        replies_to_person = False  # the assistant is answering a person's turn, not an agent's prompt
         logged = {data.get("id") for event in events if event.get("type") == "user/message"
                   for data in [event.get("data") or {}] if data.get("id")}
         seen: set = set()
@@ -131,7 +155,7 @@ class DshSessionSource(ChatSource):
             data = event.get("data") or {}
             if kind == "session/title":
                 title = data.get("title") or title
-            elif kind == "assistant/message" and turns:
+            elif kind == "assistant/message" and turns and replies_to_person:
                 reply = _text(data.get("message") or {})
                 if reply:
                     turns[-1].replies.append(reply)
@@ -147,19 +171,29 @@ class DshSessionSource(ChatSource):
                 subject, oidc = oidc, None
                 text = _text(msg)
                 rpc_id = str(source.get("rpcId") or "")
-                if source.get("kind") != "user" or not text or text.startswith(self.skip_prefixes):
+                if source.get("kind") == "schedule":
+                    replies_to_person = False  # a job's prompt: what follows answers the job
+                if source.get("kind") != "user" or not text:
                     continue
                 principal = principal_of(msg)
                 if not rpc_id and not _TG_TAG.match(text) and principal is None:
                     continue
-                speaker = self._speaker(text, rpc_id, subject, principal)
                 if principal is not None and isinstance(principal.get("channel"), str):
                     channel = principal["channel"]
                 else:
                     channel = "telegram" if _TG_TAG.match(text) or rpc_id.startswith("telegram") else "web"
+                at_time = (event.get("time") or 0) / 1000
+                senderless_web = (principal is None and subject is None and channel == "web"
+                                  and self.web_senders_since is not None and at_time >= self.web_senders_since)
+                if (text.startswith(self.skip_prefixes) or senderless_web
+                        or (principal is not None and principal["kind"] in AGENT_PRINCIPALS)):
+                    replies_to_person = False
+                    continue
+                replies_to_person = True
+                speaker = self._speaker(text, rpc_id, subject, principal)
                 body = text.split("\n", 1)[1] if _TG_TAG.match(text) and "\n" in text else text
                 at = str(event.get("seq")) + (f".{n}" if n else "")
-                turns.append(Turn(sid, at, (event.get("time") or 0) / 1000, speaker, body.strip(),
+                turns.append(Turn(sid, at, at_time, speaker, body.strip(),
                                   "", channel, project=project))
         for turn in turns:
             turn.session_title = title
@@ -170,6 +204,8 @@ class DshSessionSource(ChatSource):
         seen: dict[str, list] = {}
         upserts: list[Item] = []
         sessions_now: set[str] = set()
+        reread: set[str] = set()  # sessions read this run: their turns are exactly what `turns` yields now
+        produced: set[str] = set()
         for path in self._logs():
             try:
                 st = path.stat()
@@ -185,9 +221,12 @@ class DshSessionSource(ChatSource):
             except Exception:
                 seen.pop(str(path))  # unreadable now (mid-write): try again next run
                 continue
+            reread.add(path.parent.name)
             for turn in turns:
                 item = turn_item(self.name, "dsh", turn, self.assistant)
+                produced.add(item.key)
                 if known.get(item.key) != item.fingerprint:
                     upserts.append(item)
-        removed = [k for k in known if k.split(":", 1)[0] not in sessions_now]
+        removed = [k for k in known if (session := k.split(":", 1)[0]) not in sessions_now
+                   or (session in reread and k not in produced)]
         return Plan(upserts, removed, {"stats": seen}, len(upserts))
