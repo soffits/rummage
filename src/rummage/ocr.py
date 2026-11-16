@@ -21,6 +21,7 @@ MAX_SIDE = 2000        # pixels on the long side a picture is read at; more cost
 MIN_SCORE = 0.5        # a reading less sure than this is left out
 RETRY_BELOW = 0.8      # a line read less surely than this is read again with the Korean model
 PNG = b"\x89PNG\r\n\x1a\n"
+THREADS = 2            # CPU threads OCR uses (`[runtime] ocr_threads`); ONNX Runtime would otherwise take every core
 
 
 class Undecodable(ValueError):
@@ -73,8 +74,13 @@ class Reader:
             from rapidocr import LangRec, ModelType, OCRVersion, RapidOCR
 
             self.models.mkdir(parents=True, exist_ok=True)
+            import cv2
+
+            cv2.setNumThreads(THREADS)
             common = {"Global.log_level": "error", "Global.model_root_dir": str(self.models),
-                      "Global.max_side_len": MAX_SIDE, "Global.text_score": 0.0}
+                      "Global.max_side_len": MAX_SIDE, "Global.text_score": 0.0,
+                      "EngineConfig.onnxruntime.intra_op_num_threads": THREADS,
+                      "EngineConfig.onnxruntime.inter_op_num_threads": 1}
             main = RapidOCR(params={**common, "Global.use_cls": True,
                                     "Det.ocr_version": OCRVersion.PPOCRV6, "Det.model_type": ModelType.SMALL,
                                     "Det.lang_type": "ch", "Rec.ocr_version": OCRVersion.PPOCRV6,
@@ -157,6 +163,12 @@ def reader(data_dir: Path) -> Reader:
     if key not in _readers:
         _readers[key] = Reader(key)
     return _readers[key]
+
+
+def configure(threads: int) -> None:
+    """How many CPU threads OCR uses from now on (engines already loaded keep theirs until `release_all`)."""
+    global THREADS
+    THREADS = max(1, int(threads))
 
 
 def release_all() -> None:

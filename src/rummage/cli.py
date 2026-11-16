@@ -38,6 +38,7 @@ from .projects import HARNESSES
 from . import memory
 from . import models as M
 from . import models_cli
+from . import ocr
 from . import progress as P
 from . import runtime as R
 from . import switch
@@ -122,6 +123,8 @@ def cmd_index(cfg: C.Config, args) -> int:
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
     opened: list[Embedders] = []
     marks, held, everything = memory.holds(cfg, memory.load(cfg.data_dir))
+    ocr.configure(cfg.ocr_threads)
+    skipped = None   # why this run left the work to another one
     try:
         if not args.embed_only and everything:
             log("reading is paused (`rummage resume index`); what changes meanwhile is read afterwards")
@@ -147,10 +150,13 @@ def cmd_index(cfg: C.Config, args) -> int:
                     finally:
                         store.close()
             except Busy as busy:
-                log(f"skipped reading: {busy}")
+                # The run that is reading (a watch, another index) makes the vectors of what it reads; a second
+                # embedder beside it would only compete with it, and with searches, for the same cores.
+                log(f"skipped: {busy}, and it makes the vectors too")
                 if args.wait:
                     return E.INDEX_BUSY
-        if not args.no_embed:
+                skipped = str(busy)
+        if not args.no_embed and skipped is None:
             try:
                 with lock(cfg.data_dir, "embed"):
                     store = Store(cfg.index_path)
@@ -185,7 +191,8 @@ def cmd_index(cfg: C.Config, args) -> int:
         for e in opened:
             e.close()
     if args.json:
-        print(json.dumps({"sources": report, "failures": failures}, ensure_ascii=False))
+        print(json.dumps({"sources": report, "failures": failures, **({"skipped": skipped} if skipped else {})},
+                         ensure_ascii=False))
     if failures:
         _eprint("problems:\n  " + "\n  ".join(failures))
         return 1
@@ -301,11 +308,11 @@ def cmd_search(cfg: C.Config, args) -> int:
     try:
         version = store.model
         index_empty = store.item_count() == 0
-        vector = None
+        vector, scored = None, None
         if not args.words_only and not index_empty:
-            vector, degraded = meaning_vector(cfg, version, args.query, use_daemon=not args.no_daemon)
+            vector, degraded, scored = meaning_vector(cfg, version, args.query, use_daemon=not args.no_daemon)
         searcher = Searcher(store, args.source, args.path, args.glob, _day(args.since), _day(args.until, 1),
-                            model=version, within=scope.within)
+                            model=version, within=scope.within, scored=scored)
         hits += [h.as_dict() for h in searcher.search(
             args.query, vector, limit=args.limit, kinds=set(args.kind) if args.kind else None)]
         pending = store.pending_count(sources=args.source)

@@ -88,7 +88,8 @@ def test_segments_without_a_script_get_one_on_open(tmp_path):
     store.commit()
     store.close()
     db = sqlite3.connect(path)
-    db.execute("DROP INDEX segments_no_script")
+    db.execute("DROP INDEX segments_no_script")   # an index from before scripts had neither index
+    db.execute("DROP INDEX segments_meta")
     db.execute("ALTER TABLE segments DROP COLUMN script")
     db.commit()
     db.close()

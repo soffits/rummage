@@ -105,3 +105,23 @@ def test_threads_follow_the_machines_load(monkeypatch):
     embedders.get(False)       # load 3.0 is mostly our own 3 threads: keep 3
     embedders.get(False)       # load 6.0: others are busy, back to 2
     assert started == [3, 2]
+
+
+def test_a_second_index_run_leaves_the_work_to_the_one_reading(tmp_path, monkeypatch, capsys):
+    # A run already reading (a watch's) makes the vectors of what it reads; another `index` beside it would start a
+    # second embedder competing for the same cores, so it stops at once with a note.
+    import json
+
+    from rummage import cli
+    from rummage.indexer import lock
+
+    (tmp_path / "notes").mkdir()
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(f"data_dir = '{tmp_path / 'data'}'\n[sources.notes]\ntype = 'markdown'\n"
+                   f"root = '{tmp_path / 'notes'}'\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "embed_models", lambda *a, **k: (_ for _ in ()).throw(AssertionError("embedded")))
+    with lock(tmp_path / "data", "index"):
+        assert cli.main(["--config", str(cfg), "index", "--json"]) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert "another run holds the index lock" in out["skipped"] and out["sources"] == {}
+        assert cli.main(["--config", str(cfg), "index", "--wait", "0.2", "-q"]) != 0   # asked to wait: says busy

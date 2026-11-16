@@ -87,32 +87,48 @@ class Hit:
 class Searcher:
     def __init__(self, store: Store, sources: list[str] | None = None, paths: list[str] | None = None,
                  globs: list[str] | None = None, since: float | None = None, until: float | None = None,
-                 ranking: Ranking = Ranking(), model: str | None = None, within: Within | None = None):
+                 ranking: Ranking = Ranking(), model: str | None = None, within: Within | None = None,
+                 scored: tuple[np.ndarray, np.ndarray] | None = None):
         """`sources`: only these sources. `paths`: only items whose ref starts with one of these prefixes. `globs`:
         only items whose ref matches one of these patterns (`*` crosses folders, as in SQLite's GLOB). `model`: the
-        model the query vector was made with (default: the index's). `within`: the part of the index a scope sees."""
+        model the query vector was made with (default: the index's). `within`: the part of the index a scope sees.
+        `scored`: segment ids and the query's cosine with each, computed by the query daemon from the vectors it
+        holds; then the search reads only which item, kind and script each segment has, not the vectors."""
         self.store = store
         self.scope = Scope(sources, paths, globs, since, until, within)
         self.ranking = ranking
         self.model = model or store.model
         self.calibration = calibration(store, self.model)
+        self.scored = scored
+        self.given: np.ndarray | None = None   # the daemon's scores, in the order of seg_ids
         self._loaded = False
 
     def _load(self) -> None:
-        v = self.store.vectors(self.scope, self.model)
-        self.seg_ids, self.seg_items, self.seg_kinds, self.matrix = v.ids, v.items, v.kinds, v.matrix
-        self.seg_scripts = v.scripts
+        if self.scored is not None:
+            v = self.store.segment_meta(self.scope)
+            ids, scores = self.scored
+            at = np.minimum(np.searchsorted(ids, v.ids), max(len(ids) - 1, 0))
+            keep = (at < len(ids)) & (ids[at] == v.ids) if len(ids) else np.zeros(len(v.ids), bool)
+            self.given = scores[at[keep]]
+            self.seg_ids, self.seg_items, self.seg_kinds = v.ids[keep], v.items[keep], v.kinds[keep]
+            self.seg_scripts, self.matrix = v.scripts[keep], v.matrix
+        else:
+            v = self.store.vectors(self.scope, self.model)
+            self.seg_ids, self.seg_items, self.seg_kinds, self.matrix = v.ids, v.items, v.kinds, v.matrix
+            self.seg_scripts = v.scripts
         self._loaded = True
 
     def vector_count(self) -> int:
         if not self._loaded:
             self._load()
-        return len(self.matrix)
+        return len(self.seg_ids)
 
     def meaning(self, query: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Cosine of every vector, and its z (`standardize`)."""
         if not self._loaded:
             self._load()
+        if self.given is not None:
+            return self.given, standardize(self.given, self.seg_kinds)
         if len(self.matrix) == 0:
             return np.zeros(0, np.float32), np.zeros(0, np.float32)
         q = query.astype(np.float32)

@@ -148,6 +148,7 @@ def test_table_and_line_are_ascii(tmp_path):
     read = P.Run(tmp_path, "read")
     read.source("notes", phase="done", done=900, total=900, failed=2, last_error="ValueError: bad PDF")
     read.source("projects/mods", phase="reading", done=10, total=2000)
+    read.value["per_second"] = 1.0          # 1,990 items to read: 33 min, longer than the vectors' 10
     read.save(force=True)
     embed = P.Run(tmp_path, "embed")
     embed.vectors({"notes": (900, 1200), "projects/mods": (0, 0)})
@@ -157,7 +158,7 @@ def test_table_and_line_are_ascii(tmp_path):
     lines = P.table(tmp_path)
     text = "\n".join(lines)
     assert text.isascii()
-    assert lines[0] == "rummage: reading 910/2,900, vectors 340/1,200, ~10 min left"
+    assert lines[0] == "rummage: reading 910/2,900, vectors 340/1,200, ~33 min left"
     assert any("notes" in line and "900/900" in line and "340/1,200 (28%)" in line and "2 failed: ValueError"
                in line for line in lines)
     assert "vectors: running since" in text and "90/min" in text
@@ -298,3 +299,24 @@ def test_equal_timestamps_take_the_embed_count(tmp_path, monkeypatch):
     embed.vectors({"notes": (0, 1200)})
     embed.finish()
     assert P.state(tmp_path)["state"] == "complete"
+
+
+def test_time_left_counts_the_items_still_to_read(tmp_path, monkeypatch):
+    # A slow read (pictures with OCR) beside a fast embed: the time left is the reading's, not the vectors'.
+    clock = [1_000_000.0]
+    monkeypatch.setattr(P.time, "time", lambda: clock[0])
+    read = P.Run(tmp_path, "read")
+    read.source("docs", phase="reading", done=230, total=1786)
+    embed = P.Run(tmp_path, "embed")
+    embed.vectors({"docs": (100, 35_642)})
+    embed.value["per_second"] = 5.0
+    embed.save(force=True)
+    info = P.state(tmp_path)
+    assert info["eta_seconds"] is None and "left" not in info["line"]    # no reading pace yet: no guess
+    clock[0] += 300
+    read.source("docs", done=295)                                        # 65 items in 5 minutes
+    read.save(force=True)
+    info = P.state(tmp_path)
+    assert abs(info["eta_seconds"] - (1786 - 295) / (65 / 300)) < 30
+    assert info["line"].endswith("~1.9 h left")
+    assert "a changed item is found as it was" in info["note"]

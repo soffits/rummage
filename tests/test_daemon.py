@@ -74,12 +74,56 @@ def test_search_starts_a_daemon_and_uses_it_instead_of_loading_the_model(tmp_pat
     monkeypatch.setattr(D, "ensure", lambda *a: started.append(a) or "process")
     monkeypatch.setattr(D, "wait_vector", lambda data_dir, text, version, seconds, process: np.ones(3))
     monkeypatch.setattr(R, "embedder", lambda *a, **k: pytest.fail("loaded the model itself"))
-    vector, reason = Q.meaning_vector(cfg, PROFILE.version, "lease")
+    vector, reason, _ = Q.meaning_vector(cfg, PROFILE.version, "lease")
     assert reason is None and vector.tolist() == [1, 1, 1] and started[0][2] == 20
 
-    vector, reason = Q.meaning_vector(cfg, PROFILE.version, "lease", load=False)   # a prompt hook: start it, don't wait
+    vector, reason, _ = Q.meaning_vector(cfg, PROFILE.version, "lease", load=False)   # a prompt hook: start it, don't wait
     assert vector is None and "starting" in reason and len(started) == 2
 
     cfg.daemon_idle_minutes = 0
-    vector, reason = Q.meaning_vector(cfg, PROFILE.version, "lease", load=False)
+    vector, reason, _ = Q.meaning_vector(cfg, PROFILE.version, "lease", load=False)
     assert "no query daemon" in reason and len(started) == 2
+
+
+def test_scores_from_the_daemons_vectors_match_a_search_that_reads_them(tmp_path, monkeypatch):
+    # The daemon keeps the vectors in memory and scores the query; a search given those scores reads only which
+    # item and kind each segment has, and ranks exactly as a search that reads the vectors itself.
+    from test_indexer import FakeEmbedders, _note
+
+    from conftest import index_all
+    from rummage.search import Searcher
+    from rummage.sources.markdown import MarkdownSource
+    from rummage.store import Item, Scope, Segment, Store
+
+    root = tmp_path / "notes"
+    root.mkdir()
+    for n in range(6):
+        (root / f"n{n}.md").write_text("\n\n".join(_note(n + k) for k in range(3)))
+    store = Store(tmp_path / "index.db")
+    index_all(store, MarkdownSource("notes", {"root": str(root)}, tmp_path), FakeEmbedders(), lambda *a: None, print)
+    model = store.model
+    snapshots = D.Snapshots(tmp_path / "index.db")
+    query = store.vectors(Scope(), model).matrix[4].astype(np.float32)   # a passage's own vector: it must match
+
+    plain = Searcher(store, model=model).search("weekend", query, limit=5)
+    given = Searcher(store, model=model, scored=snapshots.scores(model, query)).search("weekend", query, limit=5)
+    assert given
+    assert [(h.ref, h.segment, round(h.score, 4)) for h in given] == [(h.ref, h.segment, round(h.score, 4)) for h in plain]
+    assert Searcher(store, model=model, scored=snapshots.scores(model, query)).vector_count() == \
+        len(store.vectors(Scope(), model).ids)
+
+    # A vector committed later shows after the refresh interval, read in the background; until then the old ones.
+    before = len(snapshots.get(model)[0])
+    store.put(Item("notes", "late.md", "file", "late", "late.md"),
+              [Segment("text", "a late note", loc="0", vectors={model: query.astype(np.float16)})])
+    store.commit()
+    assert len(snapshots.get(model)[0]) == before
+    monkeypatch.setattr(D, "REFRESH_SECONDS", 0)
+    snapshots.get(model)
+    for _ in range(100):
+        if len(snapshots.get(model)[0]) == before + 1:
+            break
+        import time
+        time.sleep(0.05)
+    assert len(snapshots.get(model)[0]) == before + 1
+    store.close()

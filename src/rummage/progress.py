@@ -13,7 +13,8 @@ hook reply:
     note         one sentence for an agent, "" when complete
     items        {done, total} read into keyword search by a running read, else null
     vectors      {done, total} passages with a vector of the model searches use, else null
-    eta_seconds  time left for those vectors, at the recent rate, else null
+    eta_seconds  time left at the recent rates: for the items still to read (a read samples its own pace) and for
+                 the vectors, whichever takes longer; null while a read has no pace yet
     paused       why work stopped with some left, else null
     error        what failed, else null
     updated      when a run last wrote, else null
@@ -98,6 +99,8 @@ class Run:
 
     def source(self, name: str, **fields) -> None:
         self.value["sources"].setdefault(name, {}).update(fields)
+        if "done" in fields:   # a read's pace: items read per second, over all its sources
+            self.sample(sum(int(s.get("done") or 0) for s in self.value["sources"].values()))
         self.save(force="phase" in fields)
 
     def update(self, force: bool = False, **fields) -> None:
@@ -211,10 +214,13 @@ def state(data_dir: Path, pending: int | None = None, now: float | None = None) 
                and now - (p.get("updated") or now) > STALE_SECONDS]
     switch = embed.get("switch") if embedding else None
 
+    item_eta = None
     if reading:
         sources = (read.get("sources") or {}).values()
         out["items"] = {"done": sum(int(s.get("done") or 0) for s in sources),
                         "total": sum(int(s.get("total") or 0) for s in sources)}
+        to_read = max(out["items"]["total"] - out["items"]["done"], 0)
+        item_eta = round(to_read / read["per_second"]) if to_read and read.get("per_second") else None
     left, total = _vectors(read, embed, embedding)
     if embedding:
         left = max(left - int(embed.get("made_since_count") or 0), 0)
@@ -225,6 +231,9 @@ def state(data_dir: Path, pending: int | None = None, now: float | None = None) 
             {"done": None, "total": None, "waiting": left}
         rate = embed.get("per_second") if embedding else None
         out["eta_seconds"] = round(left / rate) if rate else None
+    if reading and out["items"]["total"] > out["items"]["done"]:
+        # Items still to read come first, and each adds vectors: without a reading pace there is no honest guess.
+        out["eta_seconds"] = max(item_eta, out["eta_seconds"] or 0) if item_eta is not None else None
 
     for part in (read, embed):
         if part.get("error"):
@@ -297,7 +306,8 @@ def _note(out: dict, read: dict) -> str:
     said = []
     if out["items"] is not None:
         items = out["items"]
-        said.append(f"{_n(items['done'])} of {_n(items['total'])} items read so far; the rest can't be found yet")
+        said.append(f"{_n(items['done'])} of {_n(items['total'])} items read so far; until it is read, a changed "
+                    "item is found as it was and a new one not at all")
     vectors = out["vectors"]
     if vectors and vectors.get("total"):
         said.append(f"{_n(vectors['done'])} of {_n(vectors['total'])} passages have vectors; the others match only "
