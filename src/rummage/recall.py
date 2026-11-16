@@ -22,7 +22,6 @@ import sys
 import time
 
 from . import config as C
-from . import daemon as D
 from . import memory
 from . import progress as P
 from . import scopes as S
@@ -41,13 +40,13 @@ HOOK_EVENT = "UserPromptSubmit"
 FOLLOW_UP_TERMS = 12
 CONTEXT_HOURS = 6
 # What is embedded for a prompt's meaning. Embedding time grows with the tokens, and a prompt hook has a few seconds
-# even when the machine is busy, so the prompt gives its start and end (a pasted text's question tends to sit at its
-# end) up to `MEANING_BYTES` of UTF-8 per thread the query daemon embeds with, about a second of embedding at any
-# thread count; the daemon's threads follow the cores other work leaves free. A follow-up adds the last
-# `CONTEXT_BYTES` of the turn before, where a reply asks what the prompt answers. Bytes stand in for tokens across
-# scripts: EmbeddingGemma's tokenizer gave 0.8 tokens per CJK character (3 bytes) and 0.3 per Latin one. Words are
-# still matched against the whole prompt. Measured on real prompts in docs/decisions.md ("Agent histories").
-MEANING_BYTES = 600
+# even when the machine is busy, so a long prompt gives its start and end (a pasted text's question tends to sit at
+# its end) up to `MEANING_BYTES` of UTF-8, about half a second of embedding on an idle 4-core machine and a little over
+# a second with half its cores busy. A follow-up adds the last `CONTEXT_BYTES` of the turn before, where a reply asks
+# what the prompt answers. Bytes stand in for tokens across scripts: EmbeddingGemma's tokenizer gave 0.8 tokens per
+# CJK character (3 bytes) and 0.3 per Latin one. Words are still matched against the whole prompt. Measured on real
+# prompts in docs/decisions.md ("Agent histories").
+MEANING_BYTES = 1200
 CONTEXT_BYTES = 600
 # A meaning match stands alone a sixth above the recall gate (3.5 at EmbeddingGemma 2's 3); nearer the gate it needs
 # `SHARED_WORDS` of the query's words too. In replayed recall blocks the unrelated passages sat at z 2.9-3.5
@@ -163,10 +162,9 @@ def _tail(text: str, size: int) -> str:
     return text.encode()[-size:].decode(errors="ignore")
 
 
-def meaning_text(prompt: str, before: str | None, threads: int) -> str:
-    """The text whose vector stands for `prompt` (with `before`, the turn it leans on, when it is a follow-up), for a
-    model embedding with `threads` threads."""
-    size = MEANING_BYTES * max(1, threads)
+def meaning_text(prompt: str, before: str | None) -> str:
+    """The text whose vector stands for `prompt` (with `before`, the turn it leans on, when it is a follow-up)."""
+    size = MEANING_BYTES
     own = prompt if len(prompt.encode()) <= size else f"{_head(prompt, size // 2)} … {_tail(prompt, size // 2)}"
     return f"{_tail(before, CONTEXT_BYTES)}\n{own}" if before else own
 
@@ -283,8 +281,7 @@ def run(cfg: C.Config, args) -> int:
         try:
             before, own = session_context(cfg, session, prompt, args.recent_minutes)
             leaning = follow_up(prompt) and bool(context or before)
-            threads = D.query_threads(cfg.data_dir) or cfg.query_threads
-            meaning = meaning_text(prompt, (context or before) if leaning else None, threads)
+            meaning = meaning_text(prompt, (context or before) if leaning else None)
             if leaning:
                 about["context"] = "given" if context else "previous turn"
             hits, mode, count, degraded, recall_gate = recall(cfg, prompt, args.source, args.path, 20,
