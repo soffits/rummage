@@ -733,6 +733,17 @@ class Store:
                 break
         return out
 
+    def session_turns(self, session: str, since: float, limit: int) -> list[dict]:
+        """Chat turns of `session` (any source) from `since` (epoch seconds) on, newest first: their `#id` and text."""
+        out = []
+        for row, source, key in self.db.execute(
+                "SELECT id, source, key FROM items WHERE mtime >= ? AND kind = 'chat' "
+                "AND json_extract(info, '$.session') = ? ORDER BY mtime DESC LIMIT ?", (since, session, limit)):
+            text = "\n".join(t for (t,) in self.db.execute(
+                "SELECT text FROM segments WHERE item = ? AND kind = 'text' ORDER BY id", (row,)))
+            out.append({"id": "#" + item_id(source, key), "text": text})
+        return out
+
     def same_message(self, row: int) -> list[str]:
         """Refs of the same message recorded elsewhere: another copy of a mail, the same chat message in another
         source (`same_message_key`)."""

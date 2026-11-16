@@ -32,6 +32,8 @@ def test_reading_then_embedding(tmp_path):
     assert info["state"] == "building" and info["items"] == {"done": 120, "total": 900}
     assert info["line"] == "rummage: reading 120/900, time left unknown"
     assert "120 of 900 items read so far" in info["note"]
+    # results from a source still being read are read differently; others aren't
+    assert info["reading"] == ["notes"] and P.bears_on(info, {"notes"}) and not P.bears_on(info, {"mail"})
 
     read.vectors({"notes": (1200, 1200)})
     read.finish()
@@ -43,6 +45,8 @@ def test_reading_then_embedding(tmp_path):
     assert info["state"] == "building" and info["vectors"] == {"done": 340, "total": 1200}
     assert info["eta_seconds"] == 430
     assert info["line"] == "rummage: indexing 340/1,200, ~7 min left"
+    assert P.bears_on(info, set())              # most passages lack vectors: meaning search misses them
+    assert not P.bears_on({**info, "vectors": {"done": 1150, "total": 1200}}, {"notes"})
     assert info["note"] == ("Index still building: 340 of 1,200 passages have vectors; the others match only by "
                             "their words; about 7 min left.")
 

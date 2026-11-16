@@ -234,7 +234,7 @@ def state(data_dir: Path, pending: int | None = None, now: float | None = None) 
     doc = load(data_dir)
     read, embed = doc.get("read") or {}, doc.get("embed") or {}
     out = {"state": "complete", "line": "", "note": "", "items": None, "vectors": None, "eta_seconds": None,
-           "paused": None, "error": None, "updated": max([p.get("updated") or 0 for p in (read, embed)]) or None,
+           "paused": None, "error": None, "reading": [], "updated": max([p.get("updated") or 0 for p in (read, embed)]) or None,
            "file": str(path(data_dir))}
     reading, embedding = _running(read), _running(embed)
     if reading:
@@ -253,6 +253,8 @@ def state(data_dir: Path, pending: int | None = None, now: float | None = None) 
         sources = (read.get("sources") or {}).values()
         out["items"] = {"done": sum(int(s.get("done") or 0) for s in sources),
                         "total": sum(int(s.get("total") or 0) for s in sources)}
+        out["reading"] = sorted(name for name, s in (read.get("sources") or {}).items()
+                                if int(s.get("total") or 0) > int(s.get("done") or 0))
         to_read = max(out["items"]["total"] - out["items"]["done"], 0)
         pace = _read_pace(read, out["items"]["done"], now)
         item_eta = round(to_read / pace) if to_read and pace else None
@@ -301,6 +303,24 @@ AGENT_FIELDS = ("state", "note", "items", "vectors", "eta_seconds", "paused", "e
 def agent_view(info: dict) -> dict | None:
     """The part of a `state` summary an agent's output carries, or None when the index is complete."""
     return {k: info[k] for k in AGENT_FIELDS} if info["state"] != "complete" else None
+
+
+# Passages without vectors that make meaning search miss enough to say so in results.
+VECTORS_SHORT = 0.1
+
+
+def bears_on(info: dict, sources: set[str]) -> bool:
+    """Whether an index that isn't complete changes how results from `sources` read: one of them still has items to
+    read, a tenth or more of the passages have no vectors yet, or the last run stopped or failed. Otherwise a note
+    about the build is noise to an agent that sees it on every prompt."""
+    if info["state"] == "complete":
+        return False
+    if info["state"] in ("stopped", "error") or sources & set(info.get("reading") or ()):
+        return True
+    vectors = info["vectors"]
+    if vectors and vectors.get("total"):
+        return vectors["total"] - vectors["done"] >= VECTORS_SHORT * vectors["total"]
+    return bool(vectors)
 
 
 def for_agents(data_dir: Path, pending: int | None = None) -> dict | None:

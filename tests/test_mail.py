@@ -107,10 +107,10 @@ def test_imap_reads_read_only_and_resumes_by_uid(monkeypatch):
 
 
 def test_tracking_links_and_tokens_are_not_read_as_words(tmp_path):
-    token = "0HRt1W759MxSsdCVQxt8em7ty0dPsNrtI79K3GpJMBS8Rvi5dm8PtQxvAyc8HueaeCfvPMNDe"
+    token = "J8QQpnPzeSK3KNfk7OTgzF6IP6FqOryJAvdBbvwwUCnCDHiMh8g3XI6vHtDwcnwmH4bNEKMb"
     body = ("Weekly letter about community gardens.\u034f \u00ad\u034f \u00ad\u034f\n"
             "Trackers removed. More <https://relay.example/email/report#" + token + "-iCJjZIgIuTEFSqSB>\n"
-            "Reply-To: <reply+364ci5&23nbjy&&c35dd548fa3f928f57af224f11fc25ab737f51bc3e77f36c_at_mg1.example>\n"
+            "Reply-To: <reply+8kq2x&71vbza&&482374f6c43e45ef0bd045e56e219423aeeb76c0e5ed8ebd77a602c1_at_mg1.example>\n"
             "Read it at https://letters.example/p/gardens and order 4815162342.")
     box = mailbox.Maildir(tmp_path / "Mail", create=True)
     box.add(_message("Gardens", body))
@@ -118,7 +118,7 @@ def test_tracking_links_and_tokens_are_not_read_as_words(tmp_path):
     text = " ".join(s.text for s in src.load(next(iter(src.plan({}, {}).upserts))))
     assert "community gardens" in text and "https://relay.example/…" in text
     assert "https://letters.example/p/gardens" in text and "4815162342" in text
-    assert token[:20] not in text and "c35dd548fa3f" not in text and "\u034f" not in text and "\u00ad" not in text
+    assert token[:20] not in text and "482374f6c43e" not in text and "\u034f" not in text and "\u00ad" not in text
     assert src.reader_of("any") == M.READER
 
 
