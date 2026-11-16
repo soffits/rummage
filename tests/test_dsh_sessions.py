@@ -123,3 +123,14 @@ def test_a_web_prompt_with_no_sender_is_an_agents_once_the_login_records_senders
     source.web_senders_since = 200.0
     turns = source.turns(tmp_path / "sessions" / "proj" / "s1" / LOG_NAME)
     assert [(t.speaker, t.text) for t in turns] == [("Ana", "typed before"), ("Mara", "typed with a notice")]
+
+
+def test_turns_a_session_no_longer_yields_are_removed_when_it_is_read_again(tmp_path):
+    session = {"kind": "dsh-session", "channel": "dsh", "id": "session-parent"}
+    source = source_for(tmp_path, [
+        message("You are the assistant, doing one small job", 1, {**WEB, "principal": session}),
+        message("from the web", 2, WEB),
+    ])
+    plan = source.plan({"s1:1": "old", "s1:2": "old", "gone:1": "old"}, {})
+    assert sorted(plan.removed) == ["gone:1", "s1:1"]
+    assert [item.key for item in plan.upserts] == ["s1:2"]

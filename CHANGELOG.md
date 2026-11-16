@@ -2,7 +2,7 @@
 
 ## 0.25.4
 
-- Fixed: a brief or follow-up one agent sent another in DeepSeek Harness (`open_session`, `prompt_session`) was indexed as the person's own message, and the assistant's replies to a skipped agent or job prompt were added to the person's previous turn. Messages whose sender is another session, a job or a script are left out with the replies to them; `web_senders_since` covers older briefs that carry no sender at all.
+- Fixed: a brief or follow-up one agent sent another in DeepSeek Harness (`open_session`, `prompt_session`) was indexed as the person's own message, and the assistant's replies to a skipped agent or job prompt were added to the person's previous turn. Messages whose sender is another session, a job or a script are left out with the replies to them; `web_senders_since` covers older briefs that carry no sender at all. Every DSH log is planned again once, and a turn a log no longer yields is removed from the index (before, only turns of deleted sessions were).
 
 ## 0.25.3
 

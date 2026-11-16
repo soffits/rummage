@@ -85,6 +85,10 @@ def _text(data: dict) -> str:
 
 
 class DshSessionSource(ChatSource):
+    # A newer way of reading which messages are a person's: every log is planned again once, and turns it no longer
+    # yields are removed (2: what agents send is left out).
+    reader = 2
+
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
         self.keep_chars = keep_chars(spec)
@@ -200,6 +204,8 @@ class DshSessionSource(ChatSource):
         seen: dict[str, list] = {}
         upserts: list[Item] = []
         sessions_now: set[str] = set()
+        reread: set[str] = set()  # sessions read this run: their turns are exactly what `turns` yields now
+        produced: set[str] = set()
         for path in self._logs():
             try:
                 st = path.stat()
@@ -215,9 +221,12 @@ class DshSessionSource(ChatSource):
             except Exception:
                 seen.pop(str(path))  # unreadable now (mid-write): try again next run
                 continue
+            reread.add(path.parent.name)
             for turn in turns:
                 item = turn_item(self.name, "dsh", turn, self.assistant)
+                produced.add(item.key)
                 if known.get(item.key) != item.fingerprint:
                     upserts.append(item)
-        removed = [k for k in known if k.split(":", 1)[0] not in sessions_now]
+        removed = [k for k in known if (session := k.split(":", 1)[0]) not in sessions_now
+                   or (session in reread and k not in produced)]
         return Plan(upserts, removed, {"stats": seen}, len(upserts))
