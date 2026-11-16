@@ -143,6 +143,11 @@ def test_a_file_is_read_by_its_content_when_that_isnt_its_extensions_format(tmp_
     assert item.info["type"] == "rtf" and _text(segs) == "Dear landlord, the heater is broken."
     item, segs = _read(tmp_path, "broken.docx", bytes(range(256)) * 4)
     assert item.info["unread"] == "damaged"
+    word = io.BytesIO()   # a .docx saved under the old name
+    with zipfile.ZipFile(word, "w") as z:
+        z.writestr("word/document.xml", "<w:document xmlns:w='w'><w:body><w:p><w:r><w:t>Internship appraisal</w:t></w:r></w:p></w:body></w:document>")
+    item, segs = _read(tmp_path, "appraisal.doc", word.getvalue())
+    assert item.info["type"] == "office" and "Internship appraisal" in _text(segs)
     pem = b"-----BEGIN RSA PRIVATE KEY-----\n" + b"MIIEowIBAAKCAQEA" * 8 + b"\n-----END RSA PRIVATE KEY-----\n"
     item, segs = _read(tmp_path, "server.key", pem)
     assert [s.kind for s in segs] == ["name"] and item.info["unread"] == "secret"
@@ -268,3 +273,18 @@ def test_unread_reasons_have_labels():
     item = Item("docs", "a.bin", "file", "a", "a.bin")
     D.unread(item, "format")
     assert item.info["unread"] in D.UNREAD
+
+
+def test_ffmpeg_reads_pictures_that_need_to_seek(tmp_path):
+    # TIFF (like HEIC) can't be read by ffmpeg from a pipe, so the bytes go through a file.
+    import shutil
+    import subprocess
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("needs ffmpeg")
+    tiff = tmp_path / "scan.tiff"
+    subprocess.run([ffmpeg, "-loglevel", "error", "-f", "lavfi", "-i", "color=red:s=32x24", "-frames:v", "1", str(tiff)],
+                   check=True)
+    png = X.to_png(tiff.read_bytes(), ffmpeg, flatten=False)
+    assert png.startswith(b"\x89PNG")

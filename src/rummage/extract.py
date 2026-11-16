@@ -16,10 +16,11 @@ import re
 import shutil
 import subprocess
 import tarfile
+import tempfile
 import urllib.parse
 import zipfile
 from html.parser import HTMLParser
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from xml.etree import ElementTree
 
 from . import iwork
@@ -502,10 +503,14 @@ def to_png(raw: bytes, ffmpeg: str | None = None, flatten: bool = True) -> bytes
         raise RuntimeError("this picture needs ffmpeg to be read")
     graph = ("color=white,format=rgb24[bg];[bg][0:v]scale2ref[bg2][fg];[bg2][fg]overlay=shortest=1,format=rgb24"
              if flatten else "format=rgb24")
-    run = subprocess.run(
-        [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-filter_complex", graph,
-         "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
-        input=raw, capture_output=True, timeout=120)
+    # From a file: HEIC and TIFF can't be read from a pipe ("Not yet implemented in FFmpeg"), they need to seek.
+    with tempfile.TemporaryDirectory(prefix="rummage-") as folder:
+        source = Path(folder) / "picture"
+        source.write_bytes(raw)
+        run = subprocess.run(
+            [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", str(source), "-filter_complex", graph,
+             "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
+            capture_output=True, timeout=120)
     if run.returncode != 0 or not run.stdout:
         raise RuntimeError(f"ffmpeg could not read the picture: {run.stderr[:200]!r}")
     return run.stdout
