@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.25.0
+
+- OCR can run on another machine: `rummage ocr-serve` on a faster one (any machine with the `ocr` extra; no login, so keep it on loopback or behind a tunnel) and `[ocr] url` here. Pictures and scanned pages go out (prepared and downscaled here), the text comes back, and the OCR cache stays on this machine. The scanned pages of a PDF are sent several at a time (`ocr-serve --workers`), and so are the picture vectors of a remote embedder, which read a 50-page scan in seconds instead of minutes.
+- Fixed: a remote embedder that stopped answering for a moment (a restart, a dropped tunnel) failed the whole run ("RemoteDisconnected"). Requests retry for about 30 seconds; after that the passages and pictures without a vector wait for a later run, the run still succeeds, and `status` says that the remote embedder didn't answer and how many wait.
+- Fixed: the time left went back to "unknown" and the counter restarted whenever the read restarted (a config change, an upgrade). A new read run keeps the item pace of the run before it when that one was alive in the last half hour.
+
 ## 0.24.0
 
 - Each family of files has its own reader version (Markdown, text, PDF, pictures, legacy Office, iWork, records and the rest), so a change to one reader re-reads only its files: an OCR change reads pictures and PDFs again, not every file of a server library.

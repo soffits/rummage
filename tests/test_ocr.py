@@ -48,3 +48,47 @@ def test_idle_ocr_threads_sleep(reader):
             if part is not None:
                 options = part.session.session.get_session_options()
                 assert options.get_session_config_entry("session.intra_op.allow_spinning") == "0"
+
+
+@pytest.fixture
+def server(tmp_path):
+    """An `ocr-serve` on a free loopback port, here in a thread, with its own data folder."""
+    import socket
+    import threading
+    import time
+    import urllib.request
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    threading.Thread(target=O.serve, args=(tmp_path / "server-data", port), daemon=True).start()
+    for _ in range(100):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1).read()
+            break
+        except OSError:
+            time.sleep(0.05)
+    O.configure(2, f"http://127.0.0.1:{port}")
+    yield port
+    O.configure(2, None)
+
+
+def test_remote_server_reads_like_this_machine(reader, server, tmp_path):
+    for picture, word in [("sc.png", "租赁合同"), ("en.png", "INV-20481")]:
+        raw = (FIXTURES / picture).read_bytes()
+        local = reader._lines(O._prepare(raw))
+        sent = O.Reader(tmp_path / "client-data")   # its own cache: nothing came from there
+        assert word in sent.text(None, raw)
+        assert sent.text(None, raw).replace(" ", "") == local.replace(" ", "")
+    with pytest.raises(O.Undecodable):
+        O.Reader(tmp_path / "client-data").text(None, b"not a picture")
+
+
+def test_remote_server_down_fails_loudly(tmp_path, monkeypatch):
+    monkeypatch.setattr(O, "RETRIES", 1)
+    O.configure(2, "http://127.0.0.1:9")
+    try:
+        with pytest.raises(O.ServerError):
+            O.Reader(tmp_path).text(None, (FIXTURES / "en.png").read_bytes())
+    finally:
+        O.configure(2, None)

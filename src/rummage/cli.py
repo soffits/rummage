@@ -124,7 +124,7 @@ def cmd_index(cfg: C.Config, args) -> int:
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
     opened: list[Embedders] = []
     marks, held, everything = memory.holds(cfg, memory.load(cfg.data_dir))
-    ocr.configure(cfg.reading_threads)
+    ocr.configure(cfg.reading_threads, cfg.ocr_url)
     skipped = watched(cfg.data_dir)   # why this run left the work to another one
     if skipped:
         _eprint(f"skipped: {skipped}")
@@ -150,7 +150,7 @@ def cmd_index(cfg: C.Config, args) -> int:
                             _read_sources(cfg, store, names, live, again, args, deadline, log, report, failures,
                                           reading, marks, held)
                         finally:
-                            _finish_reading(store, reading)
+                            _finish_reading(store, reading, next((e.unreachable for e in live if e.unreachable), None))
                     finally:
                         store.close()
             except Busy as busy:
@@ -184,7 +184,8 @@ def cmd_index(cfg: C.Config, args) -> int:
                             problem = None   # the switch's embedder failed: the switch waits, searches don't
                             failures.append(f"model switch to {building.name} paused: {error}")
                         finally:
-                            _finish_embedding(store, making, problem, deadline)
+                            _finish_embedding(store, making, problem, deadline,
+                                              (report.get("vectors") or {}).get("unreachable"))
                     finally:
                         store.close()
             except Busy:
@@ -234,23 +235,32 @@ UNFINISHED = {"stopped": "a time or item limit stopped it; the next run goes on"
               "reading": "the run ended before it finished; the next run goes on"}
 
 
-def _finish_reading(store: Store, progress: P.Run) -> None:
+def _unreachable_note(waiting: int, what: str, why: str) -> str:
+    return f"the remote embedder didn't answer ({why}); {waiting:,} {what} wait for a later run"
+
+
+def _finish_reading(store: Store, progress: P.Run, unreachable: str | None = None) -> None:
     """Closes the read part: the passages still waiting for vectors, a source that failed, or one left unfinished."""
     sources = progress.value["sources"]
     failed = [f"{name}: {s.get('last_error')}" for name, s in sources.items() if s.get("phase") == "failed"]
     unfinished = [s["phase"] for s in sources.values() if s.get("phase") in ("stopped", "reading", "planning")]
     if store.model:
         progress.vectors(store.pending_by_source(store.model))
-    progress.finish(error="; ".join(failed) or None,
-                    paused=UNFINISHED["stopped" if "stopped" in unfinished else "reading"] if unfinished else None)
+    paused = UNFINISHED["stopped" if "stopped" in unfinished else "reading"] if unfinished else None
+    if unreachable:
+        paused = _unreachable_note(sum(store.media_waiting_total(name) for name in sources), "picture inputs", unreachable)
+    progress.finish(error="; ".join(failed) or None, paused=paused)
 
 
-def _finish_embedding(store: Store, progress: P.Run, problem: str | None, deadline: float | None) -> None:
+def _finish_embedding(store: Store, progress: P.Run, problem: str | None, deadline: float | None,
+                      unreachable: str | None = None) -> None:
     left = store.pending_by_source(store.model) if store.model else {}
     progress.vectors(left)
     late = deadline is not None and time.monotonic() > deadline and any(n for n, _ in left.values())
-    progress.finish(error=problem, paused="a time limit stopped it; the next run goes on" if late else None,
-                    switch=None)
+    paused = "a time limit stopped it; the next run goes on" if late else None
+    if unreachable:
+        paused = _unreachable_note(sum(n for n, _ in left.values()), "passages", unreachable)
+    progress.finish(error=problem, paused=paused, switch=None)
 
 
 LAST_SEARCH = "last-search.json"
@@ -707,6 +717,16 @@ def cmd_daemon(cfg: C.Config, args) -> int:
     return D.run(cfg, args.idle_minutes)
 
 
+def cmd_ocr_serve(cfg: C.Config, args) -> int:
+    ocr.configure(args.threads or max(1, (os.cpu_count() or 2) // args.workers))
+    _eprint(f"reading pictures on {args.host}:{args.port}, {args.workers} at a time with {ocr.THREADS} threads each")
+    try:
+        ocr.serve(cfg.data_dir, args.port, args.host, args.workers)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def cmd_status(cfg: C.Config, args) -> int:
     if args.watch:
         return P.watch(cfg.data_dir, args.interval)
@@ -1076,6 +1096,13 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("daemon", help="keep the query model loaded so searches take milliseconds")
     p.add_argument("--idle-minutes", type=float, help="exit after this long without a query")
     p.set_defaults(func=cmd_daemon)
+
+    p = sub.add_parser("ocr-serve", help="read pictures for another machine's `[ocr] url` (OCR on this machine's cores)")
+    p.add_argument("--port", type=int, default=8081)
+    p.add_argument("--host", default="127.0.0.1", help="the address to listen on (there is no login: keep it loopback)")
+    p.add_argument("--workers", type=int, default=4, help="pictures read at once")
+    p.add_argument("--threads", type=int, help="CPU threads per picture (default: the cores shared by the workers)")
+    p.set_defaults(func=cmd_ocr_serve)
 
     p = sub.add_parser("status", help="what's indexed and how the last runs went")
     p.add_argument("--json", action="store_true")

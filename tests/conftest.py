@@ -15,6 +15,7 @@ class AsEmbedders:
         self.profile = profile
         self.current = None
         self.reference = None
+        self.unreachable = None
 
     @property
     def version(self) -> str:
