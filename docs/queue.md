@@ -55,8 +55,6 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
   busy: importing the CLI (0.2 s), the daemon sending a score for every vector (0.25 s with a short query), and the
   search reading every segment's metadata and running FTS (0.3 s). On a busy machine that is a third of a 3 s hook
   budget; the daemon could rank and send only the top candidates.
-- The query daemon follows the load only where `/proc/stat` exists (Linux); macOS (`host_processor_info`) and
-  Windows keep every core for queries.
 
 ## Leftovers from the agent-history batch
 

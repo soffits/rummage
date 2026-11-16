@@ -4,7 +4,7 @@
     data_dir = "~/.local/share/rummage"      # index, runtime (llama.cpp + model), sticker pictures, logs
 
     [runtime]
-    threads = 2                               # CPU threads for llama.cpp's background vectors (queries use every core)
+    threads = 2                               # CPU threads for llama.cpp's background vectors (queries use one)
     # max_threads = "auto"                    # use up to this many (auto: cores - 1) while the machine is idle
     # background_threads = "auto"             # all background work together (auto: cores - 1); searches not counted
     nice = 10
@@ -96,10 +96,12 @@ class Config:
         return max(1, self.background_threads - self.vector_threads)
 
     # A query is one short burst at normal priority that a person (or a prompt hook's budget) waits on, while
-    # background work runs niced: it gets every core, whatever `threads` gives the background vector maker.
+    # background work runs niced. It gets one thread: llama.cpp's threads wait for each other at every layer, so with
+    # more threads a query is only as fast as the one whose core other normal-priority work holds, and its time swings
+    # with the load. One thread takes the same time idle or busy (measured in docs/decisions.md, "Runtime").
     @property
     def query_threads(self) -> int:
-        return usable_cores()
+        return 1
 
 
 def usable_cores() -> int:

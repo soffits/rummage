@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.27.0
+
+- Queries embed on one thread instead of following the load. llama.cpp's threads wait for each other at every layer, so more threads made a query as slow as the thread whose core other work held: on a 4-core machine with three cores busy, four threads were two to four times slower than one. One thread takes the same time idle or busy. The query daemon no longer reads `/proc/stat` or swaps in servers with other thread counts, and recall embeds a long prompt's start and end up to a fixed 1,200 bytes (about a second). Thirty hook recalls with three cores busy: 0.87 s at the median, 2.5 s at most (0.72 s and 3.6 s before); idle 0.52 s at the median.
+
 ## 0.26.0
 
 - `dsh-sessions` takes `principals_since`: from then only a message's recorded sender (`source.principal`) says whether a person wrote it, and the text is indexed as written. The older rules (Telegram sender tags, the dsh-oidc notice, skip prefixes, `web_senders_since`) apply only to history before it. Every DSH log is planned again once.

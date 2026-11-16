@@ -40,16 +40,15 @@ def test_worth_recalling():
     assert worth_recalling("租约能养猫吗")
 
 
-def test_meaning_text_fits_the_embedding_time_the_daemons_threads_give():
+def test_meaning_text_fits_a_hooks_embedding_time():
     # Embedding time grows with the tokens: a CJK character is about 0.8 of a token and a Latin one 0.3, so the same
-    # time holds fewer of them, and a daemon on one free core gets a quarter of what four give it.
+    # time holds fewer of them.
     from rummage.recall import meaning_text
-    cjk = meaning_text("租约能不能养猫" * 400, None, 1)
-    latin = meaning_text("can I keep a cat " * 400, None, 1)
+    cjk = meaning_text("租约能不能养猫" * 400, None)
+    latin = meaning_text("can I keep a cat " * 400, None)
     assert len(cjk.encode()) <= MEANING_BYTES + 5 and len(latin.encode()) <= MEANING_BYTES + 5
     assert len(cjk) < len(latin) / 2 and "\ufffd" not in cjk and cjk.startswith("租约") and cjk.endswith("养猫")
-    assert MEANING_BYTES * 4 <= len(meaning_text("can I keep a cat " * 400, None, 4).encode()) <= MEANING_BYTES * 4 + 5
-    follow = meaning_text("which one", "Assistant: " + "前面说了很多别的事情。" * 80 + "床垫是八月买的，要收据吗？", 1)
+    follow = meaning_text("which one", "Assistant: " + "前面说了很多别的事情。" * 80 + "床垫是八月买的，要收据吗？")
     assert follow.endswith("床垫是八月买的，要收据吗？\nwhich one") and len(follow.encode()) <= CONTEXT_BYTES + 10
     assert "\ufffd" not in follow
 
@@ -167,7 +166,6 @@ def test_short_follow_up_is_searched_with_the_turn_before(tmp_path, capsys, monk
     store.commit()
     store.close()
     embedded = []
-    monkeypatch.setattr("rummage.daemon.query_threads", lambda data_dir, timeout=1.0: 1)
     monkeypatch.setattr("rummage.daemon.query_scores", lambda data_dir, text, version=None, timeout=10.0:
                         embedded.append(text) or (model.vector(text), None))
 
