@@ -74,6 +74,8 @@ class Reader:
         if self._engines is None:
             from rapidocr import LangRec, ModelType, OCRVersion, RapidOCR
 
+            _no_spinning()
+
             self.models.mkdir(parents=True, exist_ok=True)
             import cv2
 
@@ -164,6 +166,29 @@ def reader(data_dir: Path) -> Reader:
     if key not in _readers:
         _readers[key] = Reader(key)
     return _readers[key]
+
+
+def _no_spinning() -> None:
+    """Makes ONNX Runtime's idle worker threads sleep instead of spinning. Every model (detection, recognition, the
+    Korean recogniser) has its own thread pool, and by default each pool keeps spinning for a while after its run, so
+    a reading run used about a third more CPU than its threads' work. RapidOCR has no setting for it, so its session
+    options are extended where it builds them; if that place moves, OCR runs as before, only spinning."""
+    try:
+        from rapidocr.inference_engine.onnxruntime import main
+    except ImportError:
+        return
+    build = main.OrtInferSession.__dict__.get("_init_sess_opts")
+    if not isinstance(build, staticmethod) or getattr(build.__func__, "no_spinning", False):
+        return
+
+    def options(cfg):
+        opts = build.__func__(cfg)
+        opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        opts.add_session_config_entry("session.inter_op.allow_spinning", "0")
+        return opts
+
+    options.no_spinning = True
+    main.OrtInferSession._init_sess_opts = staticmethod(options)
 
 
 def configure(threads: int) -> None:
