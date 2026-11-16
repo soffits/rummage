@@ -148,3 +148,22 @@ def test_turns_a_session_no_longer_yields_are_removed_when_it_is_read_again(tmp_
     plan = source.plan({"s1:1": "old", "s1:2": "old", "gone:1": "old"}, {})
     assert sorted(plan.removed) == ["gone:1", "s1:1"]
     assert [item.key for item in plan.upserts] == ["s1:2"]
+
+
+def test_from_principals_since_only_the_recorded_sender_decides(tmp_path):
+    ana = {"kind": "telegram-user", "channel": "telegram", "id": "100"}
+    source = source_for(tmp_path, [
+        message("[Telegram message from Ana (user id 100)]\nold tagged words", 100, TG),
+        message("[Telegram message from Ana (user id 100)]\nlooks tagged, no principal", 300, TG),
+        message("typed in the web, no principal", 301, WEB),
+        message("[Telegram message from Someone (user id 100)]\nwords kept as written", 302, {**TG, "principal": ana}),
+        reply("Sure.", 303),
+        message("a session's brief", 304, {**WEB, "principal": {"kind": "dsh-session", "channel": "dsh", "id": "s2"}}),
+        reply("On it.", 305),
+    ])
+    source.principals_since = 200.0
+    turns = source.turns(tmp_path / "sessions" / "proj" / "s1" / LOG_NAME)
+    assert [(t.speaker, t.channel, t.text, t.replies) for t in turns] == [
+        ("Ana", "telegram", "old tagged words", []),
+        ("Ana", "telegram", "[Telegram message from Someone (user id 100)]\nwords kept as written", ["Sure."]),
+    ]

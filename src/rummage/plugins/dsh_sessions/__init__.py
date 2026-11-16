@@ -5,15 +5,16 @@ with source kind "user" that a client sent (it has an rpcId, a sender principal,
 `user/message` event or one an inbox splice inserted while a turn ran (`delivered`); the turn runs until the next one
 and collects the assistant's visible text.
 
-Who wrote it comes first from `source.principal`, DSH's field for the caller behind a user message, which
-dsh-oidc (`oidc-user`) and dsh-telegram-bot (`telegram-user`) fill with `{kind, channel, id, name?, ...}`. Older
-messages fall back to the Telegram sender tag in the text or the dsh-oidc sender notice before a Web message. Ids
-are mapped to names through the `people` file.
+Who wrote it is `source.principal`, DSH's field for the caller behind a user message, in the shape every channel
+plugin shares (dsh-message-context's metadata contract: `{kind, channel, id, name?, ...}`). Ids are mapped to names
+through the `people` file. Agents send `user` messages too (one session prompting another, a job, a script); their
+principal kinds are `AGENT_PRINCIPALS`, and they and the replies to them are left out.
 
-Agents send `user` messages too (one session prompting another, a job, a script); their principal kinds are
-`AGENT_PRINCIPALS`, and older ones only start with a `skip_prefixes` line. They are not a person's words, so they and
-the replies to them are left out. With `web_senders_since` set (the time the home's Web login began recording every
-sender), a Web prompt with no sender at all from then on is an agent's too.
+From `principals_since` (the time every channel of the home records its senders that way) the principal alone
+decides: a message without one is no person's. Messages before it are read by the older rules, kept here only for
+that history: the principal when there is one, else the Telegram sender tag in the text, the dsh-oidc sender notice
+before a Web message, a `skip_prefixes` line for agents, and `web_senders_since` (from then a Web prompt with no
+sender at all is an agent's).
 """
 
 from __future__ import annotations
@@ -86,8 +87,8 @@ def _text(data: dict) -> str:
 
 class DshSessionSource(ChatSource):
     # A newer way of reading which messages are a person's: every log is planned again once, and turns it no longer
-    # yields are removed (2: what agents send is left out).
-    reader = 2
+    # yields are removed (2: what agents send is left out; 3: from principals_since only the principal decides).
+    reader = 3
 
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
@@ -99,6 +100,7 @@ class DshSessionSource(ChatSource):
         self.assistant = spec.get("assistant_name", "assistant")
         self.skip_prefixes = tuple(spec.get("skip_prefixes", ["[Sent by the agent in dsh session"]))
         self.web_senders_since = _moment(spec.get("web_senders_since"))
+        self.principals_since = _moment(spec.get("principals_since"))
 
     def _project_dirs(self) -> list[Path]:
         if self.projects:
@@ -176,13 +178,22 @@ class DshSessionSource(ChatSource):
                 if source.get("kind") != "user" or not text:
                     continue
                 principal = principal_of(msg)
+                at_time = (event.get("time") or 0) / 1000
+                if self.principals_since is not None and at_time >= self.principals_since:
+                    if principal is None or principal["kind"] in AGENT_PRINCIPALS:
+                        replies_to_person = False
+                        continue
+                    replies_to_person = True
+                    at = str(event.get("seq")) + (f".{n}" if n else "")
+                    turns.append(Turn(sid, at, at_time, self._speaker(text, rpc_id, None, principal), text.strip(),
+                                      "", str(principal.get("channel") or "web"), project=project))
+                    continue
                 if not rpc_id and not _TG_TAG.match(text) and principal is None:
                     continue
                 if principal is not None and isinstance(principal.get("channel"), str):
                     channel = principal["channel"]
                 else:
                     channel = "telegram" if _TG_TAG.match(text) or rpc_id.startswith("telegram") else "web"
-                at_time = (event.get("time") or 0) / 1000
                 senderless_web = (principal is None and subject is None and channel == "web"
                                   and self.web_senders_since is not None and at_time >= self.web_senders_since)
                 if (text.startswith(self.skip_prefixes) or senderless_web
