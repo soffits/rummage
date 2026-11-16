@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.25.5
+
+- Fixed: prompt-time recall still ran out of a 3-second hook budget when normal-priority work kept most cores busy: on a 4-core machine with three of them taken, more than half of the recalls took over 3 s (4 s at the median for a short follow-up). The query daemon's four threads kept waiting for the one that had no core, and recall embedded up to 2,000 characters of the prompt plus 1,000 of the turn before. The daemon now embeds with the cores other normal-priority work leaves free (read from `/proc/stat` on Linux, checked every 10 s, the new server swapped in once it answers), and recall embeds a long prompt's start and end sized to those threads (600 bytes of UTF-8 per thread) and only the last 600 bytes of the turn a follow-up answers. Words are still matched against the prompt, now its start and end, so a question after a pasted text is found too.
+
 ## 0.25.4
 
 - Fixed: a brief or follow-up one agent sent another in DeepSeek Harness (`open_session`, `prompt_session`) was indexed as the person's own message, and the assistant's replies to a skipped agent or job prompt were added to the person's previous turn. Messages whose sender is another session, a job or a script are left out with the replies to them; `web_senders_since` covers older briefs that carry no sender at all. Every DSH log is planned again once, and a turn a log no longer yields is removed from the index (before, only turns of deleted sessions were).

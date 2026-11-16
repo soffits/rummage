@@ -12,6 +12,7 @@ the model; where loading isn't allowed (prompt hooks) it starts one for the next
 
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import urllib.error
@@ -19,6 +20,7 @@ import urllib.error
 import numpy as np
 
 from . import config as C
+from . import cpu
 from . import daemon as D
 from . import models as M
 from . import runtime as R
@@ -81,12 +83,28 @@ def meaning_vector(cfg: C.Config, version: str | None, text: str, use_daemon: bo
 
 class QueryModel:
     """A query embedder kept loaded by a long-running process (HTTP server, MCP server, daemon), following the
-    index's model: when a switch changes it, the next query loads the new one."""
+    index's model: when a switch changes it, the next query loads the new one.
+
+    Its thread count follows the machine's other normal-priority work (`cpu`): `follow_load`, called every
+    `RECHECK_SECONDS`, starts a server with the cores that work leaves free once two checks in a row agree on a new
+    count, and swaps it in when it answers, so no query waits on a restart."""
+
+    RECHECK_SECONDS = 10
 
     def __init__(self, cfg: C.Config):
         self.cfg = cfg
         self.lock = threading.Lock()
         self.embedder: R.Embedder | None = None
+        self.load = cpu.OtherWork((os.getpid(),))
+        self.threads = cfg.query_threads
+        self.pending: int | None = None   # a new count seen once, waiting for the next check to agree
+
+    def _open(self, profile: M.Profile, threads: int) -> R.Embedder:
+        runtime = R.Runtime(self.cfg.data_dir, self.cfg.llama_server)
+        e = R.open_embedder(runtime, profile, threads=threads, nice=0, die_with_parent=False) \
+            if profile.local else R.open_embedder(runtime, profile)
+        e.start()
+        return e
 
     def vector(self, version: str | None, text: str) -> np.ndarray:
         with self.lock:
@@ -95,13 +113,29 @@ class QueryModel:
                 or (e.profile.local and e.process is None)
             if stale:
                 self.close()
-                profile = profile_for(self.cfg, version)
-                runtime = R.Runtime(self.cfg.data_dir, self.cfg.llama_server)
-                e = R.open_embedder(runtime, profile, threads=self.cfg.query_threads, nice=0, die_with_parent=False) \
-                    if profile.local else R.open_embedder(runtime, profile)
-                e.start()
-                self.embedder = e
+                e = self.embedder = self._open(profile_for(self.cfg, version), self.threads)
             return e.query(text)
+
+    def follow_load(self) -> None:
+        with self.lock:
+            e = self.embedder
+        own = [os.getpid()] + ([e.process.pid] if e is not None and e.process is not None else [])
+        wanted = cpu.threads_for(self.cfg.query_threads, self.load.sample(own))
+        if wanted == self.threads:
+            self.pending = None
+            return
+        if self.pending != wanted:
+            self.pending = wanted
+            return
+        self.pending = None
+        if e is None or e.process is None:
+            self.threads = wanted   # nothing loaded (or a remote model): the next load uses it
+            return
+        new = self._open(e.profile, wanted)
+        with self.lock:
+            if self.embedder is e:
+                self.embedder, self.threads, new = new, wanted, e
+        new.stop()
 
     def close(self) -> None:
         if self.embedder:

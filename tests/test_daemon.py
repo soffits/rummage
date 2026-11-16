@@ -32,8 +32,29 @@ def test_query_vector_speaks_the_socket_protocol(tmp_path):
     assert np.allclose(vector, [0.6, 0.8])
 
 
+@pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="no Unix sockets")
+def test_recall_asks_the_daemon_how_many_threads_it_embeds_with(tmp_path):
+    path = D.socket_path(tmp_path)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(path))
+    server.listen(1)
+
+    def answer():
+        conn, _ = server.accept()
+        with conn:
+            assert json.loads(conn.makefile().readline()) == {"threads": True}
+            conn.sendall(b'{"threads": 2}\n')
+
+    thread = threading.Thread(target=answer)
+    thread.start()
+    assert D.query_threads(tmp_path) == 2
+    thread.join()
+    server.close()
+
+
 def test_no_daemon_means_none(tmp_path):
     assert D.query_vector(tmp_path, "x", "model-v1") is None
+    assert D.query_threads(tmp_path) is None
 
 
 def test_long_data_dir_gets_a_short_socket(tmp_path):
@@ -174,3 +195,82 @@ def test_scores_from_the_daemons_vectors_match_a_search_that_reads_them(tmp_path
         time.sleep(0.05)
     assert len(snapshots.get(model)[0]) == before + 1
     store.close()
+
+
+def _proc(tmp_path, cores, own_ticks):
+    """A fake /proc: `cores` is (user, nice, system, idle) ticks per core, `own_ticks` the embedder's utime+stime."""
+    lines = ["cpu  0 0 0 0 0 0 0 0 0 0"] + [f"cpu{i} {u} {n} {s} {idle} 0 0 0 0 0 0"
+                                            for i, (u, n, s, idle) in enumerate(cores)]
+    (tmp_path / "stat").write_text("\n".join(lines) + "\nintr 1 2 3\n")
+    (tmp_path / "77").mkdir(exist_ok=True)
+    (tmp_path / "77" / "stat").write_text(f"77 (llama server) S 1 1 1 0 -1 0 0 0 0 0 {own_ticks} 0 0 0 20 0 4 0\n")
+
+
+def test_busy_cores_count_normal_priority_work_but_not_niced_work_or_our_own(tmp_path, monkeypatch):
+    # Over 100 ticks per core on 4 cores: 150 ticks of normal-priority work (60 of them our own embedder's) and
+    # 200 of niced work. Only the other 90 normal ticks count: 0.9 of a core.
+    from rummage import cpu
+
+    monkeypatch.setattr(cpu.os, "sched_getaffinity", lambda pid: {0, 1, 2, 3}, raising=False)
+    _proc(tmp_path, [(0, 0, 0, 0)] * 4, 0)
+    work = cpu.OtherWork([77], proc=tmp_path)
+    assert work.sample([77]) is None   # no time has passed
+    _proc(tmp_path, [(60, 40, 0, 0), (30, 60, 10, 0), (0, 100, 0, 0), (50, 0, 0, 50)], 60)
+    assert work.sample([77]) == pytest.approx(0.9)
+
+
+def test_query_threads_leave_the_cores_other_work_keeps_busy():
+    from rummage import cpu
+
+    assert cpu.threads_for(4, None) == 4
+    assert cpu.threads_for(4, 0.3) == 4
+    assert cpu.threads_for(4, 2.4) == 2
+    assert cpu.threads_for(4, 3.0) == 1
+    assert cpu.threads_for(4, 7.5) == 1
+
+
+def test_daemon_swaps_in_a_server_with_fewer_threads_when_two_checks_agree(tmp_path, monkeypatch):
+    # Three busy cores of four made four query threads slower than one (each layer waits for the thread without a
+    # core). The daemon follows the load, but only when two checks agree, and the old server answers until the
+    # new one is up.
+    from rummage import config as C
+    from rummage import query as Q
+    from rummage import runtime as R
+
+    (tmp_path / "config.toml").write_text("")
+    cfg = C.load(tmp_path / "config.toml")
+    cfg.data_dir = tmp_path
+    monkeypatch.setattr(C, "usable_cores", lambda: 4)
+    servers = []
+
+    class Fake:
+        profile = PROFILE
+
+        def __init__(self, threads):
+            self.threads, self.stopped = threads, False
+            self.process = type("P", (), {"pid": 1000 + len(servers), "poll": lambda self: None})()
+
+        def start(self):
+            pass
+
+        def query(self, text):
+            return np.full(3, self.threads, np.float32)
+
+        def stop(self):
+            self.stopped = True
+
+    monkeypatch.setattr(R, "open_embedder", lambda runtime, profile, threads=0, **kw: servers.append(Fake(threads))
+                        or servers[-1])
+    model = Q.QueryModel(cfg)
+    busy = iter([3.0, 0.2, 3.0, 3.1, 0.0])
+    monkeypatch.setattr(model.load, "sample", lambda own: next(busy))
+    assert model.vector(PROFILE.version, "lease")[0] == 4
+    model.follow_load()   # 3 busy, seen once
+    model.follow_load()   # back to idle: nothing changes
+    model.follow_load()   # 3 busy
+    assert len(servers) == 1
+    model.follow_load()   # 3 busy again: one thread
+    assert [s.threads for s in servers] == [4, 1] and servers[0].stopped and not servers[1].stopped
+    assert model.vector(PROFILE.version, "lease")[0] == 1
+    model.follow_load()   # idle once: still one thread
+    assert len(servers) == 2
