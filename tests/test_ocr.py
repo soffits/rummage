@@ -38,3 +38,13 @@ def test_cache_and_undecodable(reader):
     assert reader.text("k1", b"not read again") == first
     with pytest.raises(O.Undecodable):
         reader.text(None, b"not a picture")
+
+
+def test_idle_ocr_threads_sleep(reader):
+    # Each model's thread pool would otherwise spin after its run, using cores beside the reading run's share.
+    reader.text(None, (FIXTURES / "en.png").read_bytes())
+    for engine in reader._load():
+        for part in (engine.text_det, engine.text_rec):
+            if part is not None:
+                options = part.session.session.get_session_options()
+                assert options.get_session_config_entry("session.intra_op.allow_spinning") == "0"

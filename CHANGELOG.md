@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.23.1
+
+- Fixed: the time left jumped around during a long read ("~9 min", then "~2.3 h" five minutes later), because it came from the last five minutes' item count and items differ hugely (a cached picture against a long scan). It now uses the last half hour up to the moment of asking, so it moves smoothly and grows while a long file is being read, and it says "time left unknown" until the read has run five minutes and read 20 items.
+- Fixed: OCR used about a third more CPU than its threads' share, because ONNX Runtime's idle threads kept spinning. They sleep now.
+
 ## 0.23.0
 
 - Background work stays within one thread budget, `[runtime] background_threads` (default: cores - 1), so a re-read with OCR leaves a core to searches: making vectors gets `threads`, reading (OCR and picture vectors) the rest. It replaces `ocr_threads`, which let OCR and two embedders add up past the cores.

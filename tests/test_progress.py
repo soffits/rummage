@@ -30,7 +30,7 @@ def test_reading_then_embedding(tmp_path):
     read.save(force=True)
     info = P.state(tmp_path)
     assert info["state"] == "building" and info["items"] == {"done": 120, "total": 900}
-    assert info["line"] == "rummage: reading 120/900"
+    assert info["line"] == "rummage: reading 120/900, time left unknown"
     assert "120 of 900 items read so far" in info["note"]
 
     read.vectors({"notes": (1200, 1200)})
@@ -128,7 +128,7 @@ def test_rate_comes_from_recent_samples(tmp_path, monkeypatch):
     clock[0] += 6
     assert run.sample(20) == 2.0
     clock[0] += P.RATE_WINDOW + 1
-    assert run.sample(30) is None         # old samples dropped, one left
+    assert run.sample(30) == 10 / (P.RATE_WINDOW + 1)   # the newest older sample starts the window: a pause slows it
 
 
 def test_parts_keep_each_other(tmp_path):
@@ -148,7 +148,8 @@ def test_table_and_line_are_ascii(tmp_path):
     read = P.Run(tmp_path, "read")
     read.source("notes", phase="done", done=900, total=900, failed=2, last_error="ValueError: bad PDF")
     read.source("projects/mods", phase="reading", done=10, total=2000)
-    read.value["per_second"] = 1.0          # 1,990 items to read: 33 min, longer than the vectors' 10
+    read.value["started"] = time.time() - 1000             # 1,000 items in 1,000 s: 33 min for the 1,990 left,
+    read.value["pace"] = [[time.time() - 1000, -90], [time.time(), 910]]   # longer than the vectors' 10
     read.save(force=True)
     embed = P.Run(tmp_path, "embed")
     embed.vectors({"notes": (900, 1200), "projects/mods": (0, 0)})
@@ -312,7 +313,7 @@ def test_time_left_counts_the_items_still_to_read(tmp_path, monkeypatch):
     embed.value["per_second"] = 5.0
     embed.save(force=True)
     info = P.state(tmp_path)
-    assert info["eta_seconds"] is None and "left" not in info["line"]    # no reading pace yet: no guess
+    assert info["eta_seconds"] is None and info["line"].endswith("time left unknown")   # no pace yet: no guess
     clock[0] += 300
     read.source("docs", done=295)                                        # 65 items in 5 minutes
     read.save(force=True)
@@ -320,3 +321,36 @@ def test_time_left_counts_the_items_still_to_read(tmp_path, monkeypatch):
     assert abs(info["eta_seconds"] - (1786 - 295) / (65 / 300)) < 30
     assert info["line"].endswith("~1.9 h left")
     assert "a changed item is found as it was" in info["note"]
+
+
+def test_time_left_moves_smoothly_while_items_differ(tmp_path, monkeypatch):
+    # A re-read whose first items come from the OCR cache (a few seconds each) and the rest from long scans (minutes
+    # each, often with nothing finishing for a while): the guess is unknown at first, then moves without jumps
+    # (a 5-minute pace said "~9 min left" and "~2.3 h left" five minutes apart), and ends near the real pace.
+    clock = [1_000_000.0]
+    monkeypatch.setattr(P.time, "time", lambda: clock[0])
+    read = P.Run(tmp_path, "read")
+    total, done, guesses = 1800, 0, []
+
+    def tick(seconds: float, items: int) -> None:
+        nonlocal done
+        clock[0] += seconds
+        if items:
+            done += items
+            read.source("docs", phase="reading", done=done, total=total)
+            read.save(force=True)
+        info = P.state(tmp_path)
+        guesses.append(info["eta_seconds"])
+        if info["eta_seconds"] is None:
+            assert info["line"].endswith("time left unknown")
+
+    for _ in range(14):                     # 7 minutes of cached items: 440 of them
+        tick(30, 31)
+    assert guesses[:9] == [None] * 9        # under 5 minutes of reading: no guess
+    for minute in range(120):               # then 6 items a minute, in bursts with 4-minute gaps
+        for _ in range(2):
+            tick(30, 30 if minute % 5 == 4 and _ else 0)
+    known = [g for g in guesses if g is not None]
+    assert all(max(a, b) / min(a, b) <= 1.25 for a, b in zip(known, known[1:])), "a jump"
+    real = (total - done) / (6 / 60)
+    assert 0.75 < known[-1] / real < 1.25

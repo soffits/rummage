@@ -13,8 +13,9 @@ hook reply:
     note         one sentence for an agent, "" when complete
     items        {done, total} read into keyword search by a running read, else null
     vectors      {done, total} passages with a vector of the model searches use, else null
-    eta_seconds  time left at the recent rates: for the items still to read (a read samples its own pace) and for
-                 the vectors, whichever takes longer; null while a read has no pace yet
+    eta_seconds  time left at the recent rates: for the items still to read (a read's pace over its last half hour,
+                 the time since its last item included) and for the vectors, whichever takes longer; null (shown as
+                 unknown) until a read has a pace
     paused       why work stopped with some left, else null
     error        what failed, else null
     updated      when a run last wrote, else null
@@ -36,6 +37,12 @@ FILE = "progress.json"
 WRITE_EVERY = 1.0          # seconds between heartbeats of one run
 STALE_SECONDS = 600        # a running part without a heartbeat for this long counts as stalled
 RATE_WINDOW = 300          # seconds of samples behind a rate
+# Items differ far more than passages (a cached picture takes a second, a long scan many minutes), so a read's pace
+# looks back further, counts the time since its last item, and gives no guess before it has seen enough.
+READ_WINDOW = 1800
+READ_SETTLE = 300          # seconds of reading before a pace counts
+READ_LEAST = 20            # items read before a pace counts
+PACE_STEP = 30             # seconds between the samples a run writes down
 LINE_REASON = 48           # characters of a reason shown in `line`
 QUIET_READ = 5             # seconds a read may check folders before it shows
 
@@ -100,20 +107,29 @@ class Run:
     def source(self, name: str, **fields) -> None:
         self.value["sources"].setdefault(name, {}).update(fields)
         if "done" in fields:   # a read's pace: items read per second, over all its sources
-            self.sample(sum(int(s.get("done") or 0) for s in self.value["sources"].values()))
+            self.sample(sum(int(s.get("done") or 0) for s in self.value["sources"].values()), READ_WINDOW)
         self.save(force="phase" in fields)
 
     def update(self, force: bool = False, **fields) -> None:
         self.value.update(fields)
         self.save(force)
 
-    def sample(self, done: int) -> float | None:
-        """Records `done` (a growing count) and returns the rate per second over the last RATE_WINDOW seconds."""
+    def sample(self, done: int, window: float = RATE_WINDOW) -> float | None:
+        """Records `done` (a growing count) and returns the rate per second over the last `window` seconds. The
+        newest sample older than that stays as the window's start, so a pause between samples doesn't empty it.
+        The samples go in the file too (`pace`, one per PACE_STEP seconds), so a reader can slide the window to
+        its own time, which counts the time since the last sample."""
         now = time.time()
-        self.samples = [s for s in self.samples if now - s[0] <= RATE_WINDOW] + [(now, done)]
+        old = [s for s in self.samples if now - s[0] > window]
+        self.samples = old[-1:] + [s for s in self.samples if now - s[0] <= window] + [(now, done)]
         (t0, d0), (t1, d1) = self.samples[0], self.samples[-1]
         rate = (d1 - d0) / (t1 - t0) if t1 - t0 >= 5 and d1 > d0 else None
         self.value["per_second"] = round(rate, 3) if rate else None
+        kept = self.samples[:1]
+        for sample in self.samples[1:-1]:
+            if sample[0] - kept[-1][0] >= PACE_STEP:
+                kept.append(sample)
+        self.value["pace"] = [[round(t, 1), d] for t, d in kept + self.samples[-1:]]
         return rate
 
     def vectors(self, by_source: dict[str, tuple[int, int]], made_so_far: int = 0) -> None:
@@ -193,6 +209,24 @@ def _short(text: str) -> str:
     return text if len(text) <= LINE_REASON else text[: LINE_REASON - 3] + "..."
 
 
+def _read_pace(read: dict, done: int, now: float) -> float | None:
+    """Items per second over the READ_WINDOW seconds up to `now`, the count at the window's start interpolated
+    between samples; None before the read has run READ_SETTLE seconds and read READ_LEAST items, or when it read
+    nothing in the window."""
+    samples = read.get("pace") or []
+    if not samples or done < READ_LEAST or now - (read.get("started") or now) < READ_SETTLE:
+        return None
+    start = now - READ_WINDOW
+    t0, d0 = samples[0]
+    if t0 < start:
+        t0, d0 = start, samples[-1][1]
+        for (ta, da), (tb, db) in zip(samples, samples[1:]):
+            if tb >= start:
+                d0 = da + (db - da) * (start - ta) / (tb - ta)
+                break
+    return (done - d0) / (now - t0) if now > t0 and done > d0 else None
+
+
 def state(data_dir: Path, pending: int | None = None, now: float | None = None) -> dict:
     """The index summary described in the module docstring. `pending`: passages still without a vector of the
     active model, when the caller already counted them; it fills in for a missing or finished embed part."""
@@ -220,7 +254,8 @@ def state(data_dir: Path, pending: int | None = None, now: float | None = None) 
         out["items"] = {"done": sum(int(s.get("done") or 0) for s in sources),
                         "total": sum(int(s.get("total") or 0) for s in sources)}
         to_read = max(out["items"]["total"] - out["items"]["done"], 0)
-        item_eta = round(to_read / read["per_second"]) if to_read and read.get("per_second") else None
+        pace = _read_pace(read, out["items"]["done"], now)
+        item_eta = round(to_read / pace) if to_read and pace else None
     left, total = _vectors(read, embed, embedding)
     if embedding:
         left = max(left - int(embed.get("made_since_count") or 0), 0)
@@ -272,6 +307,11 @@ def for_agents(data_dir: Path, pending: int | None = None) -> dict | None:
     return agent_view(state(data_dir, pending))
 
 
+def _reading_left(out: dict) -> bool:
+    items = out["items"]
+    return out["state"] == "building" and items is not None and items["total"] > items["done"]
+
+
 def _line(out: dict, read: dict, switch: dict | None, stalled: list, now: float) -> str:
     parts = []
     if out["items"] is not None:
@@ -287,6 +327,8 @@ def _line(out: dict, read: dict, switch: dict | None, stalled: list, now: float)
         parts.append(f"{_n(vectors['waiting'])} passages wait for vectors")
     if out["eta_seconds"] is not None and out["state"] == "building":
         parts.append(f"~{_duration(out['eta_seconds'])} left")
+    elif _reading_left(out):
+        parts.append("time left unknown")
     if switch and switch.get("total"):
         share = switch["done"] / switch["total"]
         eta = f", ~{_duration(switch['eta_seconds'])}" if switch.get("eta_seconds") else ""
@@ -316,6 +358,8 @@ def _note(out: dict, read: dict) -> str:
         said.append(f"{_n(vectors['waiting'])} passages have no vectors yet and match only by their words")
     if out["eta_seconds"] is not None and out["state"] == "building":
         said.append(f"about {_duration(out['eta_seconds'])} left")
+    elif _reading_left(out):
+        said.append("time left not known yet")
     head = {"building": "Index still building", "paused": "Index incomplete, paused",
             "stopped": "Index incomplete, its last run stopped", "error": "Index incomplete, the last run failed"}
     reason = out["paused"] if out["state"] == "paused" else out["error"] if out["state"] == "error" else None
