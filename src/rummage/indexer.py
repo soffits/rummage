@@ -189,8 +189,9 @@ def _read_item(store: Store, source: Source, item: Item, embedders: list[Embedde
     """Reads one item into the index with its reusable vectors and up to `MEDIA_STEP` new media vectors per model;
     returns how many media inputs still wait."""
     segments = source.load(item)
-    if getattr(source, "item_reader", None) is not None:
-        item.info["reader"] = source.item_reader
+    reader_of = getattr(source, "reader_of", None)
+    if reader_of is not None and (version := reader_of(item.key)) is not None:
+        item.info["reader"] = version
     waiting = 0
     for e in embedders:
         for seg in segments:
@@ -237,7 +238,7 @@ def index_source(store: Store, source: Source, embedders: list[Embedders], log, 
               "excluded": 0, "held": 0}
     report = progress.source if progress else (lambda *a, **k: None)
     report(source.name, phase="planning", done=0, total=0, failed=0, last_error=None)
-    known = store.fingerprints(source.name, getattr(source, "item_reader", None))
+    known = store.fingerprints(source.name, getattr(source, "reader_of", None))
     if reload:
         plan = source.plan({key: None for key in known}, {})
     elif again:

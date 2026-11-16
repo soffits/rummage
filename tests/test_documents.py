@@ -238,19 +238,29 @@ def test_a_new_reader_reads_each_file_again_once_and_failures_dont_restart_it(tm
     root.mkdir()
     for n in range(3):
         (root / f"n{n}.txt").write_text(f"note {n} about the lease", encoding="utf-8")
+    (root / "plan.md").write_text("# Plan\n\nthe lease plan", encoding="utf-8")
+    (root / "rent.csv").write_text("date,amount,note\n2026-01-01,900,rent\n2026-02-01,900,rent\n", encoding="utf-8")
     (root / "broken.pdf").write_bytes(b"%PDF-1.4 not really")
     store = Store(tmp_path / "index.db")
     src = FilesSource("docs", {"root": str(root)}, tmp_path / "data")
     run = lambda: index_all(store, src, FakeEmbedders(), lambda *a: None, lambda *a: None)
     first = run()
-    assert first["added"] == 3 and first["failed"] == 1
+    assert first["added"] == 6 and first["failed"] == 1
     again = run()   # the failed file is tried again; the files already read are not
     assert again["added"] == 0 and again["updated"] == 0 and again["failed"] == 1
-    monkeypatch.setattr(FilesSource, "item_reader", D.VERSION + 1)
-    newer = run()
-    assert newer["updated"] == 3
-    assert run()["updated"] == 0
+    # a newer reader of one family reads only that family's files again
+    for family, read_again in (("text", 3), ("markdown", 1), ("records", 2), ("image", 0)):
+        monkeypatch.setitem(D.READERS, family, D.READERS[family] + 1)
+        assert run()["updated"] == read_again, family
+        assert run()["updated"] == 0
     store.close()
+
+
+def test_every_kind_of_file_has_a_reader_version():
+    suffixes = (X.TEXT | X.HTML | X.OFFICE | X.LEGACY_OFFICE | X.IWORK | X.NOTEBOOK | X.PDF | X.ARCHIVES | X.IMAGES
+                | X.AUDIO | X.VIDEO | X.RTF | X.EPUB | X.MAIL | {".zzz"})
+    assert {D.family(f"a{s}") for s in suffixes} | {"records"} == set(D.READERS)
+    assert D.family("a.zzz") == "name" and D.family("a.MD") == "markdown" and D.family("scan.pdf") == "pdf"
 
 
 def test_unread_reasons_have_labels():

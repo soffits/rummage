@@ -25,10 +25,14 @@ from .sources.folder import PRIVATE_KEY
 from .sources.markdown import note_segments
 from .store import Item, Segment
 
-# How files are read, kept on each item (`info.reader`): an item read by another version is read again (vectors and OCR
-# results are reused, so that costs only the reading).
-VERSION = 1
 MARKDOWN = {".md", ".markdown"}
+# How each family of files is read, kept on each item (`info.reader`): an item read by another version of its family's
+# reader is downloaded and read again (vectors and OCR results are reused by hash). Bump only the families whose reading
+# changed: an OCR change bumps "image" and "pdf", a records change "records". The family comes from the file's name
+# (`family`), so a run knows what to read again before it fetches anything; "name" is every file with no reader of its
+# own (read as text when its content is text).
+READERS = {"markdown": 1, "text": 1, "html": 1, "rtf": 1, "office": 1, "legacy-office": 1, "iwork": 1, "notebook": 1,
+           "epub": 1, "mail": 1, "pdf": 1, "image": 1, "archive": 1, "audio": 1, "video": 1, "name": 1, "records": 1}
 OCR_SIDE = 2000                      # pixels on a rendered page's long side when its text is read
 OPENCV_IMAGES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}   # read by OCR as they are
 
@@ -105,6 +109,16 @@ class LocalBlob(Blob):
 
     def open(self) -> BinaryIO:
         return open(self.path, "rb")
+
+
+def family(name: str) -> str:
+    """Which reader in `READERS` reads file `name`."""
+    return "markdown" if X.suffix(name) in MARKDOWN else X.kind_of(name)
+
+
+def reader_of(name: str) -> int:
+    """The version of the reader that reads file `name` now, for `info.reader`."""
+    return READERS[family(name)]
 
 
 def unread(item: Item, why: str, cuts: list[Cut] = ()) -> None:

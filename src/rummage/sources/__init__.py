@@ -37,8 +37,6 @@ class Source:
     media = False                  # needs the image encoders
     reader = 0                     # how the source reads its data: a saved state from another reader is dropped,
     #                                so everything is planned again once
-    item_reader: int | None = None # how it reads each item: kept on the item (`info.reader`); an item read by another
-    #                                version is read again, whenever a run gets to it
 
     def __init__(self, name: str, spec: dict, data_dir: Path):
         self.name = name
@@ -48,6 +46,11 @@ class Source:
 
     def load(self, item: Item) -> list[Segment]:
         raise NotImplementedError
+
+    def reader_of(self, key: str) -> int | None:
+        """How the source reads item `key` now, kept on the item (`info.reader`): an item another version read is
+        read again whenever a run gets to it. None when the source doesn't version its items."""
+        return None
 
     def watch_roots(self) -> list[Path]:
         """Folders whose file changes mean this source has something new (for `rummage watch`); empty when the
