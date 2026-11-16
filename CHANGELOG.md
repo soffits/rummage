@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.20.2
+
+- Fixed: a PDF that needs a password to open failed its whole item, so it wasn't found even by name, every run read it again and reported a failure, and a Seafile library holding one was listed again on every poll. It is now indexed by name and says why its text is missing (`partial`: "PDF text not read: it needs a password to open").
+
 ## 0.20.1
 
 - Fixed: indexing a slightly malformed PDF printed pypdf's repair notes ("Ignoring wrong pointing object", "incorrect startxref pointer") on stderr, even with `-q`. The recovered text was always kept; the notes are no longer printed.

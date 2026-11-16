@@ -209,8 +209,12 @@ def pdf_pages(fh, limits: Limits) -> tuple[list[str], int, list[Cut]]:
         from pypdf import PdfReader
     except ImportError as error:
         raise RuntimeError("PDF text needs the pypdf package") from error
+    from pypdf.errors import FileNotDecryptedError
     reader = PdfReader(fh)
-    total = len(reader.pages)
+    try:
+        total = len(reader.pages)
+    except FileNotDecryptedError:   # opening it needs a password: kept by name, saying why
+        return [], None, [Cut("PDF text", 0, None, "pages", None, "it needs a password to open")]
     pages: list[str] = []
     chars = 0
     for page in reader.pages[: limits.max_pdf_pages]:

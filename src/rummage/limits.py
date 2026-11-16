@@ -24,17 +24,17 @@ KEEP_CHARS = 12_000          # characters kept per side of a chat turn
 
 @dataclass(frozen=True)
 class Cut:
-    """`kept` of `total` `unit`s of `what` went in; `setting` is the source setting that lifts the limit."""
+    """`kept` of `total` `unit`s of `what` went in; `setting` is the source setting that lifts the limit, if one does."""
     what: str
     kept: int
     total: int | None
     unit: str
-    setting: str
+    setting: str | None
     reason: str | None = None   # why it wasn't read, when that isn't a size limit (a missing tool or package)
 
     def as_dict(self, source: str) -> dict:
-        out = {"what": self.what, "kept": self.kept, "total": self.total, "unit": self.unit,
-               "setting": f"sources.{source}.{self.setting}"}
+        out = {"what": self.what, "kept": self.kept, "total": self.total, "unit": self.unit}
+        out |= {"setting": f"sources.{source}.{self.setting}"} if self.setting else {}
         return out | ({"reason": self.reason} if self.reason else {})
 
 
@@ -82,7 +82,8 @@ def record(item, cuts: list[Cut]) -> None:
 def describe(entry: dict) -> str:
     """One line for a `partial` entry: what was left out and the setting that lifts it."""
     if entry.get("reason"):
-        return f"{entry['what']} not read: {entry['reason']} ({entry['setting']})"
+        lift = f" ({entry['setting']})" if entry.get("setting") else ""
+        return f"{entry['what']} not read: {entry['reason']}{lift}"
     if entry["kept"] == 0:
         size = f" ({entry['total']} {entry['unit']})" if entry.get("total") else ""
         return f"{entry['what']} not read{size}, only its name; raise {entry['setting']} to read it"

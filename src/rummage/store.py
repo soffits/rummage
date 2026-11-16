@@ -766,7 +766,7 @@ class Store:
             entry["name_only_items"] = name_only
             entry["settings"] = sorted({s for (s,) in self.db.execute(
                 "SELECT DISTINCT json_extract(value, '$.setting') FROM items, json_each(items.info, '$.partial') "
-                "WHERE items.source = ?", (source,))})
+                "WHERE items.source = ? AND json_extract(value, '$.setting') IS NOT NULL", (source,))})
         for source, state in self.states().items():
             left_out = {k: v for k, v in (state.get("left_out") or {}).items() if v.get("count")}
             if left_out:
