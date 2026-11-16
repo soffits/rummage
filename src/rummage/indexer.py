@@ -57,6 +57,29 @@ def lock(data_dir: Path, name: str = "index", wait: float = 0):
         handle.close()
 
 
+def held(data_dir: Path, name: str) -> bool:
+    """Whether some process holds the `name` lock of this data directory right now."""
+    if not (data_dir / f"{name}.lock").exists():
+        return False
+    try:
+        with lock(data_dir, name):
+            return False
+    except Busy:
+        return True
+
+
+# Set by `rummage watch` on the index runs it starts: they do the watch's work, so they don't leave it to the watch.
+WATCH_RUN = "RUMMAGE_WATCH_RUN"
+
+
+def watched(data_dir: Path) -> str | None:
+    """Why an index run started outside a running watch leaves the work to it, or None when it shouldn't."""
+    if os.environ.get(WATCH_RUN) or not held(data_dir, "watch"):
+        return None
+    return "rummage watch keeps this index current (it reads changes as they come and re-plans every source on its " \
+           "interval)"
+
+
 def spare_threads(base: int, most: int, mine: int, load: float | None, cores: int) -> int:
     """How many threads to embed with: `base` always, more up to `most` while the machine's other work (the
     1-minute load minus this run's own threads) leaves cores idle."""
@@ -166,6 +189,8 @@ def _read_item(store: Store, source: Source, item: Item, embedders: list[Embedde
     """Reads one item into the index with its reusable vectors and up to `MEDIA_STEP` new media vectors per model;
     returns how many media inputs still wait."""
     segments = source.load(item)
+    if getattr(source, "item_reader", None) is not None:
+        item.info["reader"] = source.item_reader
     waiting = 0
     for e in embedders:
         for seg in segments:
@@ -212,7 +237,7 @@ def index_source(store: Store, source: Source, embedders: list[Embedders], log, 
               "excluded": 0, "held": 0}
     report = progress.source if progress else (lambda *a, **k: None)
     report(source.name, phase="planning", done=0, total=0, failed=0, last_error=None)
-    known = store.fingerprints(source.name)
+    known = store.fingerprints(source.name, getattr(source, "item_reader", None))
     if reload:
         plan = source.plan({key: None for key in known}, {})
     elif again:

@@ -131,6 +131,23 @@ def test_iwork_text_from_storages_and_tables(tmp_path):
     assert "Master title" not in text
 
 
+def test_a_file_is_read_by_its_content_when_that_isnt_its_extensions_format(tmp_path):
+    # A Keynote deck and a key file share `.key`; Word saves RTF as `.doc`; a broken `.docx` is no zip.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("Index/Document.iwa", _iwa((2001, _proto((1, 0), (3, "Process creation in the NT kernel")))))
+    item, segs = _read(tmp_path, "talk.key", buf.getvalue())
+    assert "Process creation" in _text(segs)
+    rtf = rb"{\rtf1\ansi{\fonttbl{\f0 Arial;}}\f0 Dear landlord, the heater is broken.\par}"
+    item, segs = _read(tmp_path, "letter.doc", rtf)
+    assert item.info["type"] == "rtf" and _text(segs) == "Dear landlord, the heater is broken."
+    item, segs = _read(tmp_path, "broken.docx", bytes(range(256)) * 4)
+    assert item.info["unread"] == "damaged"
+    pem = b"-----BEGIN RSA PRIVATE KEY-----\n" + b"MIIEowIBAAKCAQEA" * 8 + b"\n-----END RSA PRIVATE KEY-----\n"
+    item, segs = _read(tmp_path, "server.key", pem)
+    assert [s.kind for s in segs] == ["name"] and item.info["unread"] == "secret"
+
+
 def test_snappy_copies():
     # "abcd" as a literal, then a 1-byte-offset copy of 8 bytes at offset 4: "abcdabcdabcd"
     block = bytes([12, 3 << 2]) + b"abcd" + bytes([((8 - 4) << 2) | 1, 4])
@@ -211,16 +228,29 @@ def test_heic_and_other_pictures_go_through_ffmpeg(tmp_path, fake_ocr, monkeypat
     assert item.info["unread"] == "damaged"
 
 
-def test_a_new_reader_reads_every_file_again(tmp_path, monkeypatch):
+def test_a_new_reader_reads_each_file_again_once_and_failures_dont_restart_it(tmp_path, monkeypatch):
+    from test_indexer import FakeEmbedders
+
+    from conftest import index_all
+    from rummage.store import Store
+
     root = tmp_path / "docs"
     root.mkdir()
-    (root / "a.txt").write_text("alpha", encoding="utf-8")
+    for n in range(3):
+        (root / f"n{n}.txt").write_text(f"note {n} about the lease", encoding="utf-8")
+    (root / "broken.pdf").write_bytes(b"%PDF-1.4 not really")
+    store = Store(tmp_path / "index.db")
     src = FilesSource("docs", {"root": str(root)}, tmp_path / "data")
-    plan = src.plan({}, {})
-    known = {i.key: i.fingerprint for i in plan.upserts}
-    assert list(src.plan(known, plan.state).upserts) == []
-    monkeypatch.setattr(FilesSource, "documents", D.VERSION + 1)
-    assert [i.key for i in src.plan(known, plan.state).upserts] == ["a.txt"]
+    run = lambda: index_all(store, src, FakeEmbedders(), lambda *a: None, lambda *a: None)
+    first = run()
+    assert first["added"] == 3 and first["failed"] == 1
+    again = run()   # the failed file is tried again; the files already read are not
+    assert again["added"] == 0 and again["updated"] == 0 and again["failed"] == 1
+    monkeypatch.setattr(FilesSource, "item_reader", D.VERSION + 1)
+    newer = run()
+    assert newer["updated"] == 3
+    assert run()["updated"] == 0
+    store.close()
 
 
 def test_unread_reasons_have_labels():

@@ -5,7 +5,7 @@ one item per record. Files are only read.
 
 from __future__ import annotations
 
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from .. import documents as D
 from .. import records as R
@@ -16,7 +16,7 @@ from .folder import FolderSource
 
 class FilesSource(FolderSource):
     structured = True
-    documents = D.VERSION
+    item_reader = D.VERSION
 
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         super().__init__(name, spec, data_dir)

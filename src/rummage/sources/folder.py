@@ -12,15 +12,16 @@ import re
 from pathlib import Path
 
 from .. import records as R
-from ..limits import UNLIMITED, Cut, Limits, record
+from ..limits import UNLIMITED, Cut, Limits
 from ..store import Item, Segment
 from . import Plan, Source
 
 DEFAULT_EXCLUDE = [".*", "node_modules", "__pycache__", "$RECYCLE.BIN", "System Volume Information"]
 
 # Keys, certificates, password stores and credential files (DigUp's list): never read, wherever they are, unless a
-# source sets `read_secret_files = true`. Matched against the name in lower case.
-SECRET_EXTENSIONS = (".pem", ".key", ".p12", ".pfx", ".keystore", ".jks", ".ppk", ".kdbx", ".gpg", ".asc", ".crt",
+# source sets `read_secret_files = true`. Matched against the name in lower case. `.key` isn't here: Keynote uses it
+# too, and a key file in it is a text file holding a private key block, which isn't read either (PRIVATE_KEY).
+SECRET_EXTENSIONS = (".pem", ".p12", ".pfx", ".keystore", ".jks", ".ppk", ".kdbx", ".gpg", ".asc", ".crt",
                      ".cer", ".der", ".p8", ".mobileprovision")
 SECRET_PREFIXES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".env", ".netrc", ".npmrc", ".pypirc", "htpasswd",
                    ".htpasswd")
@@ -74,7 +75,6 @@ class FolderSource(Source):
     default_max_bytes = 0                                # files above this keep only their name; 0: no limit
     hash_bytes = 64 << 20                                # bigger files are fingerprinted by size and mtime
     structured = False                                   # read JSON/JSONL/CSV/TSV files of records as one item per record
-    documents: int | None = None                         # the `documents.VERSION` its files are read with
 
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
@@ -216,8 +216,6 @@ class FolderSource(Source):
         return {"text": text, "original": str(path)}
 
     def plan(self, known: dict[str, str | None], state: dict) -> Plan:
-        if self.documents is not None and state.get("documents") != self.documents:   # read by an older reader
-            known, state = {key: None for key in known}, {}
         # A state saved before record files were read has no "records": plan every file again once.
         stats = state.get("stats", {}) if "records" in state or not self.structured else {}
         record_keys: dict[str, list[str]] = state.get("records", {})
@@ -242,11 +240,11 @@ class FolderSource(Source):
                 records_now[rel] = record_keys[rel]
                 live.update(record_keys[rel])
                 continue
-            if self.structured and not (unchanged and rel in known) and self._records(rel, st, known, upserts,
-                                                                                       records_now, live):
+            read_before = unchanged and known.get(rel) is not None
+            if self.structured and not read_before and self._records(rel, st, known, upserts, records_now, live):
                 continue
             live.add(rel)
-            if rel in known and unchanged:
+            if known.get(rel) is not None and unchanged:
                 continue
             if st.st_size > self.hash_bytes or (self.max_bytes and st.st_size > self.max_bytes):
                 fingerprint = f"stat:{st.st_size}:{st.st_mtime_ns}"
@@ -267,10 +265,7 @@ class FolderSource(Source):
         left_out = {"excluded": _left_out(excluded, f"sources.{self.name}.exclude", self.exclude),
                     "unreadable": _left_out(unreadable),
                     "skipped as keys or passwords": _left_out(secret, f"sources.{self.name}.read_secret_files")}
-        state = {"stats": seen, "records": records_now, "left_out": left_out}
-        if self.documents is not None:
-            state["documents"] = self.documents
-        return Plan(upserts, removed, state, len(upserts))
+        return Plan(upserts, removed, {"stats": seen, "records": records_now, "left_out": left_out}, len(upserts))
 
 
 EXAMPLES = 5

@@ -116,9 +116,6 @@ data, tests.
 - OCR runs while items are read, so a long scanned PDF holds up the source's other items for its pages' OCR
   (2–7 s a page on a 4-core CPU); doing it in the media pass, a step at a time, would keep the read fast.
 - `ocr-cache.db` keeps text for files that changed or went away; nothing prunes it yet (it is small text).
-- A source's state is saved only when a whole plan went in, so a re-read for a new `documents.VERSION` that is
-  interrupted (a restart, an upgrade) plans every file again; OCR results and vectors are cached, but each file is
-  downloaded and parsed again. Recording the reader version per item would let it resume.
 - OCR reads line by line through RapidOCR's public calls; batching the lines into one recognition call would be
   faster on pictures with many lines.
 - Long recordings are decoded once per pass to find their windows (a cheap streamed decode); a cached window list

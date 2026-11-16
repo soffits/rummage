@@ -20,7 +20,7 @@ from pathlib import Path
 from . import config as C
 from . import envelope as E
 from . import switch
-from .indexer import lock
+from .indexer import WATCH_RUN, lock
 from .sources import build
 from .store import Store
 
@@ -29,6 +29,10 @@ BUSY_RETRY_SECONDS = 15
 
 def _command(cfg: C.Config, *extra: str) -> list[str]:
     return [sys.executable, "-m", "rummage", "--config", str(cfg.path), "index", "-q", *extra]
+
+
+def _env() -> dict[str, str]:
+    return {**os.environ, WATCH_RUN: "1"}
 
 
 def _say(text: str) -> None:
@@ -51,7 +55,7 @@ class Runner:
         command = _command(self.cfg, "--no-embed", "--wait", "30")
         for name in names:
             command += ["-s", name]
-        run = subprocess.run(command, capture_output=True, text=True)
+        run = subprocess.run(command, capture_output=True, text=True, env=_env())
         if run.returncode == E.INDEX_BUSY:
             self.retry, self.retry_at = set(names), time.monotonic() + BUSY_RETRY_SECONDS
             _say(f"another run is reading; {', '.join(names)} again in {BUSY_RETRY_SECONDS} s")
@@ -76,7 +80,8 @@ class Runner:
         except Exception:
             return
         if waiting:
-            self.embedding = subprocess.Popen(_command(self.cfg, "--embed-only"), stdout=subprocess.DEVNULL)
+            self.embedding = subprocess.Popen(_command(self.cfg, "--embed-only"), stdout=subprocess.DEVNULL,
+                                              env=_env())
 
     def tick(self) -> None:
         """Between events: retry a batch that found the index busy, restart the vector maker if more arrived."""
