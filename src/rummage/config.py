@@ -4,7 +4,7 @@
     data_dir = "~/.local/share/rummage"      # index, runtime (llama.cpp + model), sticker pictures, logs
 
     [runtime]
-    threads = 2                               # CPU threads for llama.cpp
+    threads = 2                               # CPU threads for llama.cpp's background vectors (queries use every core)
     # max_threads = "auto"                    # use up to this many (auto: cores - 1) while the machine is idle
     # background_threads = "auto"             # all background work together (auto: cores - 1); searches not counted
     nice = 10
@@ -94,6 +94,19 @@ class Config:
     @property
     def reading_threads(self) -> int:
         return max(1, self.background_threads - self.vector_threads)
+
+    # A query is one short burst at normal priority that a person (or a prompt hook's budget) waits on, while
+    # background work runs niced: it gets every core, whatever `threads` gives the background vector maker.
+    @property
+    def query_threads(self) -> int:
+        return usable_cores()
+
+
+def usable_cores() -> int:
+    """The cores this process may run on (its CPU affinity where the system has one)."""
+    if hasattr(os, "sched_getaffinity"):
+        return max(1, len(os.sched_getaffinity(0)))
+    return max(1, os.cpu_count() or 1)
 
 
 def _base(xdg: str, windows: str, fallback: str) -> Path:

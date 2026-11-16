@@ -72,7 +72,7 @@ def meaning_vector(cfg: C.Config, version: str | None, text: str, use_daemon: bo
                       "no query daemon is running (`rummage daemon`), so this matched by words only"), None
     try:
         profile = profile_for(cfg, version)
-        with R.embedder(R.Runtime(cfg.data_dir, cfg.llama_server), profile, threads=cfg.threads, nice=0,
+        with R.embedder(R.Runtime(cfg.data_dir, cfg.llama_server), profile, threads=cfg.query_threads, nice=0,
                         ready_timeout=load_seconds) as embedder:
             return embedder.query(text), None, None
     except FALLBACK_ERRORS as error:
@@ -97,7 +97,7 @@ class QueryModel:
                 self.close()
                 profile = profile_for(self.cfg, version)
                 runtime = R.Runtime(self.cfg.data_dir, self.cfg.llama_server)
-                e = R.open_embedder(runtime, profile, threads=self.cfg.threads, nice=0, die_with_parent=False) \
+                e = R.open_embedder(runtime, profile, threads=self.cfg.query_threads, nice=0, die_with_parent=False) \
                     if profile.local else R.open_embedder(runtime, profile)
                 e.start()
                 self.embedder = e

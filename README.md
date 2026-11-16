@@ -63,7 +63,7 @@ TOML reads without escapes:
 data_dir = "~/.local/share/rummage"   # index, runtime files, logs (Windows default: %LOCALAPPDATA%\rummage)
 
 [runtime]
-threads = 2                           # CPU threads for llama.cpp
+threads = 2                           # CPU threads for llama.cpp while indexing (searches use every core)
 # max_threads = "auto"                # while indexing, use up to cores - 1 when the machine is otherwise idle
 # background_threads = "auto"         # reading (OCR, pictures) and making vectors together (auto: cores - 1);
 #                                     # vectors get `threads`, reading the rest; searches aren't counted

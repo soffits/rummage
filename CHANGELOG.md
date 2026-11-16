@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.25.3
+
+- Fixed: prompt-time recall often ran out of a 3-second hook budget on a small machine, even when it was idle. The query daemon's model ran on `[runtime] threads`, the background vector maker's setting (one thread in a config that keeps a core free), and a query's vector takes time in proportion to its length: a 1,500-character message, or a short follow-up embedded together with the turn before it, took 2 to 3.6 s on one thread. Queries now use every core at normal priority while background work stays niced; the same 2,500 characters take about 1.1 s on four cores.
+
 ## 0.25.2
 
 - Fixed: a huge picture (a 12-megapixel HEIC photo) took one to two and a half minutes to get its vector on a small machine, and could kill the local embedder, after which every picture behind it failed with "Connection refused". Pictures converted by ffmpeg are cut to 2,000 px on the long side first (the models look at far fewer), and a local embedder that died is started again instead of being used dead.
