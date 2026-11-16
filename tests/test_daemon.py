@@ -85,6 +85,53 @@ def test_search_starts_a_daemon_and_uses_it_instead_of_loading_the_model(tmp_pat
     assert "no query daemon" in reason and len(started) == 2
 
 
+def test_queries_embed_on_every_core_not_the_background_thread_count(tmp_path, monkeypatch):
+    # A prompt hook waits on the query's vector within a few seconds; one background thread made a 2,000-character
+    # prompt take ~3.6 s on its own, so the daemon's model and a search loading it get every core.
+    from rummage import config as C
+    from rummage import query as Q
+    from rummage import runtime as R
+
+    (tmp_path / "config.toml").write_text("[runtime]\nthreads = 1\nbackground_threads = 1\n")
+    cfg = C.load(tmp_path / "config.toml")
+    cfg.data_dir = tmp_path
+    monkeypatch.setattr(C, "usable_cores", lambda: 6)
+    assert cfg.query_threads == 6 and cfg.vector_threads == 1
+
+    opened = []
+
+    class Fake:
+        profile, process = PROFILE, None
+
+        def start(self):
+            pass
+
+        def query(self, text):
+            return np.ones(3)
+
+        def stop(self):
+            pass
+
+    def open_embedder(runtime, profile, **kwargs):
+        opened.append(kwargs)
+        return Fake()
+
+    monkeypatch.setattr(R, "open_embedder", open_embedder)
+    Q.QueryModel(cfg).vector(PROFILE.version, "lease")
+    assert opened[0]["threads"] == 6 and opened[0]["nice"] == 0
+
+    class Context:
+        def __enter__(self):
+            return Fake()
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(R, "embedder", lambda runtime, profile, **kwargs: opened.append(kwargs) or Context())
+    Q.meaning_vector(cfg, PROFILE.version, "lease", use_daemon=False)
+    assert opened[1]["threads"] == 6 and opened[1]["nice"] == 0
+
+
 def test_scores_from_the_daemons_vectors_match_a_search_that_reads_them(tmp_path, monkeypatch):
     # The daemon keeps the vectors in memory and scores the query; a search given those scores reads only which
     # item and kind each segment has, and ranks exactly as a search that reads the vectors itself.
