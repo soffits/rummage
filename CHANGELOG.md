@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.25.4
+
+- Fixed: a brief or follow-up one agent sent another in DeepSeek Harness (`open_session`, `prompt_session`) was indexed as the person's own message, and the assistant's replies to a skipped agent or job prompt were added to the person's previous turn. Messages whose sender is another session, a job or a script are left out with the replies to them; `web_senders_since` covers older briefs that carry no sender at all.
+
 ## 0.25.3
 
 - Fixed: prompt-time recall often ran out of a 3-second hook budget on a small machine, even when it was idle. The query daemon's model ran on `[runtime] threads`, the background vector maker's setting (one thread in a config that keeps a core free), and a query's vector takes time in proportion to its length: a 1,500-character message, or a short follow-up embedded together with the turn before it, took 2 to 3.6 s on one thread. Queries now use every core at normal priority while background work stays niced; the same 2,500 characters take about 1.1 s on four cores.
