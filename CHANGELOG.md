@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.25.1
+
+- Fixed: HEIC and TIFF pictures were kept by name as "damaged": ffmpeg can't read them from a pipe ("Not yet implemented in FFmpeg"), only from a file. They go through a file now, so their text is read by OCR and their picture gets a vector (pictures are read once more for this).
+- Fixed: a `.doc` that is really a Word `.docx` (Word saves that under the old name on request) was kept by name as "damaged". It is read as the OOXML file it is.
+
 ## 0.25.0
 
 - OCR can run on another machine: `rummage ocr-serve` on a faster one (any machine with the `ocr` extra; no login, so keep it on loopback or behind a tunnel) and `[ocr] url` here. Pictures and scanned pages go out (prepared and downscaled here), the text comes back, and the OCR cache stays on this machine. The scanned pages of a PDF are sent several at a time (`ocr-serve --workers`), and so are the picture vectors of a remote embedder, which read a 50-page scan in seconds instead of minutes.

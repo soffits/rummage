@@ -32,8 +32,8 @@ MARKDOWN = {".md", ".markdown"}
 # changed: an OCR change bumps "image" and "pdf", a records change "records". The family comes from the file's name
 # (`family`), so a run knows what to read again before it fetches anything; "name" is every file with no reader of its
 # own (read as text when its content is text).
-READERS = {"markdown": 1, "text": 1, "html": 1, "rtf": 1, "office": 1, "legacy-office": 1, "iwork": 1, "notebook": 1,
-           "epub": 1, "mail": 1, "pdf": 1, "image": 1, "archive": 1, "audio": 1, "video": 1, "name": 1, "records": 1}
+READERS = {"markdown": 1, "text": 1, "html": 1, "rtf": 1, "office": 1, "legacy-office": 2, "iwork": 1, "notebook": 1,
+           "epub": 1, "mail": 1, "pdf": 1, "image": 2, "archive": 1, "audio": 1, "video": 1, "name": 1, "records": 1}
 OCR_SIDE = 2000                      # pixels on a rendered page's long side when its text is read
 OPENCV_IMAGES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}   # read by OCR as they are
 
@@ -150,6 +150,8 @@ def _read(item: Item, name: str, blob: Blob, how: Reading, name_line: str) -> li
     if suffix in MARKDOWN and not limits.too_big("text", blob.size):
         return note_segments(item, blob.read().decode("utf-8", errors="replace"), limits, name_line)
     segments = [Segment("name", name_line)]
+    if kind == "legacy-office" and blob.head(2) == b"PK":   # Word saves OOXML under the old name when asked to
+        kind = item.info["type"] = "office"
     signature = SIGNATURES.get(kind)
     sniff = X.sniffable(name) or (signature is not None and not blob.head(len(signature)).startswith(signature))
     if sniff:
