@@ -138,6 +138,13 @@
 - Threads follow the load by restarting `llama-server` (about a second) when the wanted count changes, checked at most once a minute: llama.cpp fixes the thread count at start, and a minute-scale check matches the 1-minute load average it reads.
 - An accelerator is trusted by result, not by name: it is used only when its vectors for three fixed reference texts agree with the profile's published ones or those stored at the first run (cosine ≥ 0.999, the same bar `doctor` applies to a llama.cpp upgrade). Queries keep using the local model or daemon, so search never depends on another machine unless the model itself is remote.
 
+## OCR on another machine
+
+- Pictures are prepared (decoded, transparency flattened, long side cut to 2,000 px) on the machine that reads, then sent as JPEG quality 95 to `ocr-serve`, which only finds and reads the lines. The cache key and the text stay on the reading machine, so a server holds no state and any machine with the `ocr` extra can be one; the server's reader version must equal the client's or the item fails, so a mixed pair never fills the cache with other models' text.
+- No fallback to local OCR when the server is gone: a run that silently went back to the slow local reader would be the same run the server was set up to avoid, so the item fails (the run goes on, the item is read again next time).
+- Several pictures go at once only to a server (`PARALLEL` threads here, `--workers` there, each worker with its own engines): rendering a PDF page stays one at a time under a lock, since the renderer isn't safe from two threads.
+- A remote embedder is retried for about 30 seconds and then given up on for the run, not failed: a missing vector only means a passage waits and is made by the next run, whereas a failed run turns the index card red for a restart. There is no local fallback mid-run either (a local embedder would start on the busy machine); the accelerator is judged once at the start of a run.
+
 ## Feedback
 
 - A `get` of a result soon after the search that showed it is the only signal recorded: it needs no extra step from people or agents, and it says which result was the useful one. The boost is small and capped (0.4 per open, two at most) and needs half of the query's words in common, so one open can't take over unrelated searches. The last search lives in a small file next to the index, not in it, so searching stays read-only.

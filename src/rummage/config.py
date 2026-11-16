@@ -16,6 +16,10 @@
     # url = "http://gpu-box:8080"             # a llama-server running the same model, used for indexing when it
     #                                         # answers and agrees with the model's reference vectors
 
+    # [ocr]
+    # url = "http://gpu-box:8081"             # an `rummage ocr-serve` that reads pictures and scanned pages for this
+    #                                         # machine (a faster one; pictures are sent to it, the cache stays here)
+
     # [models.<name>]                         # more model profiles: see `rummage/models.py`
 
     [daemon]
@@ -59,6 +63,7 @@ class Config:
     nice: int = 10
     llama_server: str | None = None
     embedder_url: str | None = None
+    ocr_url: str | None = None
     daemon_idle_minutes: float = 20
     model: str = DEFAULT_MODEL
     models: dict[str, dict] = field(default_factory=dict)
@@ -133,6 +138,7 @@ def load(path: Path | None = None) -> Config:
         nice=int(runtime.get("nice", 10)),
         llama_server=os.environ.get("RUMMAGE_LLAMA_SERVER") or runtime.get("llama_server"),
         embedder_url=(data.get("embedder") or {}).get("url"),
+        ocr_url=(data.get("ocr") or {}).get("url"),
         daemon_idle_minutes=float((data.get("daemon") or {}).get("idle_minutes", 20)),
         model=(data.get("embedder") or {}).get("model") or DEFAULT_MODEL,
         models=dict(data.get("models", {})),

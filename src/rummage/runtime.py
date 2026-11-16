@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import hashlib
+import http.client
 import json
 import os
 import platform
@@ -74,6 +75,10 @@ class RuntimeMissing(RuntimeError):
 
 class EmbedError(RuntimeError):
     pass
+
+
+class EmbedUnreachable(EmbedError):
+    """A remote embedder that stopped answering (after the retries)."""
 
 
 class Runtime:
@@ -229,6 +234,7 @@ class Embedder:
     marker: str | None = None
     process: subprocess.Popen | None = None
     threads: int = 0
+    parallel: int = 1   # requests it takes at once (an accelerator's slots)
 
     def __enter__(self) -> "Embedder":
         self.start()
@@ -445,6 +451,7 @@ class RemoteEmbedder(Embedder):
         self.marker = None
         self.has_media = False
         self.threads = 0
+        self.parallel = 6
         self._tokenize = True
 
     @property
@@ -454,6 +461,22 @@ class RemoteEmbedder(Embedder):
     @property
     def root(self) -> str:
         return self.endpoint.rsplit("/v1/", 1)[0] if "/v1/" in self.endpoint else self.url
+
+    # Seconds waited before each retry of a request that found the server gone (a restart, a dropped tunnel).
+    RETRY_WAITS = (2, 4, 8, 16)
+
+    def _request(self, url: str, body: dict | None = None, timeout: float = 600, retries: bool = True) -> object:
+        waits = iter(self.RETRY_WAITS if retries else ())
+        while True:
+            try:
+                return super()._request(url, body, timeout)
+            except EmbedError:
+                raise
+            except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
+                wait = next(waits, None)
+                if wait is None:
+                    raise EmbedUnreachable(f"{self.url}: {type(error).__name__}: {error}") from None
+                time.sleep(wait)
 
     def _headers(self) -> dict:
         headers = {"Content-Type": "application/json"}
@@ -476,11 +499,11 @@ class RemoteEmbedder(Embedder):
         if self.profile.api_model:
             body["model"] = self.profile.api_model
         try:
-            self._request(self.endpoint, body, timeout=self.timeout)["data"][0]["embedding"]
+            self._request(self.endpoint, body, timeout=self.timeout, retries=False)["data"][0]["embedding"]
         except (urllib.error.URLError, OSError, ValueError, KeyError, IndexError, TypeError) as error:
             raise EmbedError(f"{self.url}: {error}") from None
         try:
-            self.marker = self._request(self.root + "/props", timeout=self.timeout).get("media_marker")
+            self.marker = self._request(self.root + "/props", timeout=self.timeout, retries=False).get("media_marker")
         except (EmbedError, urllib.error.URLError, OSError, ValueError, AttributeError):
             self.marker = None
         self.has_media = bool(self.marker) and self.profile.media

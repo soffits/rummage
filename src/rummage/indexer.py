@@ -13,13 +13,14 @@ from __future__ import annotations
 import os
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 
 from . import ocr
 from .models import REFERENCE_COSINE, Profile
 from .progress import Run
-from .runtime import (EmbedError, Embedder, RemoteEmbedder, Runtime, open_embedder,
+from .runtime import (EmbedError, EmbedUnreachable, Embedder, RemoteEmbedder, Runtime, open_embedder,
                       reference_agreement)
 from .sources import Source
 from .store import MEDIA, Item, Scope, Store, media_hash, text_hash
@@ -118,6 +119,7 @@ class Embedders:
         self.log_path = log_path
         self.current: Embedder | None = None
         self.checked = 0.0
+        self.unreachable: str | None = None   # why the accelerator stopped answering mid-run: nothing more is sent
 
     @property
     def version(self) -> str:
@@ -185,6 +187,29 @@ class Embedders:
 MEDIA_STEP = 30
 
 
+def _embed_media(embedder: Embedder, segments: list, version: str) -> None:
+    """Gives each segment its media vector. The inputs are made one after another here (rendering a page isn't safe
+    from two threads); an embedder that takes several requests at once (`parallel`) gets them at once."""
+    def one(seg):
+        return seg.media() if callable(seg.media) else seg.media
+
+    parallel = getattr(embedder, "parallel", 1)
+    if parallel < 2 or len(segments) < 2:
+        for seg in segments:
+            seg.vectors[version] = embedder.media(one(seg))
+        return
+    with ThreadPoolExecutor(parallel) as pool:
+        futures = [(seg, pool.submit(embedder.media, one(seg))) for seg in segments]
+        failure = None
+        for seg, future in futures:
+            try:
+                seg.vectors[version] = future.result()
+            except EmbedUnreachable as error:
+                failure = error   # the others that did arrive are kept
+        if failure:
+            raise failure
+
+
 def _read_item(store: Store, source: Source, item: Item, embedders: list[Embedders], counts: dict) -> int:
     """Reads one item into the index with its reusable vectors and up to `MEDIA_STEP` new media vectors per model;
     returns how many media inputs still wait."""
@@ -209,11 +234,13 @@ def _read_item(store: Store, source: Source, item: Item, embedders: list[Embedde
                  and e.version not in s.vectors]
         if media:
             t0 = time.monotonic()
-            embedder = e.get(True)
-            for seg in media[:MEDIA_STEP]:
-                seg.vectors[e.version] = embedder.media(seg.media() if callable(seg.media) else seg.media)
+            if not e.unreachable:
+                try:
+                    _embed_media(e.get(True), media[:MEDIA_STEP], e.version)
+                except EmbedUnreachable as error:
+                    e.unreachable = str(error)   # what has no vector yet waits for a later run
             counts["seconds_embedding"] += time.monotonic() - t0
-            waiting = max(waiting, len(media) - MEDIA_STEP)
+            waiting = max(waiting, sum(1 for s in media if e.version not in s.vectors))
     if waiting > 0:
         item.info["media_waiting"] = waiting
     else:
@@ -332,7 +359,12 @@ def embed_pending(store: Store, embedders: Embedders, log, sources: list[str] | 
             break
         t0 = time.monotonic()
         written = [embedders.profile.document_text(*embed) for _, embed in rows]
-        vectors = embedders.get(False).texts(written)
+        try:
+            vectors = embedders.get(False).texts(written)
+        except EmbedUnreachable as error:
+            embedders.unreachable = str(error)
+            log(f"vectors ({embedders.profile.name}): {error}; the rest waits for a later run")
+            break
         seconds += time.monotonic() - t0
         for (segment, embed), text, vector in zip(rows, written, vectors):
             store.set_vector(segment, version, vector, embed, text_hash(text))
@@ -405,6 +437,9 @@ def embed_models(store: Store, active: Embedders | None, building: Embedders | N
             made_before[0] += made["made"]
             report[active.version]["seconds"] += made["seconds"]
             _remember_reference(store, active)
+        if active is not None and active.unreachable:
+            report["unreachable"] = active.unreachable
+            break
         if building is None or (deadline is not None and time.monotonic() > deadline):
             break
         try:

@@ -9,6 +9,7 @@ A file that ends up with only its name says why in `info.unread` (one of `UNREAD
 from __future__ import annotations
 
 import functools
+from concurrent.futures import ThreadPoolExecutor
 import io
 import shutil
 from dataclasses import dataclass
@@ -271,6 +272,23 @@ def ocr_text(item: Item, key: str, picture, how: Reading) -> str:
     return found
 
 
+def ocr_many(item: Item, pictures: list[tuple[str, object]], how: Reading) -> list[str]:
+    """`ocr_text` of each (key, picture), several at once when OCR is done by a server."""
+    if len(pictures) < 2 or not O.URL or not how.ocr or how.reader is None:
+        return [ocr_text(item, key, picture, how) for key, picture in pictures]
+    with ThreadPoolExecutor(O.PARALLEL) as pool:
+        futures = [pool.submit(how.reader.text, key, picture) for key, picture in pictures]
+        out = []
+        for future in futures:
+            try:
+                out.append(future.result())
+            except O.Undecodable as error:
+                record(item, [Cut("text in pictures", 0, None, "pictures", None, str(error))])
+                out.append("")
+    item.info["ocr"] = item.info.get("ocr", 0) + sum(1 for found in out if found)
+    return out
+
+
 def pdf(item: Item, name: str, data: bytes, how: Reading) -> list[Segment]:
     """Each page's text in passages at that page; a page with little text (a scan, a picture, a slide) also as a
     rendered picture and the text OCR finds in it."""
@@ -289,16 +307,17 @@ def pdf(item: Item, name: str, data: bytes, how: Reading) -> list[Segment]:
             cuts.append(Cut("scanned PDF pages", 0, len(scans), "pages", None,
                             "rendering them needs rummage[pdf-scans]"))
     record(item, cuts)
+    found = dict(zip(scans, ocr_many(item, [(f"{item.fingerprint}\0page {n}",
+                                             functools.partial(X.page_picture, data, n, OCR_SIDE)) for n in scans],
+                                     how))) if render else {}
     segments: list[Segment] = []
     for n, text in enumerate(pages, 1):
         segments += passages(item, name, text, "pdf", loc=f"page {n}")
-        if render and n in scans:
+        if n in found:
             segments.append(Segment("image", "", loc=f"page {n}",
                                     media=functools.partial(X.render_page, data, n, X.PAGE_BUDGET),
                                     media_id=f"{item.fingerprint}\0page\0{n}\0{X.PAGE_BUDGET}"))
-            found = ocr_text(item, f"{item.fingerprint}\0page {n}",
-                             functools.partial(X.page_picture, data, n, OCR_SIDE), how)
-            segments += passages(item, name, found, "pdf", loc=f"page {n}")
+            segments += passages(item, name, found[n], "pdf", loc=f"page {n}")
     if not segments and scans and not render:
         item.info["unread"] = "missing"
     return segments

@@ -74,6 +74,10 @@ model = "embeddinggemma-2"            # the embedding model (`rummage models`); 
 # url = "http://gpu-box:8080"         # index with a llama-server elsewhere running the same model (faster
 #                                     # backfills); used only while it answers and its vectors agree
 
+# [ocr]
+# url = "http://gpu-box:8081"         # read pictures and scanned pages on a faster machine running
+#                                     # `rummage ocr-serve` (pictures go to it; the cache stays here)
+
 [sources.documents]
 type = "files"                        # any text, Markdown, HTML, PDF, Office (old and new), iWork, notebooks, RTF,
                                       # EPUB, .eml, pictures, recordings, videos, archive listings

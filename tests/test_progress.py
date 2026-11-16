@@ -363,3 +363,32 @@ def test_time_left_moves_smoothly_while_items_differ(tmp_path, monkeypatch):
     assert all(max(a, b) / min(a, b) <= 1.25 for a, b in zip(known, known[1:])), "a jump"
     real = (total - done) / (6 / 60)
     assert 0.75 < known[-1] / real < 1.25
+
+
+def test_a_restarted_read_keeps_the_pace_of_the_run_before(tmp_path, monkeypatch):
+    # The watch restarts its read when the config changes or a new version is installed; the new run's counter starts
+    # at zero but the time left goes on from the items' pace of the last half hour instead of "unknown" again.
+    clock = [1_000_000.0]
+    monkeypatch.setattr(P.time, "time", lambda: clock[0])
+    first = P.Run(tmp_path, "read")
+    done = 0
+    for _ in range(20):                      # 10 minutes at 6 items a minute
+        clock[0] += 30
+        done += 3
+        first.source("docs", phase="reading", done=done, total=1000)
+        first.save(force=True)
+    clock[0] += 60
+    second = P.Run(tmp_path, "read")        # restarted a minute later; 800 items left in this plan
+    second.source("docs", phase="reading", done=0, total=800)
+    clock[0] += 30
+    second.source("docs", done=3)
+    second.save(force=True)
+    info = P.state(tmp_path)
+    assert info["eta_seconds"] is not None, info["line"]
+    assert abs(info["eta_seconds"] - 797 / (6 / 60)) / (797 / (6 / 60)) < 0.15
+    # Nothing carries over from a run that stopped long ago.
+    clock[0] += P.READ_WINDOW + 100
+    third = P.Run(tmp_path, "read")
+    third.source("docs", phase="reading", done=0, total=800)
+    third.save(force=True)
+    assert P.state(tmp_path)["eta_seconds"] is None

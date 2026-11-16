@@ -161,7 +161,7 @@ class FakeOCR(O.Reader):
         super().__init__(data_dir)
         self.found, self.calls = found, 0
 
-    def _read(self, raw: bytes) -> str:
+    def _lines(self, image) -> str:
         self.calls += 1
         return self.found
 
@@ -170,6 +170,7 @@ class FakeOCR(O.Reader):
 def fake_ocr(monkeypatch, tmp_path):
     reader = FakeOCR(tmp_path / "data", "房屋租赁合同 Lease agreement, page two")
     monkeypatch.setattr(D.Reading, "reader", property(lambda self: reader if self.ocr else None))
+    monkeypatch.setattr(O, "_prepare", lambda raw: raw)   # no OpenCV needed to test what happens around OCR
     return reader
 
 

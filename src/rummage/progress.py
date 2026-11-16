@@ -14,7 +14,7 @@ hook reply:
     items        {done, total} read into keyword search by a running read, else null
     vectors      {done, total} passages with a vector of the model searches use, else null
     eta_seconds  time left at the recent rates: for the items still to read (a read's pace over its last half hour,
-                 the time since its last item included) and for the vectors, whichever takes longer; null (shown as
+                 the time since its last item included, across a restart) and for the vectors, whichever takes longer; null (shown as
                  unknown) until a read has a pace
     paused       why work stopped with some left, else null
     error        what failed, else null
@@ -83,6 +83,17 @@ def _write(data_dir: Path, part: str, value: dict, attempts: int) -> bool:
     return False
 
 
+def _carried(previous: dict | None, now: float) -> list[tuple[float, int]]:
+    """The pace samples of the read run before this one, when it was alive within the READ_WINDOW, counted back from
+    this run's zero: a restart (a config change, a new install) then doesn't throw away what the items took."""
+    previous = previous or {}
+    samples = previous.get("pace") or []
+    if not samples or now - (previous.get("updated") or 0) > READ_WINDOW:
+        return []
+    last = samples[-1][1]
+    return [(t, d - last) for t, d in samples if now - t <= READ_WINDOW]
+
+
 class Run:
     """The part of one run: `read` or `embed`. Calls are cheap; the file is written at most every WRITE_EVERY
     seconds unless `force`d."""
@@ -92,7 +103,8 @@ class Run:
         self.part = part
         self.value: dict = {"pid": os.getpid(), "started": time.time(), "updated": None, "finished": None,
                             "paused": None, "error": None, "sources": {}, **fields}
-        self.samples: list[tuple[float, int]] = []
+        self.samples: list[tuple[float, int]] = _carried(load(self.data_dir).get("read"), self.value["started"]) \
+            if part == "read" else []
         self.written = 0.0
         self.save(force=True)
 
@@ -214,7 +226,11 @@ def _read_pace(read: dict, done: int, now: float) -> float | None:
     between samples; None before the read has run READ_SETTLE seconds and read READ_LEAST items, or when it read
     nothing in the window."""
     samples = read.get("pace") or []
-    if not samples or done < READ_LEAST or now - (read.get("started") or now) < READ_SETTLE:
+    if not samples:
+        return None
+    # Samples carried over from the run before (their counts are negative) count as reading seen.
+    seen = done - min(0, samples[0][1])
+    if seen < READ_LEAST or now - min(read.get("started") or now, samples[0][0]) < READ_SETTLE:
         return None
     start = now - READ_WINDOW
     t0, d0 = samples[0]

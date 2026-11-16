@@ -80,3 +80,88 @@ def test_disagreeing_or_missing_remote_falls_back_to_this_machine(monkeypatch):
 
     gone = I.Embedders(None, PROFILE, 2, 10, None, accelerator="http://127.0.0.1:9", warn=warnings.append)
     assert isinstance(gone.get(False), _LocalStandIn) and "not used" in warnings[-1]
+
+
+def test_remote_that_goes_away_midway_is_retried_then_reported(monkeypatch):
+    import pytest
+    from rummage import runtime as R
+
+    server = _server(flip=False)
+    monkeypatch.setattr(I, "open_embedder", _LocalStandIn)
+    monkeypatch.setattr(R.RemoteEmbedder, "RETRY_WAITS", (0, 0))
+    embedders = I.Embedders(None, PROFILE, 2, 10, None, accelerator=f"http://127.0.0.1:{server.server_port}")
+    embedders.reference = _reference()
+    remote = embedders.get(False)
+    server.shutdown()
+    server.server_close()
+    with pytest.raises(R.EmbedUnreachable):
+        remote.texts(["hello"])
+
+
+class _Gone:
+    has_media = True
+
+    def texts(self, texts):
+        raise I.EmbedUnreachable("http://gpu: ConnectionRefusedError")
+
+    def media(self, data):
+        raise I.EmbedUnreachable("http://gpu: ConnectionRefusedError")
+
+
+def test_vectors_wait_for_a_later_run_when_the_remote_is_gone(tmp_path):
+    from conftest import as_embedders, index_all
+    from rummage.sources.markdown import MarkdownSource
+    from rummage.store import Store
+
+    root = tmp_path / "notes"
+    root.mkdir()
+    (root / "a.md").write_text("The backup job retries and logs everything after each run. " * 30)
+    store = Store(tmp_path / "index.db")
+    embedders = as_embedders(_Gone())
+    counts = index_all(store, MarkdownSource("notes", {"root": str(root)}, tmp_path), embedders, lambda *a: None, print)
+    assert counts["failed"] == 0
+    assert counts["vectors"]["made"] == 0 and counts["vectors"]["waiting"] > 0
+    assert "ConnectionRefusedError" in embedders.unreachable
+    store.close()
+
+
+def test_pictures_wait_for_a_later_run_when_the_remote_is_gone(tmp_path):
+    import numpy as np
+
+    from conftest import as_embedders, index_all
+    from rummage import extract as X
+    from rummage.sources.files import FilesSource
+    from rummage.store import Store
+
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "scan.png").write_bytes(X.png(np.full((40, 60, 3), 255, np.uint8)))
+    store = Store(tmp_path / "index.db")
+    embedders = as_embedders(_Gone())
+    counts = index_all(store, FilesSource("docs", {"root": str(root), "ocr": False}, tmp_path / "data"), embedders,
+                       lambda *a: None, print)
+    assert counts["failed"] == 0 and embedders.unreachable
+    assert store.media_waiting_total("docs") == 1   # the next run embeds the picture
+    store.close()
+
+
+def test_media_go_out_in_parallel_and_the_arrived_ones_are_kept():
+    import pytest
+
+    class Slots:
+        parallel = 3
+        seen = 0
+
+        def media(self, data):
+            if data == b"bad":
+                raise I.EmbedUnreachable("gone")
+            return np.array([float(len(data))], np.float32)
+
+    class Seg:
+        def __init__(self, data):
+            self.media, self.vectors = data, {}
+
+    segments = [Seg(b"a"), Seg(b"bb"), Seg(b"bad"), Seg(b"cccc")]
+    with pytest.raises(I.EmbedUnreachable):
+        I._embed_media(Slots(), segments, "v")
+    assert [s.vectors.get("v") is not None for s in segments] == [True, True, False, True]
