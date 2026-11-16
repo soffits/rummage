@@ -153,6 +153,9 @@ class Embedders:
         accelerated = self._accelerated(media)
         if accelerated is not None:
             return accelerated
+        process = getattr(self.current, "process", None)
+        if process is not None and process.poll() is not None:
+            self.current = None   # its server died (out of memory on a huge picture, say): start a fresh one
         if not self.profile.local:
             if self.current is None:
                 self.current = open_embedder(self.runtime, self.profile)

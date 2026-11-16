@@ -288,3 +288,20 @@ def test_ffmpeg_reads_pictures_that_need_to_seek(tmp_path):
                    check=True)
     png = X.to_png(tiff.read_bytes(), ffmpeg, flatten=False)
     assert png.startswith(b"\x89PNG")
+
+
+def test_big_pictures_are_cut_down_before_the_models_see_them(tmp_path):
+    import shutil
+    import struct
+    import subprocess
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("needs ffmpeg")
+    big = tmp_path / "big.tiff"
+    subprocess.run([ffmpeg, "-loglevel", "error", "-f", "lavfi", "-i", "color=blue:s=3000x1000", "-frames:v", "1",
+                    str(big)], check=True)
+    for flatten in (False, True):
+        png = X.to_png(big.read_bytes(), ffmpeg, flatten=flatten)
+        width, height = struct.unpack(">II", png[16:24])
+        assert (width, height) == (X.PICTURE_SIDE, 667)
