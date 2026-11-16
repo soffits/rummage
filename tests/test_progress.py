@@ -199,7 +199,7 @@ def test_agents_and_people_follow_a_real_index_run(tmp_path, capsys, monkeypatch
 
     from rummage.cli import main
 
-    during = []
+    during, indexing = [], []
     config = tmp_path / "config.toml"
 
     class Handler(BaseHTTPRequestHandler):
@@ -208,7 +208,7 @@ def test_agents_and_people_follow_a_real_index_run(tmp_path, capsys, monkeypatch
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            if len(body["input"]) == 1 and not during:
+            if indexing and not during:   # the first request of the embedding run, while it is under way
                 during.append(P.state(tmp_path / "data"))
             rows = [[1.0, float(len(t) % 7), 2.0, 0.5] for t in body["input"]]
             data = json.dumps({"data": [{"index": n, "embedding": r} for n, r in enumerate(rows)]}).encode()
@@ -224,7 +224,10 @@ def test_agents_and_people_follow_a_real_index_run(tmp_path, capsys, monkeypatch
     notes.mkdir()
     for n in range(12):
         (notes / f"n{n}.md").write_text(f"# note {n}\n\nthe heron nests by the river, entry {n}\n", encoding="utf-8")
-    config.write_text(f"data_dir = '{(tmp_path / 'data').as_posix()}'\n[embedder]\nmodel = 'tiny'\n"
+    # No query daemon: one started by the recall hook would embed the query on its own clock, before, during or
+    # after the index run, and outlive the test.
+    config.write_text(f"data_dir = '{(tmp_path / 'data').as_posix()}'\n[daemon]\nidle_minutes = 0\n"
+                      f"[embedder]\nmodel = 'tiny'\n"
                       f"[models.tiny]\nurl = 'http://127.0.0.1:{server.server_port}/v1'\ndim = 4\n"
                       f"[sources.notes]\ntype = 'markdown'\nroot = '{notes.as_posix()}'\n", encoding="utf-8")
 
@@ -249,7 +252,9 @@ def test_agents_and_people_follow_a_real_index_run(tmp_path, capsys, monkeypatch
         assert reply["systemMessage"] == line and reply["rummage"]["index"]["state"] == "paused"
         assert "0 of 12 passages have vectors" in reply["hookSpecificOutput"]["additionalContext"]
 
+        indexing.append(True)
         assert run("index", "-q")[0] == 0
+        indexing.clear()
         assert during and during[0]["state"] == "building" and during[0]["vectors"]["total"] == 12
         assert during[0]["line"].startswith("rummage: indexing ")
         assert run("status", "--line")[1] == ""
