@@ -160,7 +160,6 @@ class TokenLibrary:
 
 
 class SeafileSource(Source):
-    item_reader = D.VERSION
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
         self.url = spec["url"].rstrip("/")
@@ -254,6 +253,9 @@ class SeafileSource(Source):
         return Plan(upserts, removed, {"heads": heads, "secret": secret, "left_out": left_out}, len(upserts))
 
     # load
+
+    def reader_of(self, key: str) -> int:
+        return D.reader_of(key.split(":", 1)[1])
 
     def load(self, item: Item) -> list[Segment]:
         repo_id, path = item.key.split(":", 1)

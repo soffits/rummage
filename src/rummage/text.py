@@ -103,6 +103,36 @@ def is_lookup(words: list[str]) -> bool:
     )
 
 
+# Machine strings in mail: tracking and redirect links, signed tokens, base64 runs, and the invisible fillers newsletters
+# pad their previews with. A link keeps its site (found by the site's name); a long one loses its path.
+_LINK = re.compile(r"<?\bhttps?://([^\s/<>\"']+)[^\s<>\"']*>?")
+_TOKEN = re.compile(r"[A-Za-z0-9+/=_.%&~#-]{40,}")
+_FILLER = re.compile("[\u00ad\u034f\u115f\u1160\u17b4\u17b5\u180e\u200b-\u200f\u2060-\u2064\u3164\ufeff]+")
+LINK_KEPT = 80          # characters of a link kept whole
+
+
+def _link(m: re.Match) -> str:
+    link = m.group(0).strip("<>")
+    return link if len(link) <= LINK_KEPT else f"{link.split('://', 1)[0]}://{m.group(1)}/…"
+
+
+def _token(m: re.Match) -> str:
+    run = m.group(0)
+    mixed = any(c.isdigit() for c in run) and any(c.isalpha() for c in run)
+    return "…" if mixed else run
+
+
+def without_machine_strings(text: str) -> str:
+    """`text` without what nobody reads: long links cut to their site, runs of 40+ characters mixing letters and
+    digits as "…", invisible fillers dropped, and the blank space they leave closed up. Such runs match short queries
+    by chance and fill passages a person never sees."""
+    text = _FILLER.sub("", text)
+    text = _LINK.sub(_link, text)
+    text = _TOKEN.sub(_token, text)
+    text = re.sub(r"(?<=\S)[ \t]{2,}", " ", re.sub(r"[ \t]+\n", "\n", text))
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
 def has_prose(text: str) -> bool:
     """Enough words for a meaning vector: a fifth of the non-space characters are letters, and at least four words
     (or eight CJK characters). Data dumps and stubs go to keyword search only, as in DigUp."""

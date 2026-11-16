@@ -1005,6 +1005,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-query-chars", type=int, default=2000)
     p.add_argument("--session", help="the current chat session's id, left out of the recent part "
                                     "(with --hook: the hook's session_id)")
+    p.add_argument("--context", help="the turn the prompt answers, used when the prompt is short (with --hook: the "
+                                     "hook's `context`; default: the session's newest turn in the index)")
     p.add_argument("--recent-minutes", type=float, default=45,
                    help="how far back to look in other sessions (0: not at all)")
     p.add_argument("--recent-items", type=int, default=2)

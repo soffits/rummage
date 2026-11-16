@@ -34,6 +34,18 @@ from .secrets import masked_total, shown
 from .store import Scope, Store, Within
 
 HOOK_EVENT = "UserPromptSubmit"
+# A prompt with fewer content words than this leans on the turn before it ("the other one?", "rename it then"): its meaning is
+# searched with that turn in front of it, and its few words only back a meaning match, never stand alone. The turn
+# comes from the hook (`context`) or the index (the session's newest turn within `CONTEXT_HOURS`); at most
+# `CONTEXT_CHARS` of it, its start and its end, where a reply asks what the prompt answers.
+FOLLOW_UP_TERMS = 12
+CONTEXT_HOURS = 6
+CONTEXT_CHARS = 1000
+# A meaning match stands alone a sixth above the recall gate (3.5 at EmbeddingGemma 2's 3); nearer the gate it needs
+# `SHARED_WORDS` of the query's words too. In replayed recall blocks the unrelated passages sat at z 2.9-3.5
+# sharing few words, the useful ones above 3.5 or sharing a third of the words.
+STRONG = 7 / 6
+SHARED_WORDS = 0.3
 
 def worth_recalling(prompt: str) -> bool:
     """For hooks, which see every message: skip greetings and one-word replies, which have nothing to look up.
@@ -42,15 +54,17 @@ def worth_recalling(prompt: str) -> bool:
 
 
 def pick(hits: list[Hit], min_z: float, min_words: float, max_items: int, max_chars: int,
-         words_only: bool) -> list[Hit]:
-    """Items that clearly match: standing out by meaning, or holding most of the query's words. Without a query
-    vector, word matches alone decide; with one, a word match must not be far below the rest in meaning."""
+         words_only: bool, words_alone: bool = True) -> list[Hit]:
+    """Items that clearly match: standing out by meaning (well above `min_z`, or above it and sharing some of the
+    query's words), or holding most of the query's words. Without a query vector, word matches alone decide; with
+    one, a word match must not be far below the rest in meaning, and with `words_alone` off it doesn't count alone."""
     chosen, used = [], 0
     for hit in hits:
         if len(chosen) >= max_items:
             break
-        by_meaning = (hit.z or 0) >= min_z
-        by_words = hit.words >= min_words and (words_only or (hit.z or 0) >= 0)
+        z = hit.z or 0
+        by_meaning = z >= min_z and (z >= min_z * STRONG or hit.words >= SHARED_WORDS)
+        by_words = hit.words >= min_words and (words_only or (words_alone and z >= 0))
         if not (by_meaning or by_words):
             continue
         line = render_item(hit)
@@ -125,16 +139,43 @@ def recent_turns(cfg: C.Config, prompt: str, exclude: list[str], minutes: float,
     return out
 
 
+def follow_up(prompt: str) -> bool:
+    return len(T.terms(prompt)) < FOLLOW_UP_TERMS
+
+
+def _ends(text: str, size: int) -> str:
+    return text if len(text) <= size else f"{text[:size // 2]} … {text[-size // 2:]}"
+
+
+def session_context(cfg: C.Config, session: str | None, prompt: str, minutes: float,
+                    now: float | None = None) -> tuple[str | None, set[str]]:
+    """The turn before `prompt` in `session` (None when the index has none within `CONTEXT_HOURS`), and the ids of
+    the session's turns from the last `minutes`, which the agent still has in front of it."""
+    if not session or not cfg.index_path.exists():
+        return None, set()
+    now = time.time() if now is None else now
+    store = Store(cfg.index_path)
+    try:
+        own = {t["id"] for t in store.session_turns(session, now - minutes * 60, 200)}
+        said = T.normalize(prompt)
+        before = next((t["text"] for t in store.session_turns(session, now - CONTEXT_HOURS * 3600, 3)
+                       if said not in T.normalize(t["text"])), None)
+    finally:
+        store.close()
+    return before, own
+
+
 def recall(cfg: C.Config, query: str, sources: list[str] | None, paths: list[str] | None, limit: int,
-           allow_model_load: bool, within: Within | None = None) -> tuple[list[Hit], str, int, str | None, float]:
-    """Hits for `query`, how it was matched (`meaning` or `words`), how many vectors were searched, why it went by
-    words when it did, and the model's calibrated recall gate."""
+           allow_model_load: bool, within: Within | None = None,
+           meaning: str | None = None) -> tuple[list[Hit], str, int, str | None, float]:
+    """Hits for `query` (its meaning taken from `meaning` when given), how it was matched (`meaning` or `words`), how
+    many vectors were searched, why it went by words when it did, and the model's calibrated recall gate."""
     if not cfg.index_path.exists():
         return [], "none", 0, None, 0.0
     store = Store(cfg.index_path)
     try:
         version = store.model
-        vector, degraded, scored = meaning_vector(cfg, version, query, load=allow_model_load)
+        vector, degraded, scored = meaning_vector(cfg, version, meaning or query, load=allow_model_load)
         searcher = Searcher(store, sources, paths, model=version, within=within, scored=scored)
         hits = searcher.search(query, vector, limit=limit)
         count = searcher.vector_count()
@@ -183,10 +224,12 @@ def notice(project: dict | None) -> str | None:
 def run(cfg: C.Config, args) -> int:
     raw = args.query if args.query else sys.stdin.read()
     session, cwd, harness = args.session, args.cwd, args.harness
+    context = args.context
     if args.hook:
         try:
             event = json.loads(raw or "{}")
             prompt = str(event.get("prompt") or "")
+            context = context or str(event.get("context") or "") or None
             session = session or event.get("session_id")
             cwd = cwd or event.get("cwd")
             harness = harness or event.get("harness")
@@ -214,20 +257,28 @@ def run(cfg: C.Config, args) -> int:
     searched = bool(prompt) and not paused and not (args.hook and not worth_recalling(prompt))
     if searched:
         try:
+            before, own = session_context(cfg, session, prompt, args.recent_minutes)
+            leaning = follow_up(prompt) and bool(context or before)
+            meaning = f"{_ends(context or before, CONTEXT_CHARS)}\n{prompt}" if leaning else None
+            if leaning:
+                about["context"] = "given" if context else "previous turn"
             hits, mode, count, degraded, recall_gate = recall(cfg, prompt, args.source, args.path, 20,
-                                                              args.allow_model_load, scope.within)
+                                                              args.allow_model_load, scope.within, meaning)
+            hits = [h for h in hits if h.id not in own]
             # Exact words alone are weaker evidence than a meaning match: ask for more of them.
             min_words = args.min_words if mode == "meaning" else max(args.min_words, 0.75)
             min_z = recall_gate if args.min_z is None else args.min_z
-            chosen = pick(hits, gate_for(min_z, count), min_words, args.max_items, args.max_chars, mode == "words")
+            chosen = pick(hits, gate_for(min_z, count), min_words, args.max_items, args.max_chars, mode == "words",
+                          not leaning)
             results = [_masked(cfg, args, {**h.as_dict(), "why": why(h)}) for h in chosen]
             recent = [_masked(cfg, args, r) for r in recent_turns(
                 cfg, prompt, [session] if session else [], args.recent_minutes, args.recent_items,
                 {r["id"] for r in results}, scope.within)]
         except Exception as error:  # a hook must never break the agent
             print(f"rummage recall: {type(error).__name__}: {error}", file=sys.stderr)
-    block = "" if not searched else render(results, recent, degraded, agent,
-                                                   scope.line() if scope.worth_saying() else None)
+    worth_noting = agent if agent and P.bears_on(index, {r["source"] for r in results + recent}) else None
+    block = "" if not searched else render(results, recent, degraded, worth_noting,
+                                           scope.line() if scope.worth_saying() else None)
     if args.hook:
         status = memory.pause_line(paused) if paused else index["line"]
         told = notice(about.get("project"))

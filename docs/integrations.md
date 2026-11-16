@@ -13,7 +13,11 @@ Any agent that can run a command can use rummage: `rummage search "<query>" --js
   Recall also adds up to two turns said in the last 45 minutes in other chat sessions (`--recent-minutes`,
   `--recent-items`) when the prompt shares words with them, so a conversation continued in a new window keeps its
   context; the current session is left
-  out (`--session`, or the hook's `session_id`). Credentials are masked in the block unless `--show-secrets`.
+  out (`--session`, or the hook's `session_id`), and so are its own turns from that window, which the agent still has.
+  A short prompt that leans on the turn before it ("the other one?", "rename it then") is searched by meaning with that turn
+  in front of it: the hook's `context` or `--context` when given, else the session's newest turn in the index. A
+  meaning match just above the gate counts only when it also shares some of the prompt's words.
+  Credentials are masked in the block unless `--show-secrets`.
 - **`rummage recent`** lists the latest chat turns and changed files across sources (`--minutes`, `-s`,
   `--exclude-session`, `--json`), and **`rummage get <#id> --around N`** shows a chat hit with the turns around it.
 
@@ -256,11 +260,13 @@ export function apply(ctx) {
 
 ## Index progress for adapters
 
-`rummage recall --hook` reads a JSON object on stdin: `prompt`, `session_id`, and `cwd` and `harness` when the
-harness knows them. It always replies with JSON, also when it has nothing to recall:
+`rummage recall --hook` reads a JSON object on stdin: `prompt`, `session_id`, and `cwd`, `harness` and `context` (the
+turn the prompt answers) when the harness knows them. It always replies with JSON, also when it has nothing to recall:
 
-- `hookSpecificOutput.additionalContext`: the block for the model, when there is one. While the index is
-  incomplete it ends with one sentence saying so; when nothing matched it is only that sentence.
+- `hookSpecificOutput.additionalContext`: the block for the model, when there is one. It ends with one sentence on
+  the unfinished index only when that changes how to read it: a result's source is still being read, a tenth or more
+  of the passages have no vectors yet, or the last run stopped or failed; then, when nothing matched, it is only that
+  sentence.
 - `systemMessage`: the status line for the person, only while the index isn't complete (or the pause, while recall
   is paused).
 - `rummage.index`: the whole summary, the same object `rummage status --line --json` prints:

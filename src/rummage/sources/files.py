@@ -16,7 +16,6 @@ from .folder import FolderSource
 
 class FilesSource(FolderSource):
     structured = True
-    item_reader = D.VERSION
 
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         super().__init__(name, spec, data_dir)
@@ -25,6 +24,10 @@ class FilesSource(FolderSource):
     @property
     def media(self) -> bool:
         return self.reading.images or self.reading.recordings
+
+    def reader_of(self, key: str) -> int:
+        rel = R.file_key(key)
+        return D.READERS["records"] if rel != key and R.is_candidate(rel) else D.reader_of(key)
 
     def record(self, item_key: str, rel: str) -> R.Record:
         found = R.parse(rel, (self.root / rel).read_bytes()) or []

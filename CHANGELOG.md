@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.24.0
+
+- Each family of files has its own reader version (Markdown, text, PDF, pictures, legacy Office, iWork, records and the rest), so a change to one reader re-reads only its files: an OCR change reads pictures and PDFs again, not every file of a server library.
+- Recall reads short follow-ups with the turn before them: a prompt of a few words ("the other one?") is searched by meaning together with the session's last turn (or the hook's `context`, or `--context`), and its few words no longer match on their own.
+- Recall leaves out weak matches: a meaning match just above the gate needs some of the query's words too. It also leaves out the session's own turns from the last 45 minutes.
+- The note on an unfinished index goes into a recall block only when it changes how to read it (a result's source is still being read, many passages lack vectors, the last run stopped or failed), not on every prompt.
+- Fixed: mail passages made of tracking links, signed tokens and invisible preview fillers matched short queries. Mail bodies drop them now (links keep their site); every message is read once more to clean the index.
+- Fixed: a mail message to read again (`index --reload`, a new reader) wasn't fetched from IMAP or JMAP when the folder's cursor was past it.
+
 ## 0.23.1
 
 - Fixed: the time left jumped around during a long read ("~9 min", then "~2.3 h" five minutes later), because it came from the last five minutes' item count and items differ hugely (a cached picture against a long scan). It now uses the last half hour up to the moment of asking, so it moves smoothly and grows while a long file is being read, and it says "time left unknown" until the read has run five minutes and read 20 items.

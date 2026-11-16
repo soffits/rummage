@@ -382,12 +382,16 @@ class Store:
         self.db.commit()
         return counts
 
-    def fingerprints(self, source: str, reader: int | None = None) -> dict[str, str | None]:
-        """Each item's fingerprint; None for an item another `reader` version read (`info.reader`), so it is read
-        again."""
+    def fingerprints(self, source: str, reader: Callable[[str], int | None] | None = None) -> dict[str, str | None]:
+        """Each item's fingerprint; None for an item read by another version than `reader(key)` (`info.reader`), so
+        it is read again."""
         rows = self.db.execute("SELECT key, fingerprint, json_extract(info, '$.reader') FROM items WHERE source = ?",
                                (source,))
-        return {key: fingerprint if reader is None or read_by == reader else None for key, fingerprint, read_by in rows}
+        out = {}
+        for key, fingerprint, read_by in rows:
+            now = reader(key) if reader is not None else None
+            out[key] = fingerprint if now is None or read_by == now else None
+        return out
 
     def remove(self, source: str, key: str) -> None:
         row = self.db.execute("SELECT id FROM items WHERE source = ? AND key = ?", (source, key)).fetchone()
@@ -727,6 +731,17 @@ class Store:
                         "pending_vectors": pending})
             if len(out) >= limit:
                 break
+        return out
+
+    def session_turns(self, session: str, since: float, limit: int) -> list[dict]:
+        """Chat turns of `session` (any source) from `since` (epoch seconds) on, newest first: their `#id` and text."""
+        out = []
+        for row, source, key in self.db.execute(
+                "SELECT id, source, key FROM items WHERE mtime >= ? AND kind = 'chat' "
+                "AND json_extract(info, '$.session') = ? ORDER BY mtime DESC LIMIT ?", (since, session, limit)):
+            text = "\n".join(t for (t,) in self.db.execute(
+                "SELECT text FROM segments WHERE item = ? AND kind = 'text' ORDER BY id", (row,)))
+            out.append({"id": "#" + item_id(source, key), "text": text})
         return out
 
     def same_message(self, row: int) -> list[str]:

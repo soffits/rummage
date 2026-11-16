@@ -48,6 +48,8 @@ from rummage.store import Item, Segment
 
 # Folder names to leave out on servers that don't mark special-use folders.
 SKIP_FOLDER_NAMES = ("*spam*", "*junk*", "*trash*", "*deleted*", "*drafts*", "*bin")
+# How a message is read, kept on each item (`info.reader`): a message read by another version is fetched and read again.
+READER = 1
 _LIST_LINE = re.compile(r'^\((?P<flags>[^)]*)\)\s+(?:"[^"]*"|NIL)\s+(?P<name>.+)$')
 
 
@@ -86,7 +88,7 @@ def body_and_attachments(message: EmailMessage, limits: Limits) -> tuple[str, li
         if text and text.strip():
             attached.append((name, text))
             cuts += [Cut(f"attachment {name}: {c.what}", c.kept, c.total, c.unit, c.setting) for c in clipped]
-    return body.strip(), attached, cuts
+    return T.without_machine_strings(body), attached, cuts
 
 
 def message_item(source: str, key: str, ref: str, raw: bytes, folder: str = "") -> Item:
@@ -172,7 +174,7 @@ class MailSource(Source):
         upserts, current = [], set()
         for key, raw in local:
             current.add(key)
-            if key in known:
+            if known.get(key) is not None:
                 continue  # a stored message doesn't change
             item = message_item(self.name, key, f"mail:{key}", raw)
             if self._recent_enough(item):
@@ -252,7 +254,11 @@ class MailSource(Source):
                     typ, data = imap.uid("SEARCH", "ALL")
                     present = {f"{prefix}{int(u)}" for u in (data[0] or b"").split()}
                     removed += [k for k in known if k.startswith(f"{folder}/") and k not in present]
-                todo += [(folder, uid, f"{prefix}{uid}") for uid in uids if f"{prefix}{uid}" not in known]
+                # new messages, and stored ones to read again (another reader version read them)
+                again = sorted(int(k[len(prefix):]) for k, v in known.items() if v is None and k.startswith(prefix)
+                               and k[len(prefix):].isdigit())
+                todo += [(folder, uid, f"{prefix}{uid}") for uid in sorted(set(again) | set(uids))
+                         if known.get(f"{prefix}{uid}") is None]
                 new_state[folder] = {"validity": validity, "uid": max(uids + [old.get("uid", 0) if start > 1 else 0])}
         finally:
             _logout(imap)
@@ -275,6 +281,9 @@ class MailSource(Source):
                     _logout(connection)
 
         return Plan(upserts(), removed, new_state, len(todo))
+
+    def reader_of(self, key: str) -> int:
+        return READER
 
     def load(self, item: Item) -> list[Segment]:
         return message_segments(item, self.limits)
