@@ -134,8 +134,8 @@ def recall(cfg: C.Config, query: str, sources: list[str] | None, paths: list[str
     store = Store(cfg.index_path)
     try:
         version = store.model
-        vector, degraded = meaning_vector(cfg, version, query, load=allow_model_load)
-        searcher = Searcher(store, sources, paths, model=version, within=within)
+        vector, degraded, scored = meaning_vector(cfg, version, query, load=allow_model_load)
+        searcher = Searcher(store, sources, paths, model=version, within=within, scored=scored)
         hits = searcher.search(query, vector, limit=limit)
         count = searcher.vector_count()
     finally:

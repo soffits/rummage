@@ -47,31 +47,36 @@ def profile_for(cfg: C.Config, version: str | None) -> M.Profile:
     return profile
 
 
+Scored = tuple[np.ndarray, np.ndarray]   # segment ids and the query's cosine with each, from the query daemon
+
+
 def meaning_vector(cfg: C.Config, version: str | None, text: str, use_daemon: bool = True, load: bool = True,
-                   load_seconds: float = LOAD_SECONDS) -> tuple[np.ndarray | None, str | None]:
-    """`(vector, None)` from model `version`, or `(None, reason)` when the search has to go by words."""
+                   load_seconds: float = LOAD_SECONDS) -> tuple[np.ndarray | None, str | None, Scored | None]:
+    """`(vector, None, scored)` from model `version`, or `(None, reason, None)` when the search has to go by words.
+    `scored`: the daemon's scores of the vectors it holds, when a daemon answered (else the search reads them)."""
     started: subprocess.Popen | bool = False
     if use_daemon:
-        vector = D.query_vector(cfg.data_dir, text, version)
-        if vector is not None:
-            return vector, None
+        got = D.query_scores(cfg.data_dir, text, version)
+        if got is not None:
+            return got[0], None, got[1]
         profile = M.by_version(cfg.models, version)
         if cfg.daemon_idle_minutes > 0 and profile and not R.Runtime(cfg.data_dir, cfg.llama_server).missing(profile, False):
             started = D.ensure(cfg.path, cfg.data_dir, cfg.daemon_idle_minutes, cfg.log_dir / "daemon.log")
         if started and load:
             vector = D.wait_vector(cfg.data_dir, text, version, load_seconds, None if started is True else started)
             if vector is not None:
-                return vector, None
+                got = D.query_scores(cfg.data_dir, text, version)
+                return (got[0], None, got[1]) if got is not None else (vector, None, None)
     if not load:
         return None, ("the query daemon is starting, so this matched by words only" if started else
-                      "no query daemon is running (`rummage daemon`), so this matched by words only")
+                      "no query daemon is running (`rummage daemon`), so this matched by words only"), None
     try:
         profile = profile_for(cfg, version)
         with R.embedder(R.Runtime(cfg.data_dir, cfg.llama_server), profile, threads=cfg.threads, nice=0,
                         ready_timeout=load_seconds) as embedder:
-            return embedder.query(text), None
+            return embedder.query(text), None, None
     except FALLBACK_ERRORS as error:
-        return None, reason_for(error)
+        return None, reason_for(error), None
 
 
 class QueryModel:

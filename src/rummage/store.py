@@ -45,7 +45,6 @@ CREATE TABLE IF NOT EXISTS segments (
     input TEXT,
     script TEXT
 );
-CREATE INDEX IF NOT EXISTS segments_item ON segments(item);
 CREATE TABLE IF NOT EXISTS vectors (
     segment INTEGER NOT NULL REFERENCES segments(id) ON DELETE CASCADE,
     model TEXT NOT NULL,
@@ -267,6 +266,20 @@ class Scope:
         return ("".join(f" AND {c}" for c in clauses), args)
 
 
+def vector_snapshot(path: Path, model: str) -> tuple[np.ndarray, np.ndarray]:
+    """Every vector of `model` with its segment id, in id order, read through a read-only connection: the rows the
+    query daemon keeps in memory."""
+    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        rows = db.execute("SELECT segment, vector FROM vectors WHERE model = ? ORDER BY segment", (model,)).fetchall()
+    finally:
+        db.close()
+    dim = len(rows[0][1]) // 2 if rows else 0
+    matrix = (np.frombuffer(b"".join(r[1] for r in rows), np.float16).reshape(len(rows), dim) if rows
+              else np.zeros((0, 0), np.float16))
+    return np.array([r[0] for r in rows], np.int64), matrix
+
+
 class NotFound(LookupError):
     pass
 
@@ -299,6 +312,9 @@ class Store:
             _migrate_single_model(self.db)
         self.db.execute("CREATE INDEX IF NOT EXISTS segments_input ON segments(id) WHERE input IS NOT NULL")
         self.db.execute("CREATE INDEX IF NOT EXISTS items_mtime ON items(mtime)")
+        # What a search reads beside the daemon's scores: item, kind and script by segment, without the text.
+        self.db.execute("CREATE INDEX IF NOT EXISTS segments_meta ON segments(item, kind, script)")
+        self.db.execute("DROP INDEX IF EXISTS segments_item")   # segments_meta starts with the item too
         self.db.commit()
 
     @property
@@ -421,6 +437,18 @@ class Store:
                   else np.zeros((0, 0), np.float16))
         return Vectors(np.array([r[0] for r in rows], np.int64), np.array([r[1] for r in rows], np.int64),
                        np.array([r[2] for r in rows]), np.array([r[3] for r in rows]), matrix)
+
+    def segment_meta(self, scope: Scope) -> Vectors:
+        """The item, kind and script of every passage and media segment in scope, by id, without their vectors
+        (`matrix` is empty): what a search needs beside scores the query daemon computed. It reads a small covering
+        index instead of the segment rows with their text, so it stays fast when the index file isn't cached."""
+        where, args = scope.where()
+        rows = self.db.execute(
+            f"SELECT s.id, s.item, s.kind, COALESCE(s.script, '') FROM items i "
+            f"JOIN segments s INDEXED BY segments_meta ON s.item = i.id WHERE s.kind != 'name'{where} ORDER BY s.id",
+            args).fetchall()
+        return Vectors(np.array([r[0] for r in rows], np.int64), np.array([r[1] for r in rows], np.int64),
+                       np.array([r[2] for r in rows]), np.array([r[3] for r in rows]), np.zeros((0, 0), np.float16))
 
     def times(self, items: list[int]) -> dict[int, float]:
         """When each item is from, as a timestamp: a chat message's or mail's own time, else the file's

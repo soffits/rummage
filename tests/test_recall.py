@@ -100,7 +100,8 @@ def test_recall_finds_what_search_finds_and_says_where(tmp_path, capsys, monkeyp
     index_all(store, build("notes", {"type": "markdown", "root": str(notes)}, tmp_path), model,
                  lambda *a: None, print)
     store.close()
-    monkeypatch.setattr("rummage.daemon.query_vector", lambda data_dir, text, version=None, timeout=10.0: model.vector(text))
+    monkeypatch.setattr("rummage.daemon.query_scores",
+                        lambda data_dir, text, version=None, timeout=10.0: (model.vector(text), None))
     for prompt in ("which mattress did we buy", "mattress"):
         assert main(["--config", str(cfg), "recall", prompt]) == 0
         block = capsys.readouterr().out

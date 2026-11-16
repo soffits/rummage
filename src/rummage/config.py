@@ -53,6 +53,7 @@ class Config:
     path: Path
     data_dir: Path
     threads: int = 2
+    ocr_threads: int = 2       # threads OCR may use while a source is read (default: `threads`)
     max_threads: int = 0
     nice: int = 10
     llama_server: str | None = None
@@ -107,6 +108,7 @@ def load(path: Path | None = None) -> Config:
         path=path,
         data_dir=data_dir,
         threads=int(runtime.get("threads", 2)),
+        ocr_threads=int(runtime.get("ocr_threads", runtime.get("threads", 2))),
         max_threads=_max_threads(runtime.get("max_threads", 0)),
         nice=int(runtime.get("nice", 10)),
         llama_server=os.environ.get("RUMMAGE_LLAMA_SERVER") or runtime.get("llama_server"),

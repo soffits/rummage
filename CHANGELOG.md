@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.22.0
+
+- Searches stay fast on a busy machine: the query daemon keeps the vectors in memory and scores the query itself, so a search no longer reads every vector from the index file, which took seconds once the file dropped out of the page cache (1.3 s cold for 40,000 vectors, now 0.1 s). The vectors in memory are refreshed at most once a minute while indexing runs.
+- OCR uses `[runtime] ocr_threads` CPU threads (default: `threads`) instead of every core.
+- Fixed: a second `rummage index` (a scheduled one beside `rummage watch`) started its own embedder while the other run was reading, so two embedders and OCR competed with searches for the cores. It now leaves the work to the run that is reading and says so.
+- Fixed: the time left in `rummage status --line` counted only the vectors, so a long read (pictures with OCR) showed "~20 min left" with two hours to go. It now counts the items still to read at the read's own pace, and shows no guess until it has one.
+- The status note no longer says items not read yet "can't be found": until it is read again, a changed item is found as it was, and only a new one isn't.
+
 ## 0.21.0
 
 - Pictures and scanned PDF pages are found by the text in them: OCR runs on this machine (RapidOCR with PaddleOCR's PP-OCRv6 small models, plus the Korean model for lines the first one is unsure of) and reads Simplified and Traditional Chinese, Japanese, Korean, English and other Latin-script languages. Install the `ocr` extra; the models (about 45 MB) download into the data folder once, results are cached, and a source with `ocr = false` skips it.

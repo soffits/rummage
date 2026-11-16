@@ -7,12 +7,17 @@ One daemon per data directory: it holds the `daemon` lock while it runs, so a se
 
 Protocol: one JSON line per request, `{"embed": "<query>", "model": "<version>"}`, answered by `{"vector": [...]}`
 or `{"error": "..."}`. The daemon embeds with the model the request names (the index's), loading another when a
-model switch changes it.
+model switch changes it. With `"scores": true` the reply also carries the query's cosine with every vector of that
+model (`segments` and `scores`, base64 of int64 ids and float32 values): the daemon keeps the vectors in memory, read
+again at most once a minute while the index changes, so a search doesn't read them from the index file each time,
+which takes seconds when the file has dropped out of the page cache. Vectors made since the last read are missing
+from those scores for up to a minute; keyword search still finds their passages.
 The socket is created with owner-only permissions, in the data directory (or /tmp when that path is too long).
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -47,6 +52,23 @@ def socket_path(data_dir: Path) -> Path:
 
 def query_vector(data_dir: Path, text: str, version: str | None, timeout: float = 10.0) -> np.ndarray | None:
     """The query vector of model `version` from a running daemon, or None when there is none (or it fails)."""
+    reply = _ask(data_dir, {"embed": text, "model": version}, timeout)
+    return np.array(reply["vector"], np.float32) if reply and "vector" in reply else None
+
+
+def query_scores(data_dir: Path, text: str, version: str | None, timeout: float = 10.0):
+    """`(vector, scored)` from a running daemon: the query vector of model `version`, and `(segment ids, scores)`,
+    its cosine with every vector the daemon holds (None when the daemon has none to give); None when there is no
+    daemon or it fails."""
+    reply = _ask(data_dir, {"embed": text, "model": version, "scores": True}, timeout)
+    if not reply or "vector" not in reply:
+        return None
+    scored = (np.frombuffer(base64.b64decode(reply["segments"]), np.int64),
+              np.frombuffer(base64.b64decode(reply["scores"]), np.float32)) if "segments" in reply else None
+    return np.array(reply["vector"], np.float32), scored
+
+
+def _ask(data_dir: Path, request: dict, timeout: float) -> dict | None:
     path = socket_path(data_dir)
     if not hasattr(socket, "AF_UNIX") or not path.exists():
         return None
@@ -54,17 +76,73 @@ def query_vector(data_dir: Path, text: str, version: str | None, timeout: float 
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
             conn.settimeout(timeout)
             conn.connect(str(path))
-            conn.sendall(json.dumps({"embed": text, "model": version}).encode() + b"\n")
+            conn.sendall(json.dumps(request).encode() + b"\n")
             data = b""
             while not data.endswith(b"\n"):
-                chunk = conn.recv(65536)
+                chunk = conn.recv(1 << 20)
                 if not chunk:
                     break
                 data += chunk
-        reply = json.loads(data)
-        return np.array(reply["vector"], np.float32) if "vector" in reply else None
-    except (OSError, ValueError, KeyError):
+        return json.loads(data)
+    except (OSError, ValueError):
         return None
+
+
+REFRESH_SECONDS = 60   # the vectors in memory are read again at most this often while the index changes
+
+
+class Snapshots:
+    """Each model's vectors in memory, by segment id. A request finds out with SQLite's `data_version` whether the
+    index changed; a changed snapshot older than REFRESH_SECONDS is read again in the background while requests go
+    on with the old one."""
+
+    def __init__(self, index_path: Path):
+        import sqlite3
+
+        self.index_path = index_path
+        self.db = sqlite3.connect(f"file:{index_path}?mode=ro", uri=True, check_same_thread=False)
+        self.lock = threading.Lock()
+        self.held: dict[str, tuple[np.ndarray, np.ndarray, int, float]] = {}   # ids, matrix, data_version, read at
+        self.reading: set[str] = set()
+
+    def _version(self) -> int:
+        with self.lock:
+            return self.db.execute("PRAGMA data_version").fetchone()[0]
+
+    def _read(self, model: str) -> None:
+        from .store import vector_snapshot
+
+        version = self._version()
+        try:
+            ids, matrix = vector_snapshot(self.index_path, model)
+        except Exception:
+            with self.lock:
+                self.reading.discard(model)
+            raise
+        with self.lock:
+            self.held[model] = (ids, matrix, version, time.monotonic())
+            self.reading.discard(model)
+
+    def get(self, model: str) -> tuple[np.ndarray, np.ndarray]:
+        held = self.held.get(model)
+        if held is None:
+            self._read(model)
+            held = self.held[model]
+        elif held[2] != self._version() and time.monotonic() - held[3] > REFRESH_SECONDS:
+            with self.lock:
+                start = model not in self.reading
+                self.reading.add(model)
+            if start:
+                threading.Thread(target=self._read, args=(model,), daemon=True).start()
+        return held[0], held[1]
+
+    def scores(self, model: str, query: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        ids, matrix = self.get(model)
+        q = query.astype(np.float32)
+        out = np.empty(len(matrix), np.float32)
+        for start in range(0, len(matrix), 8192):
+            out[start:start + 8192] = matrix[start:start + 8192].astype(np.float32) @ q
+        return ids, out
 
 
 def running(data_dir: Path) -> bool:
@@ -131,10 +209,13 @@ def _serve(cfg: C.Config, idle_minutes: float | None) -> int:
     path.unlink(missing_ok=True)
     data_dir.mkdir(parents=True, exist_ok=True)
     model = QueryModel(cfg)
+    snapshots = Snapshots(cfg.index_path) if cfg.index_path.exists() else None
     if cfg.index_path.exists():
         store = Store(cfg.index_path)
         try:
             model.vector(store.model, "ping")
+            if store.model:
+                snapshots.get(store.model)
         finally:
             store.close()
     last_used = [time.monotonic()]
@@ -146,6 +227,10 @@ def _serve(cfg: C.Config, idle_minutes: float | None) -> int:
                 vector = model.vector(request.get("model"), str(request["embed"]))
                 last_used[0] = time.monotonic()
                 reply = {"vector": [round(float(x), 6) for x in vector]}
+                if request.get("scores") and snapshots is not None and request.get("model"):
+                    ids, scores = snapshots.scores(request["model"], np.asarray(vector, np.float32))
+                    reply["segments"] = base64.b64encode(ids.astype(np.int64).tobytes()).decode()
+                    reply["scores"] = base64.b64encode(scores.astype(np.float32).tobytes()).decode()
             except Exception as error:
                 reply = {"error": f"{type(error).__name__}: {error}"}
             self.wfile.write(json.dumps(reply).encode() + b"\n")
