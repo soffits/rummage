@@ -32,8 +32,29 @@ def test_query_vector_speaks_the_socket_protocol(tmp_path):
     assert np.allclose(vector, [0.6, 0.8])
 
 
+@pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="no Unix sockets")
+def test_recall_asks_the_daemon_how_many_threads_it_embeds_with(tmp_path):
+    path = D.socket_path(tmp_path)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(path))
+    server.listen(1)
+
+    def answer():
+        conn, _ = server.accept()
+        with conn:
+            assert json.loads(conn.makefile().readline()) == {"threads": True}
+            conn.sendall(b'{"threads": 2}\n')
+
+    thread = threading.Thread(target=answer)
+    thread.start()
+    assert D.query_threads(tmp_path) == 2
+    thread.join()
+    server.close()
+
+
 def test_no_daemon_means_none(tmp_path):
     assert D.query_vector(tmp_path, "x", "model-v1") is None
+    assert D.query_threads(tmp_path) is None
 
 
 def test_long_data_dir_gets_a_short_socket(tmp_path):

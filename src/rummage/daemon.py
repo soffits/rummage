@@ -6,12 +6,13 @@ model is loaded, so only the first search of a while pays for the load and memor
 One daemon per data directory: it holds the `daemon` lock while it runs, so a second one started meanwhile exits.
 
 Protocol: one JSON line per request, `{"embed": "<query>", "model": "<version>"}`, answered by `{"vector": [...]}`
-or `{"error": "..."}`. The daemon embeds with the model the request names (the index's), loading another when a
-model switch changes it. With `"scores": true` the reply also carries the query's cosine with every vector of that
-model (`segments` and `scores`, base64 of int64 ids and float32 values): the daemon keeps the vectors in memory, read
-again at most once a minute while the index changes, so a search doesn't read them from the index file each time,
-which takes seconds when the file has dropped out of the page cache. Vectors made since the last read are missing
-from those scores for up to a minute; keyword search still finds their passages.
+or `{"error": "..."}`; `{"threads": true}` is answered by the number of threads queries are embedded with now
+(`{"threads": 2}`), which follows the machine's load. The daemon embeds with the model the request names (the
+index's), loading another when a model switch changes it. With `"scores": true` the reply also carries the query's
+cosine with every vector of that model (`segments` and `scores`, base64 of int64 ids and float32 values): the daemon
+keeps the vectors in memory, read again at most once a minute while the index changes, so a search doesn't read them
+from the index file each time, which takes seconds when the file has dropped out of the page cache. Vectors made
+since the last read are missing from those scores for up to a minute; keyword search still finds their passages.
 The socket is created with owner-only permissions, in the data directory (or /tmp when that path is too long).
 """
 
@@ -66,6 +67,12 @@ def query_scores(data_dir: Path, text: str, version: str | None, timeout: float 
     scored = (np.frombuffer(base64.b64decode(reply["segments"]), np.int64),
               np.frombuffer(base64.b64decode(reply["scores"]), np.float32)) if "segments" in reply else None
     return np.array(reply["vector"], np.float32), scored
+
+
+def query_threads(data_dir: Path, timeout: float = 1.0) -> int | None:
+    """How many threads a running daemon embeds queries with now (it follows the machine's load), or None."""
+    reply = _ask(data_dir, {"threads": True}, timeout)
+    return reply.get("threads") if reply else None
 
 
 def _ask(data_dir: Path, request: dict, timeout: float) -> dict | None:
@@ -220,6 +227,9 @@ def _serve(cfg: C.Config, idle_minutes: float | None) -> int:
         def handle(self):
             try:
                 request = json.loads(self.rfile.readline())
+                if request.get("threads"):
+                    self.wfile.write(json.dumps({"threads": model.threads}).encode() + b"\n")
+                    return
                 vector = model.vector(request.get("model"), str(request["embed"]))
                 last_used[0] = time.monotonic()
                 reply = {"vector": [round(float(x), 6) for x in vector]}
