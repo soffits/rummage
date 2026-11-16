@@ -16,6 +16,7 @@ import traceback
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import ocr
 from .models import REFERENCE_COSINE, Profile
 from .progress import Run
 from .runtime import (EmbedError, Embedder, RemoteEmbedder, Runtime, open_embedder,
@@ -264,6 +265,7 @@ def index_source(store: Store, source: Source, embedders: list[Embedders], log, 
         store.commit()
     if complete:
         _finish_media(store, source, read, log, deadline)
+    ocr.release_all()   # the OCR models hold a few hundred MB; the next source that needs them loads them again
     counts["complete"] = complete
     report(source.name, phase="done" if complete else "stopped")
     return counts

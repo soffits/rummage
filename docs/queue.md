@@ -111,7 +111,13 @@ data, tests.
   the window out with ffmpeg would save the agent a step.
 - On a tiny index (a dozen vectors) the z-score gate hides correct media hits whose cosine already ranks first; the
   gate is per modality and needs more vectors to be meaningful. Measure on a real folder of recordings.
-- Seafile reads no media: the bytes would have to be downloaded whole.
+- Seafile reads no recordings (they are kept by name, reason `remote-recording`): ffmpeg would need the file
+  downloaded whole or a reusable link to seek in; pictures and PDFs are read.
+- OCR runs while items are read, so a long scanned PDF holds up the source's other items for its pages' OCR
+  (2–7 s a page on a 4-core CPU); doing it in the media pass, a step at a time, would keep the read fast.
+- `ocr-cache.db` keeps text for files that changed or went away; nothing prunes it yet (it is small text).
+- OCR reads line by line through RapidOCR's public calls; batching the lines into one recognition call would be
+  faster on pictures with many lines.
 - Long recordings are decoded once per pass to find their windows (a cheap streamed decode); a cached window list
   per fingerprint would save it on reloads.
 
@@ -123,3 +129,10 @@ data, tests.
   start on Windows (`DETACHED_PROCESS`) and `os.execv` after a config change there are untested.
 - A file's item time is its last change, so a private pause or a time-window mark keeps out a file edited during it
   until it is edited again.
+
+## Formats
+
+- Synology Office files (`.odoc`, `.osheet`, `.oslides`) are BSON wrapping JSON and stay name-only.
+- A Pages, Keynote or Numbers file kept as a package folder (macOS, not zipped) is walked as its inner files; only
+  the zipped form is read as one document. Numbers cells come out as the table's string list, not in row order.
+- Word files from before Word 97 and `.ppt` files saved in place with old copies of text read only partly or not at all.

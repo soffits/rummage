@@ -18,11 +18,17 @@ $ rummage search "INV-20931" --words-only --json
 ## What it finds
 
 - Passages by meaning, in 100+ languages: a query in one language finds text written in another.
-- Pictures by what they show ("a dog on the beach", "a receipt from a restaurant"), and by text that's visible in them.
+- Pictures by what they show ("a dog on the beach", "a receipt from a restaurant"), and by the text in them, read on
+  this machine by OCR in Chinese (simplified and traditional), Japanese, Korean, English and other Latin-script
+  languages (`rummage[ocr]`). HEIC and other formats the model can't open go through ffmpeg.
 - Recordings by what they sound like and videos by what they show and sound like, each hit at its moment (`0:01:25`):
   the model hears 30-second windows and sees a frame per shot. Needs ffmpeg. It doesn't transcribe: an agent that
   needs the words can transcribe that window itself.
-- PDFs page by page; a scanned page is matched as a picture of the page (`rummage[pdf-scans]`).
+- PDFs page by page; a scanned page is matched as a picture of the page and by the text OCR finds in it
+  (`rummage[pdf-scans]`, `rummage[ocr]`).
+- Documents: Office Open XML and OpenDocument, the older Word, Excel and PowerPoint files (`.doc`, `.xls`, `.ppt`;
+  `rummage[office]`), Pages, Keynote and Numbers, RTF, EPUB, saved mail, Jupyter notebooks (cells and their text
+  output), and any file whose content is text, whatever its extension (source code, configs, logs).
 - JSON, JSON Lines, CSV and TSV files of records (an array of objects, or a table with a header row): one result per record, so an order or a row is found by what it holds.
 - Names, IDs and numbers exactly as written, through a keyword index that also handles CJK text (Chinese, Japanese, Korean).
 - Each result points back to where it is: a file and character offset, or whatever a plugin uses (a chat message,
@@ -39,8 +45,13 @@ shows which one runs and why. `rummage setup --backend auto` checks again, `--ba
 ```sh
 uv tool install 'git+https://github.com/soffits/rummage'          # core
 uv tool install 'git+https://github.com/soffits/rummage[archives]' # + 7z and rar listings
+uv tool install 'git+https://github.com/soffits/rummage[office,ocr,pdf-scans]'  # + .doc/.xls/.ppt, OCR, scans
 rummage setup            # ~330 MB text model; ~880 MB with the image encoder
 ```
+
+The `ocr` extra (RapidOCR on ONNX Runtime, about 300 MB installed with OpenCV) downloads its models (about 45 MB)
+into the data folder the first time it reads a picture; pictures never leave the machine. It holds a few hundred MB
+of memory while a source with pictures is read and frees it afterwards.
 
 ## Configure
 
@@ -62,11 +73,12 @@ model = "embeddinggemma-2"            # the embedding model (`rummage models`); 
 #                                     # backfills); used only while it answers and its vectors agree
 
 [sources.documents]
-type = "files"                        # text, Markdown, HTML, PDF, Office/OpenDocument, RTF, EPUB, .eml, pictures,
-                                      # recordings, videos, archive listings
+type = "files"                        # any text, Markdown, HTML, PDF, Office (old and new), iWork, notebooks, RTF,
+                                      # EPUB, .eml, pictures, recordings, videos, archive listings
 root = "~/Documents"
 exclude = [".*", "node_modules"]      # name patterns to skip (these are the defaults)
 images = true                         # embed pictures (needs the image encoder)
+ocr = true                            # read the text in pictures and scanned pages (needs rummage[ocr])
 recordings = true                     # embed audio and video (needs the encoders and ffmpeg)
 # read_secret_files = false           # keys, certificates, password stores, .env and .ssh are never read unless true
 
@@ -100,7 +112,7 @@ Some files are too big to index whole. These limits apply per item and can be ra
 | Setting | Default | What happens past it |
 |---|---|---|
 | `max_chars` | 400,000 | the item's text is indexed up to here (files, notes, mail and attachments) |
-| `limits.text`, `.html`, `.office`, `.pdf`, `.image` | 4, 8, 64, 128, 40 MB | the file is indexed by name only (`files`, `seafile`) |
+| `limits.text`, `.html`, `.office`, `.legacy-office`, `.iwork`, `.notebook`, `.pdf`, `.image` | 4, 8, 64, 64, 256, 32, 128, 40 MB | the file is indexed by name only (`files`, `seafile`) |
 | `limits.tar` | 256 MB | a compressed tar is indexed by name only, without its listing |
 | `max_pdf_pages` | 5000 | later pages are left out |
 | `max_archive_names` | 5,000 | the archive's later entries are left out of its listing |
@@ -113,6 +125,15 @@ and the setting to raise, e.g. `sources.documents.max_chars`); search results, `
 it, and `rummage status` counts such items per source along with the files `exclude` left out. `rummage get <ref>
 --original` reads the whole file from disk now, without the limits; `<ref>` can also be the file's path. After
 raising a limit, `rummage index --reload -s <source>` reads the items again.
+
+A file rummage can't read at all (an encrypted PDF or Office file, a binary format with no reader, a picture without
+the `ocr` extra's text) is still indexed by its name, and says why. `rummage status` counts these per source by
+reason, with their file types and a few examples, so "what can't it read?" has one answer:
+
+```
+documents: 12 items found only by name: 9 a binary format rummage has no reader for (.pyc 5, .psd 2, .exe 2);
+  3 needs a password to open (.pdf 2, .doc 1)
+```
 
 ## Use
 

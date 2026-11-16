@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.21.0
+
+- Pictures and scanned PDF pages are found by the text in them: OCR runs on this machine (RapidOCR with PaddleOCR's PP-OCRv6 small models, plus the Korean model for lines the first one is unsure of) and reads Simplified and Traditional Chinese, Japanese, Korean, English and other Latin-script languages. Install the `ocr` extra; the models (about 45 MB) download into the data folder once, results are cached, and a source with `ocr = false` skips it.
+- The older Office formats are read: Word `.doc`, Excel `.xls` and PowerPoint `.ppt` (the `office` extra), as are Pages, Keynote and Numbers files and Jupyter notebooks (their cells and text output).
+- Seafile libraries read files the way local folders do: pictures get image vectors and OCR, scanned PDF pages are rendered, and source code, configs and other text files are read whatever their extension (a range request sniffs the first 8 KB). Key and password files are skipped by name, as in folders.
+- `rummage status` says what it can't read: per source, the items found only by name, grouped by reason (binary format, needs a password, over a size limit, extra not installed, no text...) with their file types and examples. The old `name_only_items` count, which only counted size and password cuts, is gone.
+- After this upgrade, each `files` and `seafile` source reads all its files once more (vectors are reused), so what was name-only before is read without `--reload`.
+
 ## 0.20.2
 
 - Fixed: a PDF that needs a password to open failed its whole item, so it wasn't found even by name, every run read it again and reported a failure, and a Seafile library holding one was listed again on every poll. It is now indexed by name and says why its text is missing (`partial`: "PDF text not read: it needs a password to open").

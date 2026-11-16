@@ -19,12 +19,12 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
+from rummage import documents as D
 from rummage import net
 from rummage import extract as X
-from rummage import text as T
-from rummage.limits import Limits, record
 from rummage.store import Item, Segment
 from rummage.sources import Plan, Source
+from rummage.sources.folder import _left_out, is_secret
 
 TOKEN_SETTINGS = ("token", "token_env", "token_file", "env_file")
 
@@ -175,7 +175,9 @@ class SeafileSource(Source):
                 raise ValueError(f"source {name}: library_tokens[{n}] has no token (token_env / token_file / env_file)")
         self.libraries = spec.get("libraries")  # names or ids of account libraries; default: every one it can read
         self.exclude = [p.rstrip("/") for p in spec.get("exclude_paths", [])]
-        self.limits = Limits.of(spec)
+        self.reading = D.Reading.of(spec, data_dir)
+        self.skip_secrets = self.reading.skip_secrets
+        self.media = self.reading.images
         self._libs: dict[str, AccountLibrary | TokenLibrary] | None = None
 
     def _internal(self, url: str) -> str:
@@ -210,10 +212,13 @@ class SeafileSource(Source):
     # plan
 
     def plan(self, known: dict[str, str | None], state: dict) -> Plan:
+        if state.get("documents") != D.VERSION:   # read by an older reader: every file again
+            known, state = {key: None for key in known}, {}
         heads = dict(state.get("heads", {}))
         self._libs = libs = self._list_libraries()
         upserts: list[Item] = []
         removed: list[str] = []
+        secret: dict[str, list[str]] = dict(state.get("secret", {}))   # per library, kept while it is unchanged
         by_repo: dict[str, set[str]] = {}
         for key in known:
             by_repo.setdefault(key.split(":", 1)[0], set()).add(key)
@@ -221,14 +226,20 @@ class SeafileSource(Source):
             if repo_id not in libs:
                 removed += sorted(keys)
                 heads.pop(repo_id, None)
+                secret.pop(repo_id, None)
         for lib in libs.values():
             head = lib.head()
             if head and heads.get(lib.id) == head:
                 continue
             present = set()
+            secret[lib.id] = []
             for f in lib.files():
                 path = str(PurePosixPath(f.get("parent_dir", "/")) / f["name"])
                 if any(path == p or path.startswith(p + "/") for p in self.exclude):
+                    continue
+                parts = path.strip("/").split("/")
+                if self.skip_secrets and (is_secret(parts[-1]) or any(is_secret(d, folder=True) for d in parts[:-1])):
+                    secret[lib.id].append(f"{lib.name}{path}")
                     continue
                 key = f"{lib.id}:{path}"
                 present.add(key)
@@ -239,41 +250,35 @@ class SeafileSource(Source):
                                          "type": X.kind_of(f["name"])}))
             removed += sorted(by_repo.get(lib.id, set()) - present)
             heads[lib.id] = head
-        return Plan(upserts, removed, {"heads": heads}, len(upserts))
+        skipped = [path for paths in secret.values() for path in paths]
+        left_out = {"skipped as keys or passwords": _left_out(skipped, f"sources.{self.name}.read_secret_files")}
+        return Plan(upserts, removed, {"heads": heads, "secret": secret, "left_out": left_out,
+                                       "documents": D.VERSION}, len(upserts))
 
     # load
 
     def load(self, item: Item) -> list[Segment]:
         repo_id, path = item.key.split(":", 1)
-        size = int(item.info.get("size") or 0)
-        kind = item.info["type"]
-        name_line = f"{item.info['library']}{path}"
-        segments = [Segment("name", name_line)]
-        if kind in ("name", "image", "audio", "video"):
-            return segments
-        if kind == "archive":
-            if X.suffix(path) in X.COMPRESSED_TARS and (cut := self.limits.too_big("tar", size)):
-                record(item, [cut])
-                return segments
-            remote = HTTPRangeFile(lambda: self._download_url(repo_id, path), size)
-            names, cuts = X.archive_names(io.BufferedReader(remote, 1 << 16), path, self.limits)
-            record(item, cuts)
-            segments.append(Segment("text", X.names_text(names), loc="names"))
-            item.info["entries"] = len(names)
-            return segments
-        if cut := self.limits.too_big(kind, size):
-            record(item, [cut])
-            return segments
-        with net.urlopen(self._download_url(repo_id, path), timeout=300) as r:
-            data = r.read(self.limits.bytes[kind] + 1)
-        body, cuts = X.bytes_text(path, data, self.limits)
-        record(item, cuts)
-        body = body or ""
-        title = PurePosixPath(path).stem
-        for start, piece in T.chunks(body):
-            seg = Segment("text", piece, loc=str(start),
-                          lines=T.line_span(body, start, piece) if kind == "text" else None)
-            if T.has_prose(piece):
-                seg.embed = (title, piece)
-            segments.append(seg)
-        return segments
+        blob = SeafileBlob(lambda: self._download_url(repo_id, path), int(item.info.get("size") or 0))
+        return D.read(item, path, blob, self.reading, name_line=f"{item.info['library']}{path}")
+
+
+class SeafileBlob(D.Blob):
+    """A file in a library: its start and its directory over range requests, its bytes in memory."""
+
+    def __init__(self, link: Callable[[], str], size: int):
+        self.link, self.size = link, size
+
+    def head(self, n: int) -> bytes:
+        if self.size <= n:
+            return self.read()
+        request = urllib.request.Request(self.link(), headers={"Range": f"bytes=0-{n - 1}"})
+        with net.urlopen(request, timeout=120) as r:
+            return r.read(n)
+
+    def read(self, limit: int | None = None) -> bytes:
+        with net.urlopen(self.link(), timeout=300) as r:
+            return r.read() if limit is None else r.read(limit)
+
+    def open(self):
+        return io.BufferedReader(HTTPRangeFile(self.link, self.size), 1 << 16)

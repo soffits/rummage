@@ -12,8 +12,8 @@ from dataclasses import dataclass
 
 # Bytes read at most per kind of file; a bigger file keeps only its name (archives: their names list is still read,
 # except for compressed tars, which must be decompressed to list).
-BYTES = {"text": 4 << 20, "html": 8 << 20, "office": 64 << 20, "pdf": 128 << 20, "tar": 256 << 20,
-         "image": 40 << 20,
+BYTES = {"text": 4 << 20, "html": 8 << 20, "office": 64 << 20, "legacy-office": 64 << 20, "iwork": 256 << 20,
+         "notebook": 32 << 20, "pdf": 128 << 20, "tar": 256 << 20, "image": 40 << 20,
          "rtf": 32 << 20, "epub": 64 << 20, "mail": 64 << 20}
 MAX_CHARS = 400_000          # characters of text per item (and per mail attachment)
 MAX_PDF_PAGES = 5000

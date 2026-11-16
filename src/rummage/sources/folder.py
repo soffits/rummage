@@ -74,6 +74,7 @@ class FolderSource(Source):
     default_max_bytes = 0                                # files above this keep only their name; 0: no limit
     hash_bytes = 64 << 20                                # bigger files are fingerprinted by size and mtime
     structured = False                                   # read JSON/JSONL/CSV/TSV files of records as one item per record
+    documents: int | None = None                         # the `documents.VERSION` its files are read with
 
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
@@ -190,7 +191,9 @@ class FolderSource(Source):
     def load(self, item: Item) -> list[Segment]:
         size = item.info.get("size") or (self.root / item.key).stat().st_size
         if self.max_bytes and size > self.max_bytes:
-            record(item, [Cut("file", 0, size, "bytes", "max_bytes")])
+            from ..documents import unread
+
+            unread(item, "too-big", [Cut("file", 0, size, "bytes", "max_bytes")])
             return [Segment("name", item.key)]
         return self.read(item)
 
@@ -213,6 +216,8 @@ class FolderSource(Source):
         return {"text": text, "original": str(path)}
 
     def plan(self, known: dict[str, str | None], state: dict) -> Plan:
+        if self.documents is not None and state.get("documents") != self.documents:   # read by an older reader
+            known, state = {key: None for key in known}, {}
         # A state saved before record files were read has no "records": plan every file again once.
         stats = state.get("stats", {}) if "records" in state or not self.structured else {}
         record_keys: dict[str, list[str]] = state.get("records", {})
@@ -262,7 +267,10 @@ class FolderSource(Source):
         left_out = {"excluded": _left_out(excluded, f"sources.{self.name}.exclude", self.exclude),
                     "unreadable": _left_out(unreadable),
                     "skipped as keys or passwords": _left_out(secret, f"sources.{self.name}.read_secret_files")}
-        return Plan(upserts, removed, {"stats": seen, "records": records_now, "left_out": left_out}, len(upserts))
+        state = {"stats": seen, "records": records_now, "left_out": left_out}
+        if self.documents is not None:
+            state["documents"] = self.documents
+        return Plan(upserts, removed, state, len(upserts))
 
 
 EXAMPLES = 5
