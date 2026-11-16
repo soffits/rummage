@@ -165,3 +165,27 @@ def test_media_go_out_in_parallel_and_the_arrived_ones_are_kept():
     with pytest.raises(I.EmbedUnreachable):
         I._embed_media(Slots(), segments, "v")
     assert [s.vectors.get("v") is not None for s in segments] == [True, True, False, True]
+
+
+def test_a_local_embedder_that_died_is_started_again(monkeypatch):
+    started = []
+
+    class Server:
+        has_media, threads = False, 2
+
+        def __init__(self, *a, **k):
+            self.process = type("P", (), {"poll": lambda self: None})()
+            started.append(self)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(I, "open_embedder", Server)
+    embedders = I.Embedders(None, PROFILE, 2, 10, None)
+    first = embedders.get(False)
+    assert embedders.get(False) is first
+    first.process = type("P", (), {"poll": lambda self: -9})()   # killed, out of memory on a huge picture say
+    assert embedders.get(False) is not first and len(started) == 2

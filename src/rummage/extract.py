@@ -496,13 +496,19 @@ def names_text(names: list[str]) -> str:
     return "\n".join(names)
 
 
+PICTURE_SIDE = 2000   # pixels on the long side of a picture ffmpeg converts: the models look at far fewer
+
+
 def to_png(raw: bytes, ffmpeg: str | None = None, flatten: bool = True) -> bytes:
-    """The first frame of any image or video ffmpeg reads, as PNG, transparency flattened onto white."""
+    """The first frame of any image or video ffmpeg reads, as PNG at most PICTURE_SIDE pixels on its long side,
+    transparency flattened onto white."""
     ffmpeg = ffmpeg or shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("this picture needs ffmpeg to be read")
-    graph = ("color=white,format=rgb24[bg];[bg][0:v]scale2ref[bg2][fg];[bg2][fg]overlay=shortest=1,format=rgb24"
-             if flatten else "format=rgb24")
+    fit = f"scale=w='min({PICTURE_SIDE},iw)':h='min({PICTURE_SIDE},ih)':force_original_aspect_ratio=decrease"
+    # No explicit [0:v] in the plain case: a HEIC tile grid then comes out whole instead of as its first tile.
+    graph = (f"color=white,format=rgb24[bg];[bg][0:v]scale2ref[bg2][fg];[bg2][fg]overlay=shortest=1,{fit},format=rgb24"
+             if flatten else f"{fit},format=rgb24")
     # From a file: HEIC and TIFF can't be read from a pipe ("Not yet implemented in FFmpeg"), they need to seek.
     with tempfile.TemporaryDirectory(prefix="rummage-") as folder:
         source = Path(folder) / "picture"

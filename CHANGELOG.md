@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.25.2
+
+- Fixed: a huge picture (a 12-megapixel HEIC photo) took one to two and a half minutes to get its vector on a small machine, and could kill the local embedder, after which every picture behind it failed with "Connection refused". Pictures converted by ffmpeg are cut to 2,000 px on the long side first (the models look at far fewer), and a local embedder that died is started again instead of being used dead.
+
 ## 0.25.1
 
 - Fixed: HEIC and TIFF pictures were kept by name as "damaged": ffmpeg can't read them from a pipe ("Not yet implemented in FFmpeg"), only from a file. They go through a file now, so their text is read by OCR and their picture gets a vector (pictures are read once more for this).
