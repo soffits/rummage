@@ -160,6 +160,7 @@ class TokenLibrary:
 
 
 class SeafileSource(Source):
+    item_reader = D.VERSION
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
         self.url = spec["url"].rstrip("/")
@@ -212,8 +213,6 @@ class SeafileSource(Source):
     # plan
 
     def plan(self, known: dict[str, str | None], state: dict) -> Plan:
-        if state.get("documents") != D.VERSION:   # read by an older reader: every file again
-            known, state = {key: None for key in known}, {}
         heads = dict(state.get("heads", {}))
         self._libs = libs = self._list_libraries()
         upserts: list[Item] = []
@@ -229,7 +228,7 @@ class SeafileSource(Source):
                 secret.pop(repo_id, None)
         for lib in libs.values():
             head = lib.head()
-            if head and heads.get(lib.id) == head:
+            if head and heads.get(lib.id) == head and all(known[key] is not None for key in by_repo.get(lib.id, ())):
                 continue
             present = set()
             secret[lib.id] = []
@@ -252,8 +251,7 @@ class SeafileSource(Source):
             heads[lib.id] = head
         skipped = [path for paths in secret.values() for path in paths]
         left_out = {"skipped as keys or passwords": _left_out(skipped, f"sources.{self.name}.read_secret_files")}
-        return Plan(upserts, removed, {"heads": heads, "secret": secret, "left_out": left_out,
-                                       "documents": D.VERSION}, len(upserts))
+        return Plan(upserts, removed, {"heads": heads, "secret": secret, "left_out": left_out}, len(upserts))
 
     # load
 

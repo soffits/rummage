@@ -429,13 +429,14 @@ def eml_text(data: bytes, limits: Limits) -> tuple[str, list[Cut]]:
     return "\n\n".join(p for p in parts if p), cuts
 
 
-def bytes_text(name: str, data: bytes, limits: Limits) -> tuple[str | None, list[Cut]]:
+def bytes_text(name: str, data: bytes, limits: Limits, kind: str | None = None) -> tuple[str | None, list[Cut]]:
     """The text of a document given as bytes (text, HTML, Office/OpenDocument, older Office, iWork, a notebook, PDF,
     RTF, EPUB, a saved mail) cut to the limits, and what was cut; None for other kinds. Raises
-    `legacy_office.Locked` for an encrypted Office file."""
-    kind = kind_of(name)
-    if sniffable(name) and is_text(data):
-        kind = "text"
+    `legacy_office.Locked` for an encrypted Office file. `kind`: the kind the caller found from the content."""
+    if kind is None:
+        kind = kind_of(name)
+        if sniffable(name) and is_text(data):
+            kind = "text"
     cuts: list[Cut] = []
     if kind == "text":
         text = decode(data)

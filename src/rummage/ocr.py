@@ -21,7 +21,8 @@ MAX_SIDE = 2000        # pixels on the long side a picture is read at; more cost
 MIN_SCORE = 0.5        # a reading less sure than this is left out
 RETRY_BELOW = 0.8      # a line read less surely than this is read again with the Korean model
 PNG = b"\x89PNG\r\n\x1a\n"
-THREADS = 2            # CPU threads OCR uses (`[runtime] ocr_threads`); ONNX Runtime would otherwise take every core
+# CPU threads OCR uses: a reading run's share of `[runtime] background_threads`. ONNX Runtime would take every core.
+THREADS = 2
 
 
 class Undecodable(ValueError):

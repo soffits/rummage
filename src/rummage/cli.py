@@ -43,12 +43,12 @@ from . import progress as P
 from . import runtime as R
 from . import switch
 from . import text as T
-from .indexer import Busy, Embedders, embed_models, index_source, lock
+from .indexer import Busy, Embedders, embed_models, index_source, lock, watched
 from .search import Searcher
 from .query import meaning_vector
 from .limits import describe
 from .secrets import masked_total, shown
-from .sources import available, build, detected, found, load_type
+from .sources import available, build, detected, found
 from .store import Ambiguous, NotFound, Scope, Store, timestamp
 
 
@@ -100,10 +100,11 @@ def offer_found(cfg: C.Config) -> None:
             print(switched_on(name))
 
 
-def _embedders(cfg: C.Config, store: Store, profile: M.Profile | None, log) -> Embedders | None:
+def _embedders(cfg: C.Config, store: Store, profile: M.Profile | None, log, reading: bool) -> Embedders | None:
     if profile is None:
         return None
-    e = Embedders(_runtime(cfg), profile, cfg.threads, cfg.nice, cfg.log_dir / "llama-server.log", cfg.max_threads,
+    threads, most = (cfg.reading_threads, 0) if reading else (cfg.vector_threads, cfg.vector_max_threads)
+    e = Embedders(_runtime(cfg), profile, threads, cfg.nice, cfg.log_dir / "llama-server.log", most,
                   accelerator=cfg.embedder_url, warn=log)
     if e.reference is None and store.meta(f"reference:{profile.version}"):
         e.reference = json.loads(store.meta(f"reference:{profile.version}"))
@@ -123,12 +124,15 @@ def cmd_index(cfg: C.Config, args) -> int:
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
     opened: list[Embedders] = []
     marks, held, everything = memory.holds(cfg, memory.load(cfg.data_dir))
-    ocr.configure(cfg.ocr_threads)
-    skipped = None   # why this run left the work to another one
+    ocr.configure(cfg.reading_threads)
+    skipped = watched(cfg.data_dir)   # why this run left the work to another one
+    if skipped:
+        _eprint(f"skipped: {skipped}")
     try:
-        if not args.embed_only and everything:
+        to_read = skipped is None and not args.embed_only
+        if to_read and everything:
             log("reading is paused (`rummage resume index`); what changes meanwhile is read afterwards")
-        elif not args.embed_only:
+        elif to_read:
             try:
                 with lock(cfg.data_dir, "index", wait=args.wait):
                     if args.rebuild and cfg.index_path.exists():
@@ -137,8 +141,8 @@ def cmd_index(cfg: C.Config, args) -> int:
                     store = Store(cfg.index_path)
                     try:
                         active, building = switch.reconcile(store, cfg.models, cfg.model)
-                        live = [e for e in (_embedders(cfg, store, active, log), _embedders(cfg, store, building, log))
-                                if e is not None]
+                        live = [e for e in (_embedders(cfg, store, active, log, True),
+                                            _embedders(cfg, store, building, log, True)) if e is not None]
                         opened += live
                         again = store.unreadable(building.version, store.model, building.encoders) if building else {}
                         reading = P.Run(cfg.data_dir, "read")
@@ -152,7 +156,7 @@ def cmd_index(cfg: C.Config, args) -> int:
             except Busy as busy:
                 # The run that is reading (a watch, another index) makes the vectors of what it reads; a second
                 # embedder beside it would only compete with it, and with searches, for the same cores.
-                log(f"skipped: {busy}, and it makes the vectors too")
+                _eprint(f"skipped: {busy}, and it makes the vectors too")
                 if args.wait:
                     return E.INDEX_BUSY
                 skipped = str(busy)
@@ -162,7 +166,8 @@ def cmd_index(cfg: C.Config, args) -> int:
                     store = Store(cfg.index_path)
                     try:
                         active, building = switch.reconcile(store, cfg.models, cfg.model)
-                        pair = (_embedders(cfg, store, active, log), _embedders(cfg, store, building, log))
+                        pair = (_embedders(cfg, store, active, log, False),
+                                _embedders(cfg, store, building, log, False))
                         opened += [e for e in pair if e is not None]
                         making = P.Run(cfg.data_dir, "embed", model=active.name if active else None)
                         problem = None

@@ -9,7 +9,7 @@ way, in this package's extras or in a separate distribution:
 
 A source class is built as `cls(name, spec, data_dir)` and answers two questions. `plan` says what changed since the
 index last saw it (items to add or replace, keys to drop, and the state to remember once they're in); `load` reads
-one item's segments. Sources never write to what they read.
+one item's segments. An item whose stored fingerprint is None must be read again whatever its own fingerprint. Sources never write to what they read.
 """
 
 from __future__ import annotations
@@ -37,6 +37,8 @@ class Source:
     media = False                  # needs the image encoders
     reader = 0                     # how the source reads its data: a saved state from another reader is dropped,
     #                                so everything is planned again once
+    item_reader: int | None = None # how it reads each item: kept on the item (`info.reader`); an item read by another
+    #                                version is read again, whenever a run gets to it
 
     def __init__(self, name: str, spec: dict, data_dir: Path):
         self.name = name

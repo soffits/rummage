@@ -6,6 +6,7 @@
     [runtime]
     threads = 2                               # CPU threads for llama.cpp
     # max_threads = "auto"                    # use up to this many (auto: cores - 1) while the machine is idle
+    # background_threads = "auto"             # all background work together (auto: cores - 1); searches not counted
     nice = 10
     # llama_server = "/usr/bin/llama-server"  # instead of the pinned build
 
@@ -53,8 +54,8 @@ class Config:
     path: Path
     data_dir: Path
     threads: int = 2
-    ocr_threads: int = 2       # threads OCR may use while a source is read (default: `threads`)
     max_threads: int = 0
+    background_threads: int = 1   # what reading and making vectors may use together; queries are not counted
     nice: int = 10
     llama_server: str | None = None
     embedder_url: str | None = None
@@ -74,6 +75,21 @@ class Config:
     def log_dir(self) -> Path:
         return self.data_dir / "logs"
 
+    # A reading run and a vector-making run may go at once (a watch keeps one of each), so `background_threads` is
+    # split: making vectors gets `threads` (up to `max_threads` on idle cores), reading the rest. Inside a reading
+    # run OCR and the picture embedder take turns, so both get the whole reading share.
+    @property
+    def vector_threads(self) -> int:
+        return max(1, min(self.threads, self.background_threads - 1 if self.background_threads > 1 else 1))
+
+    @property
+    def vector_max_threads(self) -> int:
+        return min(self.max_threads, self.background_threads)
+
+    @property
+    def reading_threads(self) -> int:
+        return max(1, self.background_threads - self.vector_threads)
+
 
 def _base(xdg: str, windows: str, fallback: str) -> Path:
     if os.environ.get(xdg):
@@ -87,6 +103,10 @@ def _max_threads(value) -> int:
     if value == "auto":
         return max(1, (os.cpu_count() or 2) - 1)
     return int(value or 0)
+
+
+def _background_threads(value) -> int:
+    return _max_threads(value if value not in (None, 0) else "auto")
 
 
 def default_path() -> Path:
@@ -108,8 +128,8 @@ def load(path: Path | None = None) -> Config:
         path=path,
         data_dir=data_dir,
         threads=int(runtime.get("threads", 2)),
-        ocr_threads=int(runtime.get("ocr_threads", runtime.get("threads", 2))),
         max_threads=_max_threads(runtime.get("max_threads", 0)),
+        background_threads=_background_threads(runtime.get("background_threads")),
         nice=int(runtime.get("nice", 10)),
         llama_server=os.environ.get("RUMMAGE_LLAMA_SERVER") or runtime.get("llama_server"),
         embedder_url=(data.get("embedder") or {}).get("url"),

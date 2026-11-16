@@ -113,6 +113,7 @@ def test_a_second_index_run_leaves_the_work_to_the_one_reading(tmp_path, monkeyp
     import json
 
     from rummage import cli
+    from rummage import indexer as I
     from rummage.indexer import lock
 
     (tmp_path / "notes").mkdir()
@@ -125,3 +126,35 @@ def test_a_second_index_run_leaves_the_work_to_the_one_reading(tmp_path, monkeyp
         out = json.loads(capsys.readouterr().out)
         assert "another run holds the index lock" in out["skipped"] and out["sources"] == {}
         assert cli.main(["--config", str(cfg), "index", "--wait", "0.2", "-q"]) != 0   # asked to wait: says busy
+        capsys.readouterr()
+    # A run started beside a running watch (a scheduled backstop, someone's manual run) leaves the work to the
+    # watch even between its batches, when no lock of the watch's own runs is held; the watch's runs go on.
+    with lock(tmp_path / "data", "watch"):
+        assert cli.main(["--config", str(cfg), "index", "--json", "-q"]) == 0
+        captured = capsys.readouterr()
+        assert "rummage watch keeps this index current" in json.loads(captured.out)["skipped"]
+        assert captured.err.count("\n") == 1 and captured.err.startswith("skipped: ")
+        monkeypatch.setenv(I.WATCH_RUN, "1")
+        assert cli.main(["--config", str(cfg), "index", "--json", "--no-embed", "-q"]) == 0
+        assert "notes" in json.loads(capsys.readouterr().out)["sources"]
+
+
+def test_background_work_leaves_a_core_for_searches(tmp_path, monkeypatch):
+    # Reading (OCR, picture vectors) and making vectors run at once in a watch; together they stay within
+    # `background_threads` (cores - 1 by default), which searches don't count against.
+    from rummage import config as C
+
+    monkeypatch.setattr(C.os, "cpu_count", lambda: 4)
+
+    def load(runtime: str) -> C.Config:
+        path = tmp_path / "config.toml"
+        path.write_text(f"data_dir = '{tmp_path}'\n[runtime]\n{runtime}\n", encoding="utf-8")
+        return C.load(path)
+
+    assert load("threads = 2").background_threads == 3
+    for runtime, vectors, reading in [("threads = 2", 2, 1), ("threads = 1", 1, 2), ("threads = 8", 2, 1),
+                                      ("threads = 2\nbackground_threads = 6", 2, 4),
+                                      ("threads = 2\nbackground_threads = 1", 1, 1)]:   # one each at the least
+        cfg = load(runtime)
+        assert (cfg.vector_threads, cfg.reading_threads) == (vectors, reading), runtime
+    assert load("threads = 2\nmax_threads = 8").vector_max_threads == 3

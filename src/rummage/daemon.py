@@ -34,7 +34,7 @@ from pathlib import Path
 import numpy as np
 
 from . import config as C
-from .indexer import Busy, lock
+from .indexer import Busy, held, lock
 
 SOCKET_NAME = "query.sock"
 
@@ -147,11 +147,7 @@ class Snapshots:
 
 def running(data_dir: Path) -> bool:
     """Whether a daemon holds this data directory's daemon lock (it may still be loading the model)."""
-    try:
-        with lock(data_dir, "daemon"):
-            return False
-    except Busy:
-        return True
+    return held(data_dir, "daemon")
 
 
 def ensure(config: Path, data_dir: Path, idle_minutes: float, log: Path) -> subprocess.Popen | bool:

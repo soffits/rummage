@@ -382,8 +382,12 @@ class Store:
         self.db.commit()
         return counts
 
-    def fingerprints(self, source: str) -> dict[str, str | None]:
-        return dict(self.db.execute("SELECT key, fingerprint FROM items WHERE source = ?", (source,)))
+    def fingerprints(self, source: str, reader: int | None = None) -> dict[str, str | None]:
+        """Each item's fingerprint; None for an item another `reader` version read (`info.reader`), so it is read
+        again."""
+        rows = self.db.execute("SELECT key, fingerprint, json_extract(info, '$.reader') FROM items WHERE source = ?",
+                               (source,))
+        return {key: fingerprint if reader is None or read_by == reader else None for key, fingerprint, read_by in rows}
 
     def remove(self, source: str, key: str) -> None:
         row = self.db.execute("SELECT id FROM items WHERE source = ? AND key = ?", (source, key)).fetchone()

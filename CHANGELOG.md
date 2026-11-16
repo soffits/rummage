@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.23.0
+
+- Background work stays within one thread budget, `[runtime] background_threads` (default: cores - 1), so a re-read with OCR leaves a core to searches: making vectors gets `threads`, reading (OCR and picture vectors) the rest. It replaces `ocr_threads`, which let OCR and two embedders add up past the cores.
+- Fixed: a `rummage index` started beside `rummage watch` (a scheduled backstop, a manual run) could still read between the watch's batches, with its own embedder and OCR beside the watch's. While a watch runs, an `index` it didn't start leaves the work to it and prints one line saying so.
+- Fixed: after the 0.21.0 upgrade, a file source whose re-read hit one failing file, or was interrupted, read every file again on each run. Which version read an item is now kept on the item, so a re-read resumes where it stopped and a failing file is the only one tried again. Files read by 0.21.0 or 0.22.0 are read once more (cheaply: OCR results and vectors are reused).
+- Fixed: Keynote decks (`.key`) were skipped as key files and so missing from the index, also by name. They are read now; a key file named `.key` still isn't, since its private key block keeps it out by content.
+- Fixed: a file whose content isn't its extension's format (RTF saved as `.doc`, which Word does, or a broken `.docx`) failed to read. It is read by its content instead: RTF as RTF, other text as text, anything else kept by name as "damaged".
+
 ## 0.22.0
 
 - Searches stay fast on a busy machine: the query daemon keeps the vectors in memory and scores the query itself, so a search no longer reads every vector from the index file, which took seconds once the file dropped out of the page cache (1.3 s cold for 40,000 vectors, now 0.1 s). The vectors in memory are refreshed at most once a minute while indexing runs.

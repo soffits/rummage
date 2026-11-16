@@ -65,7 +65,8 @@ data_dir = "~/.local/share/rummage"   # index, runtime files, logs (Windows defa
 [runtime]
 threads = 2                           # CPU threads for llama.cpp
 # max_threads = "auto"                # while indexing, use up to cores - 1 when the machine is otherwise idle
-# ocr_threads = 2                     # CPU threads for OCR while reading (default: threads)
+# background_threads = "auto"         # reading (OCR, pictures) and making vectors together (auto: cores - 1);
+#                                     # vectors get `threads`, reading the rest; searches aren't counted
 nice = 10
 
 [embedder]
@@ -158,6 +159,7 @@ rummage status --line      # one short line while indexing is unfinished or brok
 rummage doctor             # runtime files, model vectors, freshness; exit 1 on a problem
 rummage models             # embedding models; `models use NAME` switches, `models compare NAME` compares first
 rummage watch              # index changes as they happen (install the `watch` extra for file events)
+                           # while it runs, an `index` it didn't start leaves the work to it
 rummage service install    # run watch at login: systemd user unit, launchd agent or Windows scheduled task
 rummage export DIR         # the index as plain files; `rummage import DIR` fills an empty index from them
 rummage daemon --idle-minutes 30   # keep the query model loaded; searches use it automatically

@@ -25,8 +25,8 @@ from .sources.folder import PRIVATE_KEY
 from .sources.markdown import note_segments
 from .store import Item, Segment
 
-# How files are read: sources keep it in their state, and a source whose state names an older one reads every file
-# again (vectors and OCR results are reused, so that costs only the reading).
+# How files are read, kept on each item (`info.reader`): an item read by another version is read again (vectors and OCR
+# results are reused, so that costs only the reading).
 VERSION = 1
 MARKDOWN = {".md", ".markdown"}
 OCR_SIDE = 2000                      # pixels on a rendered page's long side when its text is read
@@ -44,6 +44,10 @@ UNREAD = {
     "empty": "no text in it, OCR included",
     "remote-recording": "recordings are read only from local folders",
 }
+
+# How a container format's files start: a file named like one that doesn't is read by its content instead (a `.key`
+# that is a key file rather than a Keynote deck, a `.doc` that is really RTF or HTML).
+SIGNATURES = {"office": b"PK", "iwork": b"PK", "epub": b"PK", "legacy-office": b"\xd0\xcf\x11\xe0"}
 
 # The extra that installs what a kind of file needs.
 EXTRAS = {"legacy-office": "office", "ocr": "ocr", "pdf-scans": "pdf-scans"}
@@ -131,14 +135,17 @@ def _read(item: Item, name: str, blob: Blob, how: Reading, name_line: str) -> li
     if suffix in MARKDOWN and not limits.too_big("text", blob.size):
         return note_segments(item, blob.read().decode("utf-8", errors="replace"), limits, name_line)
     segments = [Segment("name", name_line)]
-    if X.sniffable(name):
+    signature = SIGNATURES.get(kind)
+    sniff = X.sniffable(name) or (signature is not None and not blob.head(len(signature)).startswith(signature))
+    if sniff:
         if cut := limits.too_big("text", blob.size):
             unread(item, "too-big", [cut])
             return segments
-        if not X.is_text(blob.head(X.SNIFF_BYTES)):
-            unread(item, "format")
+        head = blob.head(X.SNIFF_BYTES)
+        if not X.is_text(head):
+            unread(item, "format" if signature is None else "damaged")
             return segments
-        kind = item.info["type"] = "text"
+        kind = item.info["type"] = "rtf" if head.startswith(b"{\\rtf") else "text"
     if kind == "name":
         unread(item, "format")
         return segments
@@ -176,7 +183,7 @@ def _read(item: Item, name: str, blob: Blob, how: Reading, name_line: str) -> li
     if kind == "image":
         return segments + picture(item, name, data, how)
     try:
-        body, cuts = X.bytes_text(name, data, limits)
+        body, cuts = X.bytes_text(name, data, limits, kind)
     except legacy_office.Locked:
         unread(item, "password", [Cut(f"{kind} file", 0, None, "files", None, "it needs a password to open")])
         return segments
