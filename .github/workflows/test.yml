@@ -17,4 +17,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv run --with pytest --extra archives --extra dsh-sessions --extra watch pytest -q
+      - run: uv run --with pytest --extra archives --extra dsh-sessions --extra watch --extra office --extra pdf-scans pytest -q
+
+  ocr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run --with pytest --extra ocr pytest -q tests/test_ocr.py

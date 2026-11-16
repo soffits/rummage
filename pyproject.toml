@@ -1,6 +1,6 @@
 [project]
 name = "rummage"
-version = "0.20.2"
+version = "0.21.0"
 description = "Local search by meaning and exact words over your files, on your own machine, with EmbeddingGemma 2 on llama.cpp"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -17,6 +17,8 @@ seafile = ["py7zr>=0.22", "rarfile>=4.2"]
 dsh-sessions = ["zstandard>=0.22"]
 watch = ["watchfiles>=1.0"]
 pdf-scans = ["pypdfium2>=5"]
+office = ["olefile>=0.47", "xlrd>=2.0.1"]
+ocr = ["rapidocr>=3.10", "onnxruntime>=1.20"]
 
 [project.entry-points."rummage.sources"]
 markdown = "rummage.sources.markdown:MarkdownSource"

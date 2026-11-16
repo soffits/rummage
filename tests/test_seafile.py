@@ -36,6 +36,9 @@ FILES = {
     "/backup/old.zip": _zip(),
     "/setup.exe": b"MZ" + b"\0" * 100,
     "/backup/logs.tar.gz": _tgz(),
+    "/code/sort.c": b"/* quicksort */\nint partition(int *a, int lo, int hi);\n",
+    "/scans/receipt.png": b"",   # filled in by the test that reads it
+    "/.ssh/id_ed25519": b"-----BEGIN OPENSSH PRIVATE KEY-----\n",
 }
 
 
@@ -84,6 +87,11 @@ class FakeSeafile(BaseHTTPRequestHandler):
                 {"type": "file", "parent_dir": "/", "name": "setup.exe", "id": "o3", "size": 102, "mtime": 1},
                 {"type": "file", "parent_dir": "/backup", "name": "logs.tar.gz", "id": "o4",
                  "size": len(FILES["/backup/logs.tar.gz"]), "mtime": 1},
+                {"type": "file", "parent_dir": "/code", "name": "sort.c", "id": "o5",
+                 "size": len(FILES["/code/sort.c"]), "mtime": 1},
+                {"type": "file", "parent_dir": "/scans", "name": "receipt.png", "id": "o6",
+                 "size": len(FILES["/scans/receipt.png"]), "mtime": 1},
+                {"type": "file", "parent_dir": "/.ssh", "name": "id_ed25519", "id": "o7", "size": 36, "mtime": 1},
             ])
         if self.path.startswith("/api2/repos/r1/file/"):
             path = self.path.split("p=")[1].split("&")[0].replace("%2F", "/")
@@ -151,12 +159,29 @@ def base():
     server.shutdown()
 
 
-def test_seafile_plan_and_load(base):
-    src = SeafileSource("files", {"url": base, "internal_url": base, "token": "secret"})
+def test_seafile_plan_and_load(base, tmp_path, monkeypatch):
+    import numpy as np
+
+    from rummage import documents as D
+    from rummage import extract as X
+
+    FILES["/scans/receipt.png"] = X.png(np.full((20, 30, 3), 255, np.uint8))
+    ocr = type("OCR", (), {"text": lambda self, key, picture: "收据 Receipt total $42.10"})()
+    monkeypatch.setattr(D.Reading, "reader", property(lambda self: ocr))
+    src = SeafileSource("files", {"url": base, "internal_url": base, "token": "secret"}, tmp_path)
     plan = src.plan({}, {})
     items = {i.key: i for i in plan.upserts}
-    assert set(items) == {"r1:/notes/lease.md", "r1:/backup/old.zip", "r1:/setup.exe", "r1:/backup/logs.tar.gz"}
-    assert plan.state == {"heads": {"r1": "c1"}}
+    assert set(items) == {"r1:/notes/lease.md", "r1:/backup/old.zip", "r1:/setup.exe", "r1:/backup/logs.tar.gz",
+                          "r1:/code/sort.c", "r1:/scans/receipt.png"}
+    assert plan.state["heads"] == {"r1": "c1"}
+    assert plan.state["left_out"]["skipped as keys or passwords"]["examples"] == ["Docs/.ssh/id_ed25519"]
+
+    # Source code with an extension no list names is read by its content; a picture gets its image and its text.
+    code = src.load(items["r1:/code/sort.c"])
+    assert "int partition" in code[1].text and items["r1:/code/sort.c"].info["type"] == "text"
+    picture = src.load(items["r1:/scans/receipt.png"])
+    assert [s.kind for s in picture] == ["name", "image", "text"] and "Receipt total" in picture[2].text
+    assert src.media
 
     lease = src.load(items["r1:/notes/lease.md"])
     assert "one cat" in lease[1].text and lease[1].embed[0].startswith("lease")
@@ -167,6 +192,7 @@ def test_seafile_plan_and_load(base):
     assert items["r1:/backup/old.zip"].info["entries"] == 51
 
     assert len(src.load(items["r1:/setup.exe"])) == 1  # name only, never downloaded
+    assert items["r1:/setup.exe"].info["unread"] == "format"
 
     tar = items["r1:/backup/logs.tar.gz"]
     assert "logs/db.log" in src.load(tar)[1].text and "partial" not in tar.info
@@ -188,7 +214,7 @@ def test_seafile_repo_token(base, tmp_path):
     plan = src.plan({}, {})
     items = {i.key: i for i in plan.upserts}
     assert set(items) == {"r2:/notes/lease.md", "r2:/backup/old.zip"}
-    assert plan.state == {"heads": {"r2": "d1"}}
+    assert plan.state["heads"] == {"r2": "d1"}
     lease = items["r2:/notes/lease.md"]
     assert lease.ref == "seafile:Documents/notes/lease.md"
     assert lease.mtime == datetime.fromisoformat("2026-11-05T23:21:58-05:00").timestamp()
@@ -211,7 +237,7 @@ def test_seafile_repo_token(base, tmp_path):
     FakeSeafile.token_files = [dict(TOKEN_LISTING[0], id="o1b")]
     changed = src.plan(known, plan.state)
     assert [i.key for i in changed.upserts] == ["r2:/notes/lease.md"]
-    assert changed.removed == ["r2:/backup/old.zip"] and changed.state == {"heads": {"r2": "d2"}}
+    assert changed.removed == ["r2:/backup/old.zip"] and changed.state["heads"] == {"r2": "d2"}
     assert not any(r.startswith("/api2/") for r in FakeSeafile.requests)  # no account token, no account API
 
     both = SeafileSource("all", {"url": base, "token": "secret", "library_tokens": [token]}).plan({}, {})

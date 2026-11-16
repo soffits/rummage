@@ -15,6 +15,9 @@ User docs: `README.md`. Design and the reasons behind it: `docs/design.md`, `doc
   `compare.py`: `rummage models compare`.
 - `store.py` (SQLite schema), `text.py` (normalisation, CJK tokens, chunking), `search.py` (ranking), `indexer.py`
   (one run, per-item commits, lock), `cli.py`, `daemon.py` (the query daemon), `extract.py` (file bytes to text).
+- `documents.py`: one file's bytes to segments for every source of files (text sniffing, documents, notebooks,
+  pictures and scanned pages with OCR from `ocr.py`, recordings) and why a file kept only its name;
+  `legacy_office.py` (.doc/.xls/.ppt) and `iwork.py` (Pages, Keynote, Numbers) are its format readers.
 - `sources/`: the source base and entry-point discovery (`rummage.sources` group), the core types `markdown` and `files`
   (folder walking in `folder.py`). `plugins/<name>/`: service-specific source types (seafile, dsh-sessions, hermes,
   telegram-stickers), each registered as an entry point in `pyproject.toml`, with its own extra when it needs packages.
@@ -32,8 +35,9 @@ User docs: `README.md`. Design and the reasons behind it: `docs/design.md`, `doc
 
 ## Checks and releases
 
-- `uv run --with pytest --extra archives --extra dsh-sessions --extra watch pytest -q` runs the tests (no model needed). CI runs them on pushes
-  to `main` and on pull requests.
+- `uv run --with pytest --extra archives --extra dsh-sessions --extra watch --extra office --extra pdf-scans pytest -q` runs
+  the tests (no model needed); `uv run --with pytest --extra ocr pytest -q tests/test_ocr.py` runs real OCR (downloads
+  its models once). CI runs both on pushes to `main` and on pull requests.
 - A real run needs the model: `rummage setup`, then `rummage index` and `rummage search` against a small config.
 - Release: update `CHANGELOG.md`, bump `version` in `pyproject.toml` and `src/rummage/__init__.py`, merge to `main`,
   then push the tag `vX.Y.Z`; the `install` workflow then installs it on each system and runs a real index and search.

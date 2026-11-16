@@ -36,3 +36,7 @@ MIT License:
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
+
+The legacy Office files in tests/fixtures/office (testWORD.doc, testEXCEL.xls, testPPT.ppt and their
+"_protected_passtika" variants) are test documents from Apache Tika (https://github.com/apache/tika), used under the
+Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0). Copyright The Apache Software Foundation.

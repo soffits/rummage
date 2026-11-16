@@ -1,6 +1,7 @@
 """Text out of file bytes, without writing anything to disk: plain text, Office Open XML and OpenDocument (zip + XML),
-HTML, PDF (pypdf; scanned pages rendered with pypdfium2 when installed), RTF, EPUB, saved mail (.eml), and the list
-of names inside archives.
+the older binary Office formats (`legacy_office.py`), Apple iWork (`iwork.py`), Jupyter notebooks, HTML, PDF (pypdf;
+scanned pages rendered with pypdfium2 when installed), RTF, EPUB, saved mail (.eml), and the list of names inside
+archives.
 
 Each reader takes a seekable binary file object, so an archive's listing can be read over HTTP range requests
 without fetching the whole file.
@@ -21,6 +22,8 @@ from html.parser import HTMLParser
 from pathlib import PurePosixPath
 from xml.etree import ElementTree
 
+from . import iwork
+from . import legacy_office
 from .limits import Cut, Limits
 
 # pypdf logs each repair it makes to a malformed PDF as a warning, on stderr when nothing else handles it; the text it
@@ -31,6 +34,9 @@ TEXT = {".md", ".markdown", ".txt", ".text", ".rst", ".org", ".tex", ".csv", ".t
         ".yml", ".toml", ".ini", ".xml", ".srt", ".vtt", ".typ"}
 HTML = {".html", ".htm", ".xhtml"}
 OFFICE = {".docx", ".pptx", ".xlsx", ".odt", ".odp", ".ods", ".sdoc"}
+LEGACY_OFFICE = legacy_office.SUFFIXES
+IWORK = iwork.SUFFIXES
+NOTEBOOK = {".ipynb"}
 PDF = {".pdf"}
 IMAGES = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".heic", ".heif", ".tif", ".tiff"}
 NATIVE_IMAGES = {".jpg", ".jpeg", ".png", ".bmp"}   # read by the model's own image loader as they are
@@ -63,6 +69,12 @@ def kind_of(name: str) -> str:
         return "html"
     if s in OFFICE:
         return "office"
+    if s in LEGACY_OFFICE:
+        return "legacy-office"
+    if s in IWORK:
+        return "iwork"
+    if s in NOTEBOOK:
+        return "notebook"
     if s in PDF:
         return "pdf"
     if s in ARCHIVES:
@@ -202,6 +214,27 @@ MIN_PAGE_TEXT = 200
 PAGE_BUDGET = 280            # image tokens for a rendered page: enough to read print
 
 
+def notebook_text(data: bytes) -> str:
+    """A Jupyter notebook's cells in order: Markdown and code as written, then each code cell's text output (printed
+    lines, plain-text results and errors); pictures and HTML outputs are left out."""
+    import json
+
+    def joined(value) -> str:
+        return "".join(value) if isinstance(value, list) else str(value or "")
+
+    parts = []
+    for cell in json.loads(decode(data)).get("cells", []):
+        parts.append(joined(cell.get("source")).strip())
+        for output in cell.get("outputs") or []:
+            if "text" in output:
+                parts.append(joined(output["text"]).strip())
+            elif "text/plain" in (output.get("data") or {}):
+                parts.append(joined(output["data"]["text/plain"]).strip())
+            elif output.get("output_type") == "error":
+                parts.append(f"{output.get('ename', '')}: {output.get('evalue', '')}")
+    return "\n\n".join(p for p in parts if p)
+
+
 def pdf_pages(fh, limits: Limits) -> tuple[list[str], int, list[Cut]]:
     """Each page's text, up to `max_pdf_pages` pages and `max_chars` characters in all; the PDF's page count; what
     the limits cut."""
@@ -234,18 +267,26 @@ def pdf_pages(fh, limits: Limits) -> tuple[list[str], int, list[Cut]]:
 
 def render_page(data: bytes, number: int, budget: int) -> bytes:
     """Page `number` (from 1) of a PDF as PNG bytes, sized to fill `budget` of the model's image tokens."""
-    import pypdfium2   # optional: rummage[pdf-scans]
-
     from .media import frame_size
+
+    return _render(data, number, lambda width, height: (frame_size(int(width), int(height), budget)
+                                                        or (int(width), int(height)))[0] / width)
+
+
+def page_picture(data: bytes, number: int, longest: int) -> bytes:
+    """Page `number` (from 1) of a PDF as PNG bytes, `longest` pixels on its long side (for reading its text)."""
+    return _render(data, number, lambda width, height: longest / max(width, height))
+
+
+def _render(data: bytes, number: int, scale) -> bytes:
+    import pypdfium2   # optional: rummage[pdf-scans]
 
     document = pypdfium2.PdfDocument(data)
     try:
         page = document[number - 1]
         width, height = page.get_size()
-        size = frame_size(int(width), int(height), budget) or (int(width), int(height))
-        bitmap = page.render(scale=size[0] / width, rev_byteorder=True)
-        pixels = bitmap.to_numpy()[:, :, :3]
-        return png(pixels)
+        bitmap = page.render(scale=scale(width, height), rev_byteorder=True)
+        return png(bitmap.to_numpy()[:, :, :3])
     finally:
         document.close()
 
@@ -379,15 +420,19 @@ def eml_text(data: bytes, limits: Limits) -> tuple[str, list[Cut]]:
         if len(payload) > limits.max_attachment_bytes:
             cuts.append(Cut(f"attachment {name}", 0, len(payload), "bytes", "max_attachment_bytes"))
             continue
-        text, clipped = bytes_text(name, payload, limits)
+        try:
+            text, clipped = bytes_text(name, payload, limits)
+        except (legacy_office.Locked, ImportError):   # encrypted, or its reader's extra isn't installed
+            text, clipped = None, []
         parts.append(f"Attachment: {name}" + (f"\n{text}" if text else ""))
         cuts += clipped
     return "\n\n".join(p for p in parts if p), cuts
 
 
 def bytes_text(name: str, data: bytes, limits: Limits) -> tuple[str | None, list[Cut]]:
-    """The text of a document given as bytes (text, HTML, Office/OpenDocument, PDF, RTF, EPUB, a saved mail) cut to
-    the limits, and what was cut; None for other kinds."""
+    """The text of a document given as bytes (text, HTML, Office/OpenDocument, older Office, iWork, a notebook, PDF,
+    RTF, EPUB, a saved mail) cut to the limits, and what was cut; None for other kinds. Raises
+    `legacy_office.Locked` for an encrypted Office file."""
     kind = kind_of(name)
     if sniffable(name) and is_text(data):
         kind = "text"
@@ -398,6 +443,15 @@ def bytes_text(name: str, data: bytes, limits: Limits) -> tuple[str | None, list
         text = html_text(data)
     elif kind == "office":
         text = office_text(io.BytesIO(data))
+    elif kind == "legacy-office":
+        text = legacy_office.text(suffix(name), data)
+    elif kind == "iwork":
+        text = iwork.text(io.BytesIO(data))
+        if not text and (preview := iwork.preview(io.BytesIO(data))):
+            pages, _, cuts = pdf_pages(io.BytesIO(preview), limits)
+            text = "\n\n".join(pages).strip()
+    elif kind == "notebook":
+        text = notebook_text(data)
     elif kind == "pdf":
         pages, _, cuts = pdf_pages(io.BytesIO(data), limits)
         text = "\n\n".join(pages).strip()

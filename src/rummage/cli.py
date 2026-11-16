@@ -761,12 +761,22 @@ def cmd_status(cfg: C.Config, args) -> int:
 
 def limit_notes(sources: dict) -> list[str]:
     """One sentence per source whose items were indexed in part or whose files were left out, with the settings."""
+    from .documents import UNREAD
+
     notes = []
     for name, entry in sources.items():
         if entry.get("partial_items"):
-            notes.append(f"{name}: {entry['partial_items']} items indexed only in part "
-                         f"({entry.get('name_only_items') or 0} of them by name only); settings that lift the limits: "
-                         f"{', '.join(entry.get('settings') or [])}; `rummage get <ref> --original` reads a whole file")
+            settings = f"; settings that lift the limits: {', '.join(entry['settings'])}" if entry.get("settings") else ""
+            notes.append(f"{name}: {entry['partial_items']} items indexed only in part{settings}; "
+                         "`rummage get <ref> --original` reads a whole file")
+        if name_only := entry.get("name_only"):
+            parts = []
+            for why, reason in sorted(name_only["reasons"].items(), key=lambda kv: -kv[1]["count"]):
+                types = ", ".join(f"{t} {n}" for t, n in list(reason["types"].items())[:6])
+                label = UNREAD.get(why, f"read before rummage kept reasons (`rummage index --reload -s {name}`)"
+                                   if why == "unrecorded" else why)
+                parts.append(f"{reason['count']} {label} ({types})")
+            notes.append(f"{name}: {name_only['count']} items found only by name: " + "; ".join(parts))
         for why, left in (entry.get("left_out") or {}).items():
             examples = ", ".join(left.get("examples") or [])
             patterns = f" ({', '.join(left['patterns'])})" if left.get("patterns") else ""

@@ -35,7 +35,7 @@ def _pdf(password: str | None = None) -> bytes:
 
 def _folder(tmp_path):
     """A notes folder with a long note, a zip with many names, a file over the text byte limit, a dotfile, a note
-    holding a token and a PDF that needs a password; and a config with small limits."""
+    holding a token, a PDF that needs a password and a binary file; and a config with small limits."""
     root = tmp_path / "docs"
     root.mkdir()
     (root / "long.txt").write_text("alpha beta gamma. " * 400, encoding="utf-8")       # 7200 chars
@@ -46,6 +46,7 @@ def _folder(tmp_path):
     (root / ".secret-notes.md").write_text("hidden", encoding="utf-8")
     (root / "keys.md").write_text(f"deploy key for the server: {TOKEN}\n", encoding="utf-8")
     (root / "locked-statement.pdf").write_bytes(_pdf(password="open sesame"))
+    (root / "firmware.bin").write_bytes(bytes(range(256)) * 4)
     cfg = tmp_path / "config.toml"
     cfg.write_text(
         f"data_dir = '{tmp_path / 'data'}'\n[sources.docs]\ntype = 'files'\nroot = '{root}'\nmax_chars = 1000\n"
@@ -102,7 +103,15 @@ def test_partial_items_are_recorded_shown_and_counted(tmp_path, capsys):
     code, out = _run(capsys, "--config", str(cfg), "status", "--json")
     status = json.loads(out)
     entry = status["sources"]["docs"]
-    assert entry["partial_items"] == 4 and entry["name_only_items"] == 2
+    assert entry["partial_items"] == 4
+    # Found by name only, each with its reason and file types: the counts come from what the index holds.
+    assert entry["name_only"]["count"] == 3
+    reasons = entry["name_only"]["reasons"]
+    assert {why: r["types"] for why, r in reasons.items()} == {
+        "too-big": {".log": 1}, "password": {".pdf": 1}, "format": {".bin": 1}}
+    assert reasons["password"]["examples"] == ["locked-statement.pdf"]
+    assert any("3 items found only by name" in n and "1 needs a password to open (.pdf 1)" in n
+               for n in status["notes"])
     assert "sources.docs.max_chars" in entry["settings"] and None not in entry["settings"]
     assert entry["left_out"]["excluded"]["count"] == 1
     assert entry["left_out"]["excluded"]["examples"] == [".secret-notes.md"]

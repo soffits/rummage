@@ -62,10 +62,10 @@ class MarkdownSource(FolderSource):
         return note_segments(item, raw, self.limits)
 
 
-def note_segments(item: Item, raw: str, limits: Limits) -> list[Segment]:
-    """A Markdown note's segments: a name line (path, title, aliases, tags) and its passages, each embedded with the
-    title and the heading it sits under. Sets the item's title and info from the frontmatter; a body over
-    `max_chars` is cut, and the cut recorded."""
+def note_segments(item: Item, raw: str, limits: Limits, name: str | None = None) -> list[Segment]:
+    """A Markdown note's segments: a name line (`name`, else the item's key; title, aliases, tags) and its passages,
+    each embedded with the title and the heading it sits under. Sets the item's title and info from the frontmatter;
+    a body over `max_chars` is cut, and the cut recorded."""
     meta, body = _frontmatter(raw)
     body, cuts = limits.clip(body)
     base = len(raw) - len(body)
@@ -73,13 +73,13 @@ def note_segments(item: Item, raw: str, limits: Limits) -> list[Segment]:
     aliases = _as_list(meta.get("aliases") or meta.get("alias"))
     tags = _as_list(meta.get("tags") or meta.get("tag"))
     item.title = title
-    item.info = {**item.info, "path": item.key}
+    item.info = {"path": item.key, **item.info}
     record(item, cuts)
     if aliases:
         item.info["aliases"] = aliases
     if tags:
         item.info["tags"] = tags
-    name_line = " ".join([item.key, title, *aliases, *("#" + t for t in tags)])
+    name_line = " ".join([name or item.key, title, *aliases, *("#" + t for t in tags)])
     segments = [Segment("name", name_line)]
     headings = [(m.start(), len(m.group(1)), m.group(2)) for m in _HEADING.finditer(body)]
     label = title + (f" ({', '.join(aliases)})" if aliases else "")

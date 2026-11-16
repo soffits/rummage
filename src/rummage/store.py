@@ -744,6 +744,30 @@ class Store:
     def states(self) -> dict[str, dict]:
         return {source: json.loads(value) for source, value in self.db.execute("SELECT source, value FROM source_state")}
 
+    NAME_ONLY_EXAMPLES = 3
+
+    def name_only(self) -> dict[str, dict]:
+        """Per source, the items found only by their name (no passage or media of their own): how many, and for each
+        reason (`info.unread`; "unrecorded" for items read before reasons were kept) how many, of which file
+        types, with a few examples."""
+        out: dict[str, dict] = {}
+        for source, key, ref, why in self.db.execute(
+                "SELECT source, key, ref, json_extract(info, '$.unread') FROM items i WHERE NOT EXISTS "
+                "(SELECT 1 FROM segments s WHERE s.item = i.id AND s.kind != 'name') ORDER BY source, key"):
+            entry = out.setdefault(source, {"count": 0, "reasons": {}})
+            entry["count"] += 1
+            reason = entry["reasons"].setdefault(why or "unrecorded", {"count": 0, "types": {}, "examples": []})
+            reason["count"] += 1
+            name = key.rsplit("/", 1)[-1]
+            kind = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name.lstrip(".") else "(no extension)"
+            reason["types"][kind] = reason["types"].get(kind, 0) + 1
+            if len(reason["examples"]) < self.NAME_ONLY_EXAMPLES:
+                reason["examples"].append(ref or key)
+        for entry in out.values():
+            for reason in entry["reasons"].values():
+                reason["types"] = dict(sorted(reason["types"].items(), key=lambda kv: (-kv[1], kv[0])))
+        return out
+
     def summary(self) -> dict:
         model = self.model or ""
         out: dict = {"path": str(self.path), "model": self.model,
@@ -757,16 +781,15 @@ class Store:
                 "SELECT i.source, s.kind, count(*), count(v.segment) FROM segments s JOIN items i ON i.id = s.item "
                 "LEFT JOIN vectors v ON v.segment = s.id AND v.model = ? GROUP BY i.source, s.kind", (model,)):
             out["sources"].setdefault(source, {}).setdefault("segments", {})[kind] = {"count": n, "vectors": vectors}
-        for source, partial, name_only in self.db.execute(
-                "SELECT source, count(*), sum(EXISTS (SELECT 1 FROM json_each(info, '$.partial') "
-                "WHERE json_extract(value, '$.kept') = 0)) FROM items "
-                "WHERE json_extract(info, '$.partial') IS NOT NULL GROUP BY source"):
+        for source, partial in self.db.execute(
+                "SELECT source, count(*) FROM items WHERE json_extract(info, '$.partial') IS NOT NULL GROUP BY source"):
             entry = out["sources"].setdefault(source, {})
             entry["partial_items"] = partial
-            entry["name_only_items"] = name_only
             entry["settings"] = sorted({s for (s,) in self.db.execute(
                 "SELECT DISTINCT json_extract(value, '$.setting') FROM items, json_each(items.info, '$.partial') "
                 "WHERE items.source = ? AND json_extract(value, '$.setting') IS NOT NULL", (source,))})
+        for source, name_only in self.name_only().items():
+            out["sources"].setdefault(source, {})["name_only"] = name_only
         for source, state in self.states().items():
             left_out = {k: v for k, v in (state.get("left_out") or {}).items() if v.get("count")}
             if left_out:
