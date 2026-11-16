@@ -1022,7 +1022,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--min-z", type=float, help="how far a passage must stand out by meaning (default: the model's "
                                                "calibrated recall gate, 3 for EmbeddingGemma 2)")
     p.add_argument("--min-words", type=float, default=0.67, help="share of the prompt's words an item must contain")
-    p.add_argument("--max-query-chars", type=int, default=2000)
+    p.add_argument("--max-query-chars", type=int, default=2000,
+                   help="how much of a long prompt is matched by its words (its start and end)")
     p.add_argument("--session", help="the current chat session's id, left out of the recent part "
                                     "(with --hook: the hook's session_id)")
     p.add_argument("--context", help="the turn the prompt answers, used when the prompt is short (with --hook: the "

@@ -246,6 +246,14 @@ def _serve(cfg: C.Config, idle_minutes: float | None) -> int:
                 time.sleep(5)
             server.shutdown()
         threading.Thread(target=watch_idle, daemon=True).start()
+    def follow_load():
+        while True:
+            time.sleep(model.RECHECK_SECONDS)
+            try:
+                model.follow_load()
+            except Exception as error:   # the old server keeps answering
+                print(f"rummage daemon: threads: {type(error).__name__}: {error}", file=sys.stderr, flush=True)
+    threading.Thread(target=follow_load, daemon=True).start()
     print(f"rummage query daemon on {path}", file=sys.stderr, flush=True)
     try:
         server.serve_forever()

@@ -2,7 +2,7 @@ import json
 
 from rummage.cli import main
 from conftest import index_all
-from rummage.recall import pick, session_context, worth_recalling
+from rummage.recall import CONTEXT_BYTES, MEANING_BYTES, pick, session_context, worth_recalling
 from rummage.sources import build
 from rummage.store import Store
 
@@ -38,6 +38,18 @@ def test_worth_recalling():
     assert worth_recalling("which mattress did we buy")
     assert worth_recalling("can I keep a dog in the lease")
     assert worth_recalling("租约能养猫吗")
+
+
+def test_meaning_text_is_cut_by_bytes_so_cjk_keeps_fewer_characters():
+    # A CJK character is about 0.8 of a token and a Latin one 0.3, so the same embedding time holds fewer of them.
+    from rummage.recall import meaning_text
+    cjk = meaning_text("租约能不能养猫" * 200, None)
+    latin = meaning_text("can I keep a cat " * 200, None)
+    assert len(cjk.encode()) <= MEANING_BYTES + 5 and len(latin.encode()) <= MEANING_BYTES + 5
+    assert len(cjk) < len(latin) / 2 and "\ufffd" not in cjk and cjk.startswith("租约") and cjk.endswith("养猫")
+    follow = meaning_text("which one", "Assistant: " + "前面说了很多别的事情。" * 50 + "床垫是八月买的，要收据吗？")
+    assert follow.endswith("床垫是八月买的，要收据吗？\nwhich one") and len(follow.encode()) <= CONTEXT_BYTES + 10
+    assert "\ufffd" not in follow
 
 
 def test_recall_hook_reply_and_silence(tmp_path, capsys, monkeypatch):
@@ -152,8 +164,9 @@ def test_short_follow_up_is_searched_with_the_turn_before(tmp_path, capsys, monk
                                      "Want the receipt?")])
     store.commit()
     store.close()
-    monkeypatch.setattr("rummage.daemon.query_scores",
-                        lambda data_dir, text, version=None, timeout=10.0: (model.vector(text), None))
+    embedded = []
+    monkeypatch.setattr("rummage.daemon.query_scores", lambda data_dir, text, version=None, timeout=10.0:
+                        embedded.append(text) or (model.vector(text), None))
 
     def recall(prompt, *args):
         assert main(["--config", str(cfg), "recall", "--recent-items", "0", "--json", *args, prompt]) == 0
@@ -166,6 +179,18 @@ def test_short_follow_up_is_searched_with_the_turn_before(tmp_path, capsys, monk
     assert all(r["id"] != "#" + __import__("rummage.store").store.item_id("chats", "s1:7") for r in doc["results"])
     doc = recall("and the other one?", "--context", "We were talking about the mattress.")
     assert doc["context"] == "given" and doc["results"][0]["ref"] == "mattress.md"
+
+    # Embedding time grows with the text and a hook has a few seconds on a busy machine: a long turn before a
+    # follow-up gives only its end, where the reply asks what the prompt answers.
+    reply = "Assistant: " + "the errands list, the weather and more errands. " * 60 + "Want the mattress receipt?"
+    doc = recall("yes, the receipt please", "--context", reply)
+    assert embedded[-1] == reply[-CONTEXT_BYTES:] + "\nyes, the receipt please"
+    assert doc["results"][0]["ref"] == "mattress.md"
+    # A long prompt gives its start and end: a question after a pasted log still finds its answer.
+    paste = "Here is the log. " + "errands and weather again. " * 200 + "Which mattress did we buy?"
+    doc = recall(paste)
+    assert len(embedded[-1].encode()) <= MEANING_BYTES + 5 and embedded[-1].endswith("Which mattress did we buy?")
+    assert doc["results"][0]["ref"] == "mattress.md"
 
     before, own = session_context(C.load(cfg), "s1", "Want the receipt?", 45)
     assert before is None and len(own) == 1      # a turn that holds the prompt itself is not the turn before

@@ -36,11 +36,17 @@ from .store import Scope, Store, Within
 HOOK_EVENT = "UserPromptSubmit"
 # A prompt with fewer content words than this leans on the turn before it ("the other one?", "rename it then"): its meaning is
 # searched with that turn in front of it, and its few words only back a meaning match, never stand alone. The turn
-# comes from the hook (`context`) or the index (the session's newest turn within `CONTEXT_HOURS`); at most
-# `CONTEXT_CHARS` of it, its start and its end, where a reply asks what the prompt answers.
+# comes from the hook (`context`) or the index (the session's newest turn within `CONTEXT_HOURS`).
 FOLLOW_UP_TERMS = 12
 CONTEXT_HOURS = 6
-CONTEXT_CHARS = 1000
+# What is embedded for a prompt's meaning: its start and end up to `MEANING_BYTES` of UTF-8 (a pasted text's question
+# tends to sit at its end), and for a follow-up the last `CONTEXT_BYTES` of the turn before, where a reply asks what
+# the prompt answers. Embedding time grows with the tokens, a few milliseconds each on one core, and a prompt hook has
+# a few seconds even when the machine is busy. Bytes stand in for tokens across scripts: EmbeddingGemma's tokenizer
+# gave 0.8 tokens per CJK character (3 bytes) and 0.3 per Latin one. On real prompts these cuts kept most of what the
+# whole text recalled (docs/decisions.md, "Recall"). Words are still matched against the whole prompt.
+MEANING_BYTES = 600
+CONTEXT_BYTES = 300
 # A meaning match stands alone a sixth above the recall gate (3.5 at EmbeddingGemma 2's 3); nearer the gate it needs
 # `SHARED_WORDS` of the query's words too. In replayed recall blocks the unrelated passages sat at z 2.9-3.5
 # sharing few words, the useful ones above 3.5 or sharing a third of the words.
@@ -147,6 +153,21 @@ def _ends(text: str, size: int) -> str:
     return text if len(text) <= size else f"{text[:size // 2]} … {text[-size // 2:]}"
 
 
+def _head(text: str, size: int) -> str:
+    return text.encode()[:size].decode(errors="ignore")
+
+
+def _tail(text: str, size: int) -> str:
+    return text.encode()[-size:].decode(errors="ignore")
+
+
+def meaning_text(prompt: str, before: str | None) -> str:
+    """The text whose vector stands for `prompt` (with `before`, the turn it leans on, when it is a follow-up)."""
+    own = prompt if len(prompt.encode()) <= MEANING_BYTES else \
+        f"{_head(prompt, MEANING_BYTES // 2)} … {_tail(prompt, MEANING_BYTES // 2)}"
+    return f"{_tail(before, CONTEXT_BYTES)}\n{own}" if before else own
+
+
 def session_context(cfg: C.Config, session: str | None, prompt: str, minutes: float,
                     now: float | None = None) -> tuple[str | None, set[str]]:
     """The turn before `prompt` in `session` (None when the index has none within `CONTEXT_HOURS`), and the ids of
@@ -237,7 +258,7 @@ def run(cfg: C.Config, args) -> int:
             prompt = raw
     else:
         prompt = raw
-    prompt = prompt.strip()[: args.max_query_chars]
+    prompt = _ends(prompt.strip(), args.max_query_chars)
     index = P.state(cfg.data_dir)
     agent = P.agent_view(index)
     about: dict = {"index": index}
@@ -259,7 +280,7 @@ def run(cfg: C.Config, args) -> int:
         try:
             before, own = session_context(cfg, session, prompt, args.recent_minutes)
             leaning = follow_up(prompt) and bool(context or before)
-            meaning = f"{_ends(context or before, CONTEXT_CHARS)}\n{prompt}" if leaning else None
+            meaning = meaning_text(prompt, (context or before) if leaning else None)
             if leaning:
                 about["context"] = "given" if context else "previous turn"
             hits, mode, count, degraded, recall_gate = recall(cfg, prompt, args.source, args.path, 20,
