@@ -68,7 +68,7 @@ def plan_jmap(source, known: dict[str, str | None]) -> Plan:
             break
     prefix = "jmap/"
     current = {prefix + i for i in ids}
-    new = [i for i in ids if prefix + i not in known]
+    new = [i for i in ids if known.get(prefix + i) is None]
 
     def upserts():
         for start in range(0, len(new), 50):
