@@ -130,6 +130,11 @@ data, tests.
 - A file's item time is its last change, so a private pause or a time-window mark keeps out a file edited during it
   until it is edited again.
 
+## Language coverage
+
+- OCR reads Chinese, Japanese, English and accented Latin text (French, German, Spanish, Portuguese and Italian tested 2026-11-16); Korean is a second pass on uncertain lines. Cyrillic, Greek, Arabic, Thai and Hindi text in images reads as empty. A per-script model list generalises the Korean second pass (PaddleOCR `eslav` for Cyrillic); not needed until such a file turns up.
+- French retrieval was never measured: the MIRACL fr run was stopped on 2026-11-15. Run it, and test 3-letter-chunk keyword matching on French (verb forms, gender), and merge it if it helps without hurting CJK. Offered to the owner 2026-11-16, waiting for her yes.
+
 ## Formats
 
 - Synology Office files (`.odoc`, `.osheet`, `.oslides`) are BSON wrapping JSON and stay name-only.
