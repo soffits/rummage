@@ -45,6 +45,20 @@ def test_the_sender_principal_comes_before_the_text(tmp_path):
     ]
 
 
+def test_a_context_notice_before_a_message_is_not_a_turn(tmp_path):
+    # dsh-message-context puts sender, time and reply context in a notice of its own; the message
+    # keeps only the person's words and the facts stay on its source.
+    tg = {"kind": "telegram-user", "channel": "telegram", "id": "200", "name": "M"}
+    notice = {"kind": "message-context", "form": "notice", "summary": "[Telegram message from M]", "messageId": "m2"}
+    source = source_for(tmp_path, [
+        message("[Telegram message from M (user id 200)]\n[Replying to a message from you (the assistant)]\n> old answer",
+                1, notice),
+        message("do it", 2, {**TG, "principal": tg, "envelope": {"sentAt": 1500, "replyTo": {"text": "old answer"}}}),
+    ])
+    turns = source.turns(tmp_path / "sessions" / "proj" / "s1" / LOG_NAME)
+    assert [(t.speaker, t.channel, t.text) for t in turns] == [("Mara", "telegram", "do it")]
+
+
 def test_older_messages_fall_back_to_tags_and_notices(tmp_path):
     source = source_for(tmp_path, [
         message("[Telegram message from Someone (user id 100)]\nhi", 1, TG),
