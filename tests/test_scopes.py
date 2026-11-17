@@ -188,7 +188,8 @@ def test_paused_recall_gives_no_leads_and_says_until_when(tmp_path, capsys, monk
     elsewhere = _hook(monkeypatch, capsys, cfg, {**event, "cwd": str(home)}, "recall", "--hook")
     assert "paused" not in elsewhere["rummage"]
     _hook(monkeypatch, capsys, cfg, {"command_args": "recall here", "cwd": str(project)}, "resume", "--hook")
-    assert "hookSpecificOutput" in _hook(monkeypatch, capsys, cfg, event, "recall", "--hook")
+    # s9 was shown the note before the pause; a new session gets it again
+    assert "hookSpecificOutput" in _hook(monkeypatch, capsys, cfg, {**event, "session_id": "s10"}, "recall", "--hook")
 
 
 def test_pauses_run_out_by_themselves(tmp_path):

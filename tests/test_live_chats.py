@@ -143,8 +143,8 @@ def test_recall_sees_another_session_from_minutes_ago(tmp_path, monkeypatch, cap
     # Only the index's own state: its vectors were never made (`--no-embed`).
     assert out == ("rummage: Index incomplete, paused (nothing is making the missing vectors now): 0 of 2 passages "
                    "have vectors; the others match only by their words.\n")
-    # As a match or in the recent part, never twice:
-    code, out = _run(capsys, "--config", str(cfg), "recall", "--session", "sess-b", "--json", "what about the sofa")
+    # As a match or in the recent part, never twice (a new session: sess-b was shown it already):
+    code, out = _run(capsys, "--config", str(cfg), "recall", "--session", "sess-d", "--json", "what about the sofa")
     doc = json.loads(out)
     refs = [r["ref"] for r in doc["results"] + doc["recent"]]
     assert refs.count("claude-code:sess-a#a1") == 1

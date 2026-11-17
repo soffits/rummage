@@ -51,6 +51,12 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
   indexing does.
 - The query daemon a search starts isn't used on systems without Unix sockets (Windows); they keep loading the
   model per search.
+- Recall's recent part still lets in a turn that shares one word with a prompt of three or four terms (a CJK pair
+  like "meow meow" in a short reply): about 11 leads a day in the replay behind 0.28.0, all unrelated. A short prompt
+  leaning on its own session's turn can't be told from one that refers to another session by its words, so this
+  needs the meaning of the recent turn (once its vector exists) rather than another word rule.
+- A session whose context was compacted no longer has a block recall showed it hours ago, but recall still leaves
+  those items out for 6 hours; a harness that reports compaction in the hook could reset it.
 - A recall costs about 0.75 s before any embedding on an idle 4-core machine and over a second when the cores are
   busy: importing the CLI (0.2 s), the daemon sending a score for every vector (0.25 s with a short query), and the
   search reading every segment's metadata and running FTS (0.3 s). On a busy machine that is a third of a 3 s hook
