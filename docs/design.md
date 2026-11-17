@@ -156,7 +156,7 @@ embedding), every front end searches by words and reports `degraded_reason` inst
   three reference texts and compares them with the profile's published vectors or the ones stored at the first run
   (cosine ≥ 0.999), so a llama.cpp bump that changes vectors is caught before results quietly degrade.
 - **Watching:** run `rummage watch` for changes within seconds (`rummage service install` puts it under systemd,
-  launchd or Task Scheduler), and schedule `rummage index -q` (hourly is plenty)
+  launchd or Task Scheduler, or any supervisor; it takes over from a watch an agent hook started), and schedule `rummage index -q` (hourly is plenty)
   and `rummage doctor` (daily); both exit 1 with a
   reason when something's wrong. `rummage status --json` shows counts, the last run per source, and failures.
 - **Moving:** `rummage export` / `import` carry the index, vectors included, to another machine or storage

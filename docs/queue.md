@@ -144,3 +144,4 @@ data, tests.
 - A Pages, Keynote or Numbers file kept as a package folder (macOS, not zipped) is walked as its inner files; only
   the zipped form is read as one document. Numbers cells come out as the table's string list, not in row order.
 - Word files from before Word 97 and `.ppt` files saved in place with old copies of text read only partly or not at all.
+- A watch that wants the lock signals the pid in `watch.holder` when it says on demand. If an on-demand watch was killed outright (no cleanup) and a new watch takes the lock but has not yet written its record, the stale pid could be signalled once; the window is milliseconds after a SIGKILL.

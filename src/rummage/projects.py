@@ -7,7 +7,7 @@ respected; key and password files skipped), which only queries from inside that 
 named, it switches that harness's own session history on as well, since installing a harness's plugin is the
 person's choice to have its chats remembered; other harnesses' histories stay off until enabled.
 
-Reading happens in the background: `rummage watch` is started when none runs (fetching the model first when its
+Reading happens in the background: `rummage watch --on-demand` is started when none runs (fetching the model first when its
 files are missing), and a running one picks up the new sources by itself.
 """
 
@@ -79,14 +79,16 @@ def watching(data_dir: Path) -> bool:
 
 
 def start_watch(cfg: C.Config) -> bool:
-    """Starts `rummage watch --setup` in the background unless one runs; whether it started one."""
+    """Starts `rummage watch --setup --on-demand` in the background unless one runs; whether it started one. It gives
+    way to a watch a service or supervisor starts later."""
     if watching(cfg.data_dir):
         return False
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
     flags = {"start_new_session": True} if os.name != "nt" else {
         "creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
     with open(cfg.log_dir / "watch.log", "ab") as log:
-        subprocess.Popen([sys.executable, "-m", "rummage", "--config", str(cfg.path), "watch", "--setup"],
+        subprocess.Popen([sys.executable, "-m", "rummage", "--config", str(cfg.path), "watch", "--setup",
+                          "--on-demand"],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log, **flags)
     return True
 

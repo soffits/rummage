@@ -704,9 +704,11 @@ def cmd_watch(cfg: C.Config, args) -> int:
             _eprint("model files missing: fetching them first")
             _runtime(cfg).setup(profile, media=_media(cfg), log=_eprint)
 
+    if os.name != "nt":  # stop like Ctrl+C, so the watch's own index runs stop with it
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
-        return run(cfg, args.source, args.poll_minutes, args.settle_seconds, setup_first)
-    except Busy:
+        return run(cfg, args.source, args.poll_minutes, args.settle_seconds, setup_first, args.on_demand)
+    except Busy:  # only on demand: the watch already running does the work
         _eprint(f"a watch already runs for {cfg.data_dir}")
         return 0
     except KeyboardInterrupt:
@@ -1092,6 +1094,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--settle-seconds", type=float, default=3,
                    help="read a batch once its folders were quiet this long (at most 4x this while they keep changing)")
     p.add_argument("--setup", action="store_true", help="fetch the model files first when they are missing")
+    p.add_argument("--on-demand", action="store_true",
+                   help="started by `project ensure`: exit when a watch runs, and stop for one started another way")
     p.set_defaults(func=cmd_watch)
 
     p = sub.add_parser("daemon", help="keep the query model loaded so searches take milliseconds")
