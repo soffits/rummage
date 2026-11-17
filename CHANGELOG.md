@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.27.1
+
+- Fixed: a `rummage watch` run by a service or process supervisor exited at once (code 0, "a watch already runs") when the prompt hook had started one in the background first, for instance while the supervisor restarted it; the background watch then kept indexing outside supervision. The hook's watch now runs `--on-demand` and gives way: any other watch waits for the lock and asks an on-demand one to stop, and two watches started otherwise wait for each other instead of one quitting. A stopped watch now stops its own index runs too.
+
 ## 0.27.0
 
 - Queries embed on one thread instead of following the load. llama.cpp's threads wait for each other at every layer, so more threads made a query as slow as the thread whose core other work held: on a 4-core machine with three cores busy, four threads were two to four times slower than one. One thread takes the same time idle or busy. The query daemon no longer reads `/proc/stat` or swaps in servers with other thread counts, and recall embeds a long prompt's start and end up to a fixed 1,200 bytes (about a second). Thirty hook recalls with three cores busy: 0.87 s at the median, 2.5 s at most (0.72 s and 3.6 s before); idle 0.52 s at the median.

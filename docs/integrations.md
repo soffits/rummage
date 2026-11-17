@@ -105,9 +105,11 @@ database work).
   yet: installing a harness's rummage plugin is the choice to have its chats remembered, so a conversation that
   started before the plugin still gets recall from the project's earlier chats. A history switched off in the config
   stays off. Other harnesses' histories stay off until `rummage sources enable`.
-- When something was added, or no `rummage watch` runs for this data folder, it starts `rummage watch --setup` in
+- When something was added, or no `rummage watch` runs for this data folder, it starts `rummage watch --setup --on-demand` in
   the background (which first fetches the model files when they are missing, then reads every enabled source and
   keeps them current). A running watch restarts itself when the config changes, so new sources are picked up.
+  A watch started any other way (a service, a process supervisor, by hand) takes over from an on-demand one, so
+  auto-starting never competes with a supervised watch.
   Until the model files are there, recall matches by exact words, and before anything is indexed it returns
   nothing; it never waits.
 

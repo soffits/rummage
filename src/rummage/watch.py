@@ -7,24 +7,34 @@ seconds), and other sources are re-planned on an interval. A batch of changes is
 is searchable by its words within seconds; vectors are made by one background `rummage index --embed-only` that
 runs while any are missing. Every `--poll-minutes` all sources are re-planned, the watched ones too, in case an
 event was missed.
+
+One watch runs per data folder (the `watch` lock). A watch `project ensure` started on demand (`--on-demand`) gives
+way to any other: a watch started by a service or supervisor waits for the lock and asks an on-demand holder to stop,
+since a supervisor only keeps the process it started, and one that exits because the lock is taken leaves the work
+to a process nothing restarts.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import signal
 import subprocess
 import sys
 import time
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from . import config as C
 from . import envelope as E
 from . import switch
-from .indexer import WATCH_RUN, lock
+from .indexer import WATCH_RUN, Busy, lock
 from .sources import build
 from .store import Store
 
 BUSY_RETRY_SECONDS = 15
+LOCK_POLL_SECONDS = 1.0
+HOLDER = "watch.holder"
 
 
 def _command(cfg: C.Config, *extra: str) -> list[str]:
@@ -83,6 +93,10 @@ class Runner:
             self.embedding = subprocess.Popen(_command(self.cfg, "--embed-only"), stdout=subprocess.DEVNULL,
                                               env=_env())
 
+    def stop(self) -> None:
+        if self.embedding is not None and self.embedding.poll() is None:
+            self.embedding.terminate()
+
     def tick(self) -> None:
         """Between events: retry a batch that found the index busy, restart the vector maker if more arrived."""
         if self.retry and time.monotonic() >= self.retry_at:
@@ -115,10 +129,54 @@ def _config_stamp(cfg: C.Config) -> float | None:
         return None
 
 
-def run(cfg: C.Config, names: list[str] | None, poll_minutes: float, settle_seconds: float, before=None) -> int:
+def holder(data_dir: Path) -> dict:
+    """What the watch holding the lock wrote about itself: its `pid` and whether it runs `on_demand`."""
+    try:
+        found = json.loads((data_dir / HOLDER).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+@contextmanager
+def hold(data_dir: Path, on_demand: bool):
+    """Holds the watch lock for the life of the block. On demand, raises Busy when another watch has it; otherwise
+    waits for it, asking a holder that runs on demand to stop (SIGTERM; TerminateProcess on Windows)."""
+    with ExitStack() as stack:
+        asked, told = None, False
+        while True:
+            try:
+                stack.enter_context(lock(data_dir, "watch"))
+                break
+            except Busy:
+                if on_demand:
+                    raise
+            other = holder(data_dir)
+            pid = other.get("pid")
+            if other.get("on_demand") and isinstance(pid, int) and pid > 0 and pid not in (asked, os.getpid()):
+                _say(f"asking the on-demand watch (pid {pid}) to stop, to run in its place")
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+                asked = pid
+            elif not told and not other.get("on_demand"):
+                _say(f"another watch runs for {data_dir} (pid {pid or 'unknown'}); waiting until it stops")
+                told = True
+            time.sleep(LOCK_POLL_SECONDS)
+        record = data_dir / HOLDER
+        record.write_text(json.dumps({"pid": os.getpid(), "on_demand": on_demand}), encoding="utf-8")
+        try:
+            yield
+        finally:
+            record.unlink(missing_ok=True)
+
+
+def run(cfg: C.Config, names: list[str] | None, poll_minutes: float, settle_seconds: float, before=None,
+        on_demand: bool = False) -> int:
     """Watches `names`, or every enabled source when None; then a change to the config (a source added or switched)
     restarts the watch with the new set. `before` runs first, once this is the only watch of the data folder."""
-    with lock(cfg.data_dir, "watch"):
+    with hold(cfg.data_dir, on_demand):
         if before is not None:
             before()
         return _watch(cfg, names or C.enabled(cfg), names is None, poll_minutes, settle_seconds)
@@ -137,6 +195,14 @@ def _watch(cfg: C.Config, names: list[str], follow_config: bool, poll_minutes: f
     _say(f"watching {', '.join(names)} ({len(roots)} folders; re-planned every {poll_minutes:g} min: "
          f"{', '.join(others) or 'none'})")
     runner = Runner(cfg)
+    try:
+        return _follow(cfg, names, roots, follow_config, stamp, poll_minutes, settle_seconds, runner)
+    finally:
+        runner.stop()
+
+
+def _follow(cfg: C.Config, names: list[str], roots: dict[Path, str], follow_config: bool, stamp: float | None,
+            poll_minutes: float, settle_seconds: float, runner: Runner) -> int:
     runner.read(set(names))
     next_poll = time.monotonic() + poll_minutes * 60
 
@@ -144,6 +210,7 @@ def _watch(cfg: C.Config, names: list[str], follow_config: bool, poll_minutes: f
         nonlocal next_poll
         if follow_config and _config_stamp(cfg) != stamp:
             _say("the config changed: starting again with its sources")
+            runner.stop()
             os.execv(sys.executable, [sys.executable, "-m", "rummage", *sys.argv[1:]])
         due = time.monotonic() >= next_poll
         if due:  # every source, watched ones too, in case an event was missed
