@@ -138,6 +138,63 @@ def test_weak_meaning_matches_need_shared_words():
     assert kept() == ["#2", "#3", "#4"]
     # a prompt that leans on the turn before has too few words of its own to match by them alone
     assert kept(words_alone=False) == ["#2", "#3"]
+    # an item recall keeps showing to other sessions is a hub: only its words can bring it in
+    assert kept(hubs={"#2", "#3", "#4"}) == ["#4"]
+
+
+def test_recall_log_remembers_per_session_and_finds_hubs(tmp_path, monkeypatch):
+    from rummage import recall_log as L
+    now = 1_000_000.0
+    L.add(tmp_path, None, ["#x"], now)                      # no session: nothing to remember it for
+    assert not (tmp_path / L.FILE).exists()
+    L.add(tmp_path, "s1", ["#a", "#b"], now - (L.SEEN_HOURS + 1) * 3600)
+    L.add(tmp_path, "s1", ["#c"], now - 60)
+    L.add(tmp_path, "s2", ["#a"], now - 60)
+    L.add(tmp_path, "s3", ["#a"], now - 60)
+    L.add(tmp_path, "s4", ["#a"], now - (L.KEEP_HOURS + 1) * 3600)   # too old to count
+    entries = L.load(tmp_path, now)
+    assert L.seen(entries, "s1", now) == {"#c"} and L.seen(entries, None, now) == set()
+    assert L.hubs(entries, "s9") == {"#a"}                  # shown to s1, s2 and s3
+    assert L.hubs(entries, "s3") == set()                   # its own showings don't count
+    # the file is pruned of old lines once it grows
+    monkeypatch.setattr(L, "PRUNE_BYTES", 10)
+    L.add(tmp_path, "s5", ["#d"], now)
+    assert "s4" not in (tmp_path / L.FILE).read_text() and len(L.load(tmp_path, now)) == 5
+
+
+def test_recent_turns_need_a_good_part_of_the_prompts_words(tmp_path):
+    import time
+
+    from rummage import config as C
+    from rummage.recall import recent_turns
+    from rummage.store import Item, Segment
+
+    cfg = _setup(tmp_path)
+    store = Store(tmp_path / "data" / "index.db")
+    for n, text in enumerate(["Alex: did the kettle order arrive? Assistant: yes, this morning.",
+                              "Alex: the blue sofa we picked at the second store. Assistant: noted."]):
+        store.put(Item("chats", f"o:{n}", "chat", "Alex", f"chats:o#{n}", time.time() - 60, "f", {"session": "o"}),
+                  [Segment("text", text)])
+    store.commit()
+    store.close()
+    found = recent_turns(C.load(cfg), "can you order the sofa we picked from the blue store", ["s1"], 45, 5, set())
+    # one word in five in common ("order") is not the same subject
+    assert [r["ref"] for r in found] == ["chats:o#1"]
+
+
+def test_recall_doesnt_show_a_session_the_same_item_again(tmp_path, capsys, monkeypatch):
+    cfg = _setup(tmp_path)
+
+    def hook(session):
+        event = {"prompt": "does the lease allow a cat in flat 12", "session_id": session}
+        monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps(event)))
+        assert main(["--config", str(cfg), "recall", "--hook"]) == 0
+        reply = json.loads(capsys.readouterr().out)
+        return (reply.get("hookSpecificOutput") or {}).get("additionalContext", "")
+
+    assert "lease.md" in hook("s1")
+    assert "lease.md" not in hook("s1")       # s1 has it in front of it already
+    assert "lease.md" in hook("s2")
 
 
 def test_short_follow_up_is_searched_with_the_turn_before(tmp_path, capsys, monkeypatch):

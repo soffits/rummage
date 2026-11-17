@@ -8,10 +8,11 @@ Input is the query as an argument, the text on stdin, or with `--hook` the JSON 
 `prompt` and `session_id` fields; Claude Code and Codex `UserPromptSubmit` send them). Output is a plain-text block,
 `--json`, or with `--hook` the hook's JSON reply carrying the block as `additionalContext`.
 
-Besides matches from the whole index, recall adds what was said minutes ago in other chat sessions that shares words
-with the prompt: someone who opens a new chat to go on with another one gets that context, even before its vectors
-are made. Credentials are masked in all output unless
-`--show-secrets` or a source switches masking off.
+Besides matches from the whole index, recall adds what was said minutes ago in other chat sessions that shares a good
+part of the prompt's words: someone who opens a new chat to go on with another one gets that context, even before its
+vectors are made. With a session id, recall doesn't show that session an item again that it showed it hours ago, and
+an item it keeps showing to other sessions has to match by words (`recall_log`). Credentials are masked in all output
+unless `--show-secrets` or a source switches masking off.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import time
 from . import config as C
 from . import memory
 from . import progress as P
+from . import recall_log
 from . import scopes as S
 from . import text as T
 from .projects import ensure
@@ -50,7 +52,9 @@ MEANING_BYTES = 1200
 CONTEXT_BYTES = 600
 # A meaning match stands alone a sixth above the recall gate (3.5 at EmbeddingGemma 2's 3); nearer the gate it needs
 # `SHARED_WORDS` of the query's words too. In replayed recall blocks the unrelated passages sat at z 2.9-3.5
-# sharing few words, the useful ones above 3.5 or sharing a third of the words.
+# sharing few words, the useful ones above 3.5 or sharing a third of the words. A turn from minutes ago in another
+# session needs `SHARED_WORDS` too: one or two common words in common (CJK pairs like "what" or "a bit") brought in
+# a third of all leads in a day of hook recalls, nearly all unrelated.
 STRONG = 7 / 6
 SHARED_WORDS = 0.3
 
@@ -61,16 +65,17 @@ def worth_recalling(prompt: str) -> bool:
 
 
 def pick(hits: list[Hit], min_z: float, min_words: float, max_items: int, max_chars: int,
-         words_only: bool, words_alone: bool = True) -> list[Hit]:
+         words_only: bool, words_alone: bool = True, hubs: set[str] = frozenset()) -> list[Hit]:
     """Items that clearly match: standing out by meaning (well above `min_z`, or above it and sharing some of the
     query's words), or holding most of the query's words. Without a query vector, word matches alone decide; with
-    one, a word match must not be far below the rest in meaning, and with `words_alone` off it doesn't count alone."""
+    one, a word match must not be far below the rest in meaning, and with `words_alone` off it doesn't count alone.
+    For `hubs`, items near many unrelated prompts, meaning doesn't count."""
     chosen, used = [], 0
     for hit in hits:
         if len(chosen) >= max_items:
             break
         z = hit.z or 0
-        by_meaning = z >= min_z and (z >= min_z * STRONG or hit.words >= SHARED_WORDS)
+        by_meaning = hit.id not in hubs and z >= min_z and (z >= min_z * STRONG or hit.words >= SHARED_WORDS)
         by_words = hit.words >= min_words and (words_only or (words_alone and z >= 0))
         if not (by_meaning or by_words):
             continue
@@ -124,7 +129,8 @@ def render(results: list[dict], recent: list[dict], degraded: str | None = None,
 
 def recent_turns(cfg: C.Config, prompt: str, exclude: list[str], minutes: float, max_items: int,
                  skip_ids: set[str], within: Within | None = None) -> list[dict]:
-    """Chat turns from the last `minutes` in other sessions, within the scope, that share words with the prompt."""
+    """Chat turns from the last `minutes` in other sessions, within the scope, holding `SHARED_WORDS` of the
+    prompt's words."""
     if not cfg.index_path.exists() or minutes <= 0 or max_items <= 0:
         return []
     store = Store(cfg.index_path)
@@ -135,7 +141,7 @@ def recent_turns(cfg: C.Config, prompt: str, exclude: list[str], minutes: float,
     finally:
         store.close()
     words = set(T.terms(prompt))
-    shared = [i for i in items if words & set(T.terms(i["text"]))]
+    shared = [i for i in items if words and len(words & set(T.terms(i["text"]))) >= SHARED_WORDS * len(words)]
     out = []
     for i in shared[:max_items]:
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(i["mtime"] or 0))
@@ -280,6 +286,8 @@ def run(cfg: C.Config, args) -> int:
     if searched:
         try:
             before, own = session_context(cfg, session, prompt, args.recent_minutes)
+            shown = recall_log.load(cfg.data_dir)
+            own |= recall_log.seen(shown, session)
             leaning = follow_up(prompt) and bool(context or before)
             meaning = meaning_text(prompt, (context or before) if leaning else None)
             if leaning:
@@ -291,11 +299,12 @@ def run(cfg: C.Config, args) -> int:
             min_words = args.min_words if mode == "meaning" else max(args.min_words, 0.75)
             min_z = recall_gate if args.min_z is None else args.min_z
             chosen = pick(hits, gate_for(min_z, count), min_words, args.max_items, args.max_chars, mode == "words",
-                          not leaning)
+                          not leaning, recall_log.hubs(shown, session))
             results = [_masked(cfg, args, {**h.as_dict(), "why": why(h)}) for h in chosen]
             recent = [_masked(cfg, args, r) for r in recent_turns(
                 cfg, prompt, [session] if session else [], args.recent_minutes, args.recent_items,
-                {r["id"] for r in results}, scope.within)]
+                {r["id"] for r in results} | own, scope.within)]
+            recall_log.add(cfg.data_dir, session, [r["id"] for r in results + recent])
         except Exception as error:  # a hook must never break the agent
             print(f"rummage recall: {type(error).__name__}: {error}", file=sys.stderr)
     worth_noting = agent if agent and P.bears_on(index, {r["source"] for r in results + recent}) else None

@@ -11,9 +11,12 @@ Any agent that can run a command can use rummage: `rummage search "<query>" --js
   recall matches exact words only. Each recalled line reads `#id · source · path:lines (or chat session#message) · date · "title" · why it matched`, followed by a snippet. Options: `--max-items` (4), `--max-chars` (1500), `--min-z` (3.0), `-s`,
   `--path`.
   Recall also adds up to two turns said in the last 45 minutes in other chat sessions (`--recent-minutes`,
-  `--recent-items`) when the prompt shares words with them, so a conversation continued in a new window keeps its
+  `--recent-items`) when they hold at least 30% of the prompt's words, so a conversation continued in a new window keeps its
   context; the current session is left
   out (`--session`, or the hook's `session_id`), and so are its own turns from that window, which the agent still has.
+  With a session id, recall also leaves out what it showed that session in the last 6 hours, and an item it showed
+  three or more other sessions in the last day comes in only by the prompt's words (`recalled.jsonl` in the data
+  folder keeps that day).
   A short prompt that leans on the turn before it ("the other one?", "rename it then") is searched by meaning with that turn
   in front of it: the hook's `context` or `--context` when given, else the session's newest turn in the index. A
   meaning match just above the gate counts only when it also shares some of the prompt's words.

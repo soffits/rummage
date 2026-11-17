@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.28.0
+
+- Recall repeats itself less. With a session id (every prompt hook passes one), it doesn't show that session an item it showed it in the last 6 hours, and an item it showed three or more other sessions in the last day comes in only by the prompt's words, not its meaning: such an item sits near many unrelated prompts. What it showed is kept for a day in `recalled.jsonl` in the data folder. Turns from other sessions minutes ago now need 30% of the prompt's words, not just one in common. Replayed on a day of real hook recalls: 1,611 leads became 831, the share from other sessions' recent turns fell from 36% to 1%, and no item came back more than four times (one came back 20 times before).
+
 ## 0.27.1
 
 - Fixed: a `rummage watch` run by a service or process supervisor exited at once (code 0, "a watch already runs") when the prompt hook had started one in the background first, for instance while the supervisor restarted it; the background watch then kept indexing outside supervision. The hook's watch now runs `--on-demand` and gives way: any other watch waits for the lock and asks an on-demand one to stop, and two watches started otherwise wait for each other instead of one quitting. A stopped watch now stops its own index runs too.
