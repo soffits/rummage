@@ -111,12 +111,14 @@ def render(results: list[dict], recent: list[dict], degraded: str | None = None,
            scope: str | None = None) -> str:
     if not results and not recent:
         return f"rummage: {index['note']}" if index else ""
-    lines = ["Recalled from the user's own files by rummage; each line is #id · source · where (path:lines, or "
-             "chat session#message) · date · title · why it matched. Open one with `rummage get <#id>` "
-             "(`--around 3` for the turns around a chat message)."]
+    lines = ["Cues from the user's own files, found by rummage; they say where to look, not what is true. Before "
+             "relying on one, open it (`rummage get <#id>`, `--around 3` for chat turns) and check the other "
+             "matching records too (for a fact about the person's life: every order source, chat and note), since a "
+             "snippet can be outdated or the assistant's own earlier guess. Each line: #id · source · where "
+             "(path:lines, or chat session#message) · date · title · why it matched."]
     lines += [render_item(h) for h in results]
     if recent:
-        lines.append("Said minutes ago in another session:")
+        lines.append("Said minutes ago in another session (a cue too, not a settled fact):")
         lines += [render_item(h) for h in recent]
     if degraded and results:
         lines.append("(Matched by words only: " + degraded.split(";")[0].split(", so")[0] + ".)")

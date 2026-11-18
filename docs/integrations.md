@@ -8,7 +8,7 @@ Any agent that can run a command can use rummage: `rummage search "<query>" --js
 - **`rummage recall`** for prompt hooks: before each message reaches the model, the hook passes the prompt to
   recall, which returns a short block of cited passages when something in your files clearly matches, and nothing
   otherwise. It never loads the model on its own, so keep `rummage daemon` running for meaning matches; without it,
-  recall matches exact words only. Each recalled line reads `#id · source · path:lines (or chat session#message) · date · "title" · why it matched`, followed by a snippet. Options: `--max-items` (4), `--max-chars` (1500), `--min-z` (3.0), `-s`,
+  recall matches exact words only. Each recalled line reads `#id · source · path:lines (or chat session#message) · date · "title" · why it matched`, followed by a snippet. The block opens by saying these are cues to where to look, not facts: the agent opens a record (`rummage get`) and checks the other matching records before relying on one. Options: `--max-items` (4), `--max-chars` (1500), `--min-z` (3.0), `-s`,
   `--path`.
   Recall also adds up to two turns said in the last 45 minutes in other chat sessions (`--recent-minutes`,
   `--recent-items`) when they hold at least 30% of the prompt's words, so a conversation continued in a new window keeps its

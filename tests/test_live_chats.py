@@ -137,6 +137,7 @@ def test_recall_sees_another_session_from_minutes_ago(tmp_path, monkeypatch, cap
     code, out = _run(capsys, "--config", str(cfg), "recall", "--hook")
     context = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert "Said minutes ago in another session" in context and "blue sofa" in context
+    assert "not what is true" in context
     assert "unrelated earlier chat" not in context
     # Nothing in common, nothing recalled: how a prompt is phrased decides nothing.
     code, out = _run(capsys, "--config", str(cfg), "recall", "--session", "sess-b", "order the one from just now")
