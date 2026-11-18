@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.28.1
+
+- The recall block's header now says plainly that its lines are cues pointing to where to look, not facts: before relying on one, open it and check the other matching records too (for a fact about the person's life, every order source, chat and note), since a snippet can be outdated or an assistant's earlier guess. Models had been answering from the snippet or the first hit. The label for turns from other sessions says the same.
+
 ## 0.28.0
 
 - Recall repeats itself less. With a session id (every prompt hook passes one), it doesn't show that session an item it showed it in the last 6 hours, and an item it showed three or more other sessions in the last day comes in only by the prompt's words, not its meaning: such an item sits near many unrelated prompts. What it showed is kept for a day in `recalled.jsonl` in the data folder. Turns from other sessions minutes ago now need 30% of the prompt's words, not just one in common. Replayed on a day of real hook recalls: 1,611 leads became 831, the share from other sessions' recent turns fell from 36% to 1%, and no item came back more than four times (one came back 20 times before).
