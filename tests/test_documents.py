@@ -161,24 +161,6 @@ def test_snappy_copies():
     assert iwork.snappy(bytes([6, 0]) + b"x" + bytes([(1 << 2) | 1, 1])) == b"xxxxxx"
 
 
-class FakeOCR(O.Reader):
-    def __init__(self, data_dir, found):
-        super().__init__(data_dir)
-        self.found, self.calls = found, 0
-
-    def _lines(self, image) -> str:
-        self.calls += 1
-        return self.found
-
-
-@pytest.fixture
-def fake_ocr(monkeypatch, tmp_path):
-    reader = FakeOCR(tmp_path / "data", "房屋租赁合同 Lease agreement, page two")
-    monkeypatch.setattr(D.Reading, "reader", property(lambda self: reader if self.ocr else None))
-    monkeypatch.setattr(O, "_prepare", lambda raw: raw)   # no OpenCV needed to test what happens around OCR
-    return reader
-
-
 def test_pictures_get_an_image_vector_and_the_text_in_them(tmp_path, fake_ocr):
     import numpy as np
 

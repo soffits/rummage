@@ -1,5 +1,7 @@
 import pytest
+from rummage import documents as D
 from rummage import models as M
+from rummage import ocr as O
 from rummage import switch
 from rummage.indexer import embed_pending, index_source
 
@@ -46,3 +48,21 @@ def index_all(store, source, embedders, log, warn, **kwargs):
 def _outside_any_project(tmp_path, monkeypatch):
     """Queries pick their scope from the folder they run in; tests run from a folder in no git repository."""
     monkeypatch.chdir(tmp_path)
+
+
+class FakeOCR(O.Reader):
+    def __init__(self, data_dir, found):
+        super().__init__(data_dir)
+        self.found, self.calls = found, 0
+
+    def _lines(self, image) -> str:
+        self.calls += 1
+        return self.found
+
+
+@pytest.fixture
+def fake_ocr(monkeypatch, tmp_path):
+    reader = FakeOCR(tmp_path / "data", "房屋租赁合同 Lease agreement, page two")
+    monkeypatch.setattr(D.Reading, "reader", property(lambda self: reader if self.ocr else None))
+    monkeypatch.setattr(O, "_prepare", lambda raw: raw)   # no OpenCV needed to test what happens around OCR
+    return reader
