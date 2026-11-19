@@ -139,8 +139,9 @@ class Searcher:
         return scores, standardize(scores, self.seg_kinds)
 
     def search(self, query: str, vector: np.ndarray | None, limit: int = 10, kinds: set[str] | None = None,
-               z_gate: float | None = None) -> list[Hit]:
-        """`z_gate`: how far a meaning match must stand out (default: the model's calibrated gate)."""
+               z_gate: float | None = None, segments: str | None = None) -> list[Hit]:
+        """`z_gate`: how far a meaning match must stand out (default: the model's calibrated gate). `segments`:
+        only vectors of this kind of segment (`image`) count as meaning matches."""
         r = self.ranking
         z_gate = self.calibration.gate if z_gate is None else z_gate
         words = T.terms(query, cjk_pairs=r.cjk_pairs) if r.words else []
@@ -153,6 +154,8 @@ class Searcher:
             if not r.zscore:
                 z, z_gate = scores, r.fixed_cosine
             order = np.argsort(-z)
+            if segments is not None:
+                order = order[self.seg_kinds[order] == segments]
             for row in order[: max(2000, limit * 50)]:
                 item = int(self.seg_items[row])
                 if item not in best:

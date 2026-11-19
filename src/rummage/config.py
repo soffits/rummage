@@ -103,6 +103,12 @@ class Config:
     def query_threads(self) -> int:
         return 1
 
+    # A picture query is a longer burst than a text query (about 3 s on one thread, 1.2 s on three), so it gets more
+    # threads, for as long as it runs: it is made at normal priority, which niced background work gives way to.
+    @property
+    def picture_query_threads(self) -> int:
+        return max(1, min(3, usable_cores() - 1))
+
 
 def usable_cores() -> int:
     """The cores this process may run on (its CPU affinity where the system has one)."""

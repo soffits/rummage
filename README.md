@@ -258,7 +258,9 @@ drops the ones that are gone.
 Agents use the same CLI: `search --json`, `get` and `recent`. `rummage recall` gives prompt hooks a short block of
 cited passages, or nothing when nothing clearly matches; it also adds what was said minutes ago in another chat
 session when it holds a good part of the prompt's words, so a conversation can go on in a new window. Within a chat
-session it doesn't repeat a passage it showed in the last few hours.
+session it doesn't repeat a passage it showed in the last few hours. A prompt with pictures (`--image FILE`, or the
+hook's `images`) also finds items with pictures that look like them, if the query daemon embeds the picture within
+two seconds; the cues from the words never wait for it.
 [docs/integrations.md](docs/integrations.md) has hook snippets for Claude Code, Codex, OpenCode, Hermes Agent and
 DeepSeek Harness, and [skills/rummage](skills/rummage/SKILL.md) is an Agent Skill to drop into an agent's skills
 folder.

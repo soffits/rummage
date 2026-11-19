@@ -266,7 +266,11 @@ export function apply(ctx) {
 ## Index progress for adapters
 
 `rummage recall --hook` reads a JSON object on stdin: `prompt`, `session_id`, and `cwd`, `harness` and `context` (the
-turn the prompt answers) when the harness knows them. It always replies with JSON, also when it has nothing to recall:
+turn the prompt answers) when the harness knows them, and `images` (paths of the picture files sent with the prompt,
+at most two are used) when the harness has them as files: items whose pictures look like them join the cues, from
+the query daemon's picture embedder and only if it answers within `--picture-wait` (2 s from the start); the words'
+cues never wait for it. A message of only pictures is recalled for too. `rummage.pictures` in the reply says how many
+pictures were searched and why one wasn't. It always replies with JSON, also when it has nothing to recall:
 
 - `hookSpecificOutput.additionalContext`: the block for the model, when there is one. It ends with one sentence on
   the unfinished index only when that changes how to read it: a result's source is still being read, a tenth or more

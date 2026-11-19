@@ -1033,6 +1033,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--recent-minutes", type=float, default=45,
                    help="how far back to look in other sessions (0: not at all)")
     p.add_argument("--recent-items", type=int, default=2)
+    p.add_argument("--image", action="append", metavar="FILE",
+                   help="a picture sent with the prompt (repeatable; with --hook: the hook's `images`): items with "
+                        "pictures that look like it are added to the cues if the daemon embeds it in time")
+    p.add_argument("--picture-wait", type=float, default=2.0, metavar="SECONDS",
+                   help="how long from the start a picture's cues may take; later ones are left out")
     p.add_argument("--show-secrets", action="store_true", help="don't mask credentials in the output")
     p.add_argument("--allow-model-load", action="store_true",
                    help="load the model when no daemon runs (~1.5 s); otherwise fall back to exact words")

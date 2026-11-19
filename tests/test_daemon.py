@@ -175,3 +175,64 @@ def test_scores_from_the_daemons_vectors_match_a_search_that_reads_them(tmp_path
         time.sleep(0.05)
     assert len(snapshots.get(model)[0]) == before + 1
     store.close()
+
+
+@pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="no Unix sockets")
+def test_a_picture_is_asked_for_by_its_bytes_and_comes_back_with_scores(tmp_path):
+    import base64
+
+    path = D.socket_path(tmp_path)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(path))
+    server.listen(1)
+    seen = {}
+    ids, scores = np.array([3, 5], np.int64), np.array([0.25, 0.5], np.float32)
+
+    def answer():
+        conn, _ = server.accept()
+        with conn:
+            seen.update(json.loads(conn.makefile().readline()))
+            conn.sendall(json.dumps({"vector": [0.6, 0.8], "segments": base64.b64encode(ids.tobytes()).decode(),
+                                     "scores": base64.b64encode(scores.tobytes()).decode()}).encode() + b"\n")
+
+    thread = threading.Thread(target=answer)
+    thread.start()
+    vector, scored = D.query_picture_scores(tmp_path, b"\x89PNGdata", "model-v1", 5)
+    thread.join()
+    server.close()
+    assert seen == {"picture": base64.b64encode(b"\x89PNGdata").decode(), "model": "model-v1", "scores": True}
+    assert np.allclose(vector, [0.6, 0.8]) and scored[0].tolist() == [3, 5] and scored[1].tolist() == [0.25, 0.5]
+    assert D.query_picture_scores(tmp_path, b"x", "model-v1", 1) is None   # the daemon is gone
+
+
+def test_the_query_model_embeds_pictures_on_a_server_of_its_own_and_keeps_the_vector(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from rummage import config as C
+    from rummage import query as Q
+
+    cfg = C.load(tmp_path / "config.toml")
+    profile = SimpleNamespace(version="v1", local=True, media=True, name="m")
+    opened, calls = [], []
+
+    class Embedder:
+        def __init__(self, media):
+            self.profile, self.process, self.media_on = profile, SimpleNamespace(poll=lambda: None), media
+
+        def media(self, data):
+            calls.append(data)
+            return np.ones(3, np.float32)
+
+        def stop(self):
+            opened.append("stopped")
+
+    monkeypatch.setattr(Q, "profile_for", lambda cfg, version: profile)
+    monkeypatch.setattr(Q.QueryModel, "_open", lambda self, profile, media=False: Embedder(media))
+    model = Q.QueryModel(cfg)
+    assert model.picture_vector("v1", b"one").tolist() == [1, 1, 1]
+    model.picture_vector("v1", b"one")
+    assert calls == [b"one"] and model.embedder is None   # the text embedder was never started
+    model.picture_vector("v1", b"two")
+    assert calls == [b"one", b"two"]
+    model.close_pictures()
+    assert opened == ["stopped"]
