@@ -267,16 +267,16 @@ def picture_cues(cfg: C.Config, args, pictures: RP.PictureQuery, within: Within 
                  session: str | None, about: dict) -> list[dict]:
     """The cues the prompt's pictures find, masked like the rest; `about["pictures"]` says what became of them."""
     found = pictures.results()
-    about["pictures"] = {"asked": len(pictures.paths), "searched": len(found), **(
-        {"note": "; ".join(pictures.problems)} if pictures.problems else {})}
+    problems = pictures.problems + (["not embedded in time (it will be ready for the next ask)"] if pictures.late else [])
+    about["pictures"] = {"asked": len(pictures.paths), "searched": len(found),
+                         **({"note": "; ".join(problems)} if problems else {})}
     if not found or not cfg.index_path.exists():
         return []
     own = session_context(cfg, session, "", args.recent_minutes)[1] | recall_log.seen(recall_log.load(cfg.data_dir), session)
     store = Store(cfg.index_path)
     try:
         version = store.model
-        hits = RP.cues(store, version, found, args.source, args.path, within, skip | own,
-                       Searcher(store, model=version).vector_count(), 0.0)
+        hits = RP.cues(store, version, found, args.source, args.path, within, skip | own)
     finally:
         store.close()
     return [_masked(cfg, args, {**h.as_dict(), "why": RP.why(h)}) for h in hits]
