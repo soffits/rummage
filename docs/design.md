@@ -100,7 +100,7 @@ name and the items' keys and fingerprints are part of the index format.
 | `files` | core | a file: text, HTML, Office/OpenDocument (sheet rows, slide notes), RTF, EPUB, .eml in ~1800-character passages; a PDF by page, a scanned page also as an image; a picture as an image vector; a recording as 30 s sound windows and a video as a frame per shot plus its sound, at their moments; an archive's list of names; anything else by name | mtime+size, then SHA-256 (size+mtime above 64 MB) |
 | `markdown` | core | a note; title, aliases, tags from frontmatter; passages embedded with the heading path | mtime+size, then SHA-256 |
 | `seafile` | plugin | a file in a Seafile library, read through the web API with a read-only account or a library API token | library head commit (account) or root folder id (library token), then each file's object id |
-| `dsh-sessions` | plugin | a person's message plus the reply, in a DeepSeek Harness session log | per-log mtime+size, then content hash |
+| `dsh-sessions` | plugin | a person's message plus the reply, in a DeepSeek Harness session log; pictures sent with the message as image vectors and OCR passages of the same item | per-log mtime+size, then content hash |
 | `hermes` | plugin | the same, in a Hermes Agent `state.db` | message id cursor |
 | `claude-code`, `codex` | plugin | the same, in append-only JSONL session logs | per-file size+mtime; reading resumes at the last turn's first line |
 | `gemini-cli` | plugin | the same, in Gemini CLI's JSONL logs, replayed with their patch and rewind records | per-file size+mtime, whole file |

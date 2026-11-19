@@ -211,10 +211,11 @@ def _read(item: Item, name: str, blob: Blob, how: Reading, name_line: str) -> li
     return segments + passages(item, name, body or "", kind)
 
 
-def passages(item: Item, name: str, body: str, kind: str, loc: str | None = None) -> list[Segment]:
-    """`body` in passages, each embedded with the file's name as its title; `loc` is the place for all of them
+def passages(item: Item, name: str, body: str, kind: str, loc: str | None = None,
+             title: str | None = None) -> list[Segment]:
+    """`body` in passages, each embedded with `title` (default: the file's name); `loc` is the place for all of them
     (else each passage's offset)."""
-    title = PurePosixPath(name).stem
+    title = title or PurePosixPath(name).stem
     out = []
     for start, piece in T.chunks(body):
         seg = Segment("text", piece, loc=loc or str(start),
@@ -238,21 +239,41 @@ def _iwork(item: Item, fh, limits: Limits) -> str:
     return body
 
 
+class Unreadable(Exception):
+    """A picture the model can't be given: `why` is a key of `UNREAD`, `cut` says what was left out."""
+
+    def __init__(self, why: str, cut: Cut):
+        super().__init__(cut.reason)
+        self.why, self.cut = why, cut
+
+
+def model_input(name: str, data: bytes, how: Reading) -> bytes:
+    """A picture's bytes in a form the image encoder reads (PNG, JPEG or BMP; others go through ffmpeg)."""
+    if X.suffix(name) in X.NATIVE_IMAGES:
+        return data
+    try:
+        return X.to_png(data, how.ffmpeg, flatten=False)
+    except RuntimeError as error:
+        why = "damaged" if (how.ffmpeg or shutil.which("ffmpeg")) else "missing"
+        raise Unreadable(why, Cut("picture", 0, None, "files", "ffmpeg", str(error))) from error
+
+
 def picture(item: Item, name: str, data: bytes, how: Reading) -> list[Segment]:
-    """A picture's image vector input, and the text in it."""
-    suffix = X.suffix(name)
-    if suffix in X.NATIVE_IMAGES:
-        model_input = data
-    else:
-        try:
-            model_input = X.to_png(data, how.ffmpeg, flatten=False)
-        except RuntimeError as error:
-            why = "damaged" if (how.ffmpeg or shutil.which("ffmpeg")) else "missing"
-            unread(item, why, [Cut("picture", 0, None, "files", "ffmpeg", str(error))])
-            return []
-    segments = [Segment("image", "", loc="picture", media=model_input)]
-    found = ocr_text(item, f"{item.fingerprint}\0picture", data if suffix in OPENCV_IMAGES else model_input, how)
-    return segments + passages(item, name, found, "image", loc="picture")
+    """A picture file's image vector input, and the text in it."""
+    try:
+        encoded = model_input(name, data, how)
+    except Unreadable as error:
+        unread(item, error.why, [error.cut])
+        return []
+    return picture_segments(item, name, data, encoded, how, f"{item.fingerprint}\0picture", "picture")
+
+
+def picture_segments(item: Item, name: str, data: bytes, encoded: bytes, how: Reading, key: str, loc: str,
+                     title: str | None = None) -> list[Segment]:
+    """The image segment (`encoded`: `model_input` of `data`) and the passages of the text OCR finds in the picture.
+    `key` identifies the picture for the OCR cache, `loc` places it in the item and `title` names its passages."""
+    found = ocr_text(item, key, data if X.suffix(name) in OPENCV_IMAGES else encoded, how)
+    return [Segment("image", "", loc=loc, media=encoded)] + passages(item, name, found, "image", loc=loc, title=title)
 
 
 def ocr_text(item: Item, key: str, picture, how: Reading) -> str:

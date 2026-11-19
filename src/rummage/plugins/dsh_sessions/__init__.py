@@ -15,6 +15,12 @@ decides: a message without one is no person's. Messages before it are read by th
 that history: the principal when there is one, else the Telegram sender tag in the text, the dsh-oidc sender notice
 before a Web message, a `skip_prefixes` line for agents, and `web_senders_since` (from then a Web prompt with no
 sender at all is an agent's).
+
+Pictures sent with a message are image blocks whose `attachment` names the picture by its SHA-256
+(`attachmentId: "sha256:<hex>"`, with `mediaType`, `name` and `bytes`); DSH keeps the bytes, normalized, in its
+content-addressed store at `<dsh home>/attachments/v1/objects/<hex[:2]>/<hex>`. They are read into the message's turn
+by `rummage.chat_images`, so a picture is found by what it shows and by the words in it, and points to its message.
+A message with only pictures is a turn too.
 """
 
 from __future__ import annotations
@@ -24,14 +30,17 @@ import os
 import re
 from pathlib import Path
 
-from rummage.store import Item
-from rummage.sources import Plan
+from rummage.chat_images import ChatImage
 from rummage.chats import Turn, keep_chars, people_map, turn_item, ChatSource
+from rummage.documents import Reading
+from rummage.sources import Plan
+from rummage.store import Item
 
 LOG_NAME = "session.v4.jsonl.zstd"
 # Principal kinds DSH plugins record for senders that are not people: another session, a job, an outside caller.
 AGENT_PRINCIPALS = frozenset({"dsh-session", "cron-job", "external"})
 _TG_TAG = re.compile(r"^\[Telegram message from .*?user id (\d+)\)\]")
+_ATTACHMENT_ID = re.compile(r"^sha256:([0-9a-f]{64})$")
 
 
 def read_log(path: Path) -> list[dict]:
@@ -87,8 +96,9 @@ def _text(data: dict) -> str:
 
 class DshSessionSource(ChatSource):
     # A newer way of reading which messages are a person's: every log is planned again once, and turns it no longer
-    # yields are removed (2: what agents send is left out; 3: from principals_since only the principal decides).
-    reader = 3
+    # yields are removed (2: what agents send is left out; 3: from principals_since only the principal decides;
+    # 4: pictures sent with a message belong to its turn).
+    reader = 4
 
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
@@ -101,6 +111,9 @@ class DshSessionSource(ChatSource):
         self.skip_prefixes = tuple(spec.get("skip_prefixes", ["[Sent by the agent in dsh session"]))
         self.web_senders_since = _moment(spec.get("web_senders_since"))
         self.principals_since = _moment(spec.get("principals_since"))
+        self.attachments = Path(os.path.expanduser(spec.get("attachments", str(home / "attachments" / "v1"))))
+        self.reading = Reading.of(spec, data_dir)
+        self.media = self.reading.images
 
     def _project_dirs(self) -> list[Path]:
         if self.projects:
@@ -118,6 +131,22 @@ class DshSessionSource(ChatSource):
     def detect(cls) -> dict | None:
         home = Path(os.environ.get("DSH_HOME") or Path.home() / ".dsh")
         return {"type": "dsh-sessions"} if (home / "sessions").is_dir() else None
+
+    def _images(self, data: dict) -> list[ChatImage]:
+        """The pictures a message carries, read from DSH's attachment store when the turn is read."""
+        if not self.reading.images:
+            return []
+        out = []
+        for block in data.get("content") or []:
+            attachment = block.get("attachment") if isinstance(block, dict) and block.get("type") == "image" else None
+            found = _ATTACHMENT_ID.match(str((attachment or {}).get("attachmentId")))
+            if found:
+                sha = found.group(1)
+                path = self.attachments / "objects" / sha[:2] / sha
+                size = attachment.get("bytes")
+                out.append(ChatImage(sha, str(attachment.get("name") or sha), str(attachment.get("mediaType") or ""),
+                                     size if isinstance(size, int) else None, path.read_bytes))
+        return out
 
     def _speaker(self, text: str, rpc_id: str, oidc: str | None, principal: dict | None = None) -> str:
         users = self.people.get("telegram_users", {})
@@ -172,10 +201,11 @@ class DshSessionSource(ChatSource):
                     continue
                 subject, oidc = oidc, None
                 text = _text(msg)
+                images = self._images(msg)
                 rpc_id = str(source.get("rpcId") or "")
                 if source.get("kind") == "schedule":
                     replies_to_person = False  # a job's prompt: what follows answers the job
-                if source.get("kind") != "user" or not text:
+                if source.get("kind") != "user" or not (text or images):
                     continue
                 principal = principal_of(msg)
                 at_time = (event.get("time") or 0) / 1000
@@ -186,7 +216,7 @@ class DshSessionSource(ChatSource):
                     replies_to_person = True
                     at = str(event.get("seq")) + (f".{n}" if n else "")
                     turns.append(Turn(sid, at, at_time, self._speaker(text, rpc_id, None, principal), text.strip(),
-                                      "", str(principal.get("channel") or "web"), project=project))
+                                      "", str(principal.get("channel") or "web"), project=project, images=images))
                     continue
                 if not rpc_id and not _TG_TAG.match(text) and principal is None:
                     continue
@@ -205,7 +235,7 @@ class DshSessionSource(ChatSource):
                 body = text.split("\n", 1)[1] if _TG_TAG.match(text) and "\n" in text else text
                 at = str(event.get("seq")) + (f".{n}" if n else "")
                 turns.append(Turn(sid, at, at_time, speaker, body.strip(),
-                                  "", channel, project=project))
+                                  "", channel, project=project, images=images))
         for turn in turns:
             turn.session_title = title
         return turns

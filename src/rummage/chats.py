@@ -17,7 +17,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Iterator
 
+from . import documents as D
 from . import text as T
+from .chat_images import ChatImage, fingerprint_part, image_segments
 from .limits import KEEP_CHARS, Cut, record
 from .sources import Plan, Source
 from .store import Item, Segment
@@ -44,6 +46,7 @@ class Turn:
     model: str = ""          # the model that replied, when the log says
     offset: int = 0          # byte offset of the person's line in its log file (append-only logs)
     context: str = ""        # notices and the quoted message a chat client put before the person's words
+    images: list[ChatImage] = field(default_factory=list)   # pictures sent with the message
 
     @property
     def reply(self) -> str:
@@ -105,7 +108,8 @@ def turn_item(source: str, prefix: str, turn: Turn, assistant: str) -> Item:
         body += f"\n\n{assistant}: {turn.reply}"
     if context:
         body += f"\n\n{context}"
-    fingerprint = hashlib.sha256(body.encode("utf-8", "replace")).hexdigest()
+    fingerprint = hashlib.sha256((body + "\0" + fingerprint_part(turn.images)).encode("utf-8", "replace")
+                                 if turn.images else body.encode("utf-8", "replace")).hexdigest()
     title = f"{turn.speaker}, {when:%Y-%m-%d %H:%M}" + (f" · {turn.session_title}" if turn.session_title else "")
     info = {"session": turn.session, "message": turn.message, "speaker": turn.speaker,
             "time": when.isoformat(timespec="seconds"), "said": said_key(turn.text)}
@@ -119,6 +123,8 @@ def turn_item(source: str, prefix: str, turn: Turn, assistant: str) -> Item:
         info["project"] = turn.project
     if turn.model:
         info["model"] = turn.model
+    if turn.images:
+        info["images"] = len(turn.images)
     item = Item(source, f"{turn.session}:{turn.message}", "chat", title, f"{prefix}:{turn.session}#{turn.message}",
                 turn.time, fingerprint, info)
     item._turn = (turn, assistant)  # type: ignore[attr-defined]
@@ -163,12 +169,18 @@ def turn_segments(item: Item, keep: int) -> list[Segment]:
 
 
 class ChatSource(Source):
-    """A source of chat turns: its items are `turn_item`s, read into passages by `turn_segments`."""
+    """A source of chat turns: its items are `turn_item`s, read into passages by `turn_segments`, and the pictures
+    its turns carry into image vectors and OCR passages by `image_segments` (when it sets `reading`)."""
     reader = CHAT_READER
     keep_chars: int
+    reading: D.Reading | None = None
 
     def load(self, item: Item) -> list[Segment]:
-        return turn_segments(item, self.keep_chars)
+        segments = turn_segments(item, self.keep_chars)
+        turn = item._turn[0]  # type: ignore[attr-defined]
+        if turn.images and self.reading is not None:
+            segments += image_segments(item, turn.images, self.reading)
+        return segments
 
 
 def text_blocks(content, kinds: tuple[str, ...] = ("text", "input_text", "output_text")) -> str:

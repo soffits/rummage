@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.29.0
+
+- Pictures sent in a chat are indexed as part of their message. In `dsh-sessions`, an image block of a person's message is read from DeepSeek Harness's attachment store and gets what a file's picture gets: an image vector, and passages of the text OCR finds in it, labelled `[picture N]`. A search finds the picture by what it shows or by the words in it, and the hit is the message (`dsh:<session>#<message>`), so `rummage get <id> --around N` opens the turn it came with. A message of only pictures is a turn too (before it was dropped). `images = false`, `ocr = false`, `limits.image` and `attachments` work as on file sources; a picture whose file is gone or is too big is a `partial` entry and the message's words stay indexed. A picture is read and embedded once, whatever happens to its turn later (the OCR cache and the vector are keyed by the picture's hash). The first run after the upgrade reads the turns with pictures again, only those. `reader` of `dsh-sessions` is 4.
 ## 0.28.1
 
 - The recall block's header now says plainly that its lines are cues pointing to where to look, not facts: before relying on one, open it and check the other matching records too (for a fact about the person's life, every order source, chat and note), since a snippet can be outdated or an assistant's earlier guess. Models had been answering from the snippet or the first hit. The label for turns from other sessions says the same.
