@@ -39,6 +39,7 @@ class PictureQuery:
         self.deadline = started + wait
         self.found: list[tuple] = []           # (vector, scored) of each picture that came back in time
         self.problems: list[str] = []
+        self.late = False
         self.thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self) -> "PictureQuery":
@@ -70,18 +71,21 @@ class PictureQuery:
         """What is ready now, waiting for the thread until the deadline."""
         if self.thread.is_alive():
             self.thread.join(max(0.0, self.deadline - time.monotonic()))
+            self.late = self.thread.is_alive()
         return list(self.found)
 
 
 def cues(store: Store, version: str | None, found: list[tuple], sources: list[str] | None, paths: list[str] | None,
-         within: Within | None, skip: set[str], count: int, gate: float) -> list[Hit]:
-    """Items whose pictures look like the prompt's pictures, the best first, without the ids in `skip`."""
+         within: Within | None, skip: set[str]) -> list[Hit]:
+    """Items whose pictures look like the prompt's pictures, the best first, without the ids in `skip`. The daemon's
+    scores come with each picture, so only which segment is which is read from the index, not the vectors."""
     best: dict[str, Hit] = {}
     for vector, scored in found:
         searcher = Searcher(store, sources, paths, model=version, within=within, scored=scored)
-        for hit in searcher.search("", vector, limit=10, segments="image"):
-            if hit.id not in skip and (hit.z or 0) >= gate_for(max(gate, MIN_Z), count) \
-                    and hit.z > (best[hit.id].z if hit.id in best else 0):
+        hits = searcher.search("", vector, limit=10, segments="image")
+        gate = gate_for(MIN_Z, searcher.vector_count())
+        for hit in hits:
+            if hit.id not in skip and (hit.z or 0) >= gate and hit.z > (best[hit.id].z if hit.id in best else 0):
                 best[hit.id] = hit
     return sorted(best.values(), key=lambda hit: -(hit.z or 0))[:ITEMS]
 

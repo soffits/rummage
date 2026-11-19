@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.30.1
+
+- Fixed: recall with a picture spent a second more than it needed to, because the cues from the picture first loaded every vector of the index (a few seconds on a large one) to count them; the daemon's scores already carry what the search needs. A warm recall with a new picture now takes 1.7 s on a busy 4-core machine (0.5 s for words only), and a picture that isn't embedded by the deadline says so in `rummage.pictures.note`.
 ## 0.30.0
 
 - Recall can search with the picture a person just sent. `rummage recall --image FILE` (repeatable) and the hook's `images` list give the prompt's pictures as files; each is sized to the model's smallest image budget and embedded by the query daemon, which loads the image encoder in a server of its own on the first picture (so text queries never wait behind one) and keeps the vector by the picture's hash. Items whose pictures look like it (an earlier screenshot of the same page, a scan, a photo) join the cues as `looks like the picture sent`, at most two, if the vector is ready within `--picture-wait` seconds (2) of the start; the cues from the words are never delayed, and a late picture adds nothing (its vector is ready for the next ask). A message of only a picture is recalled for too. Embedding a query picture takes about 1.2 s on three threads (3 s on one; a full-size picture takes 22 s). `reply.rummage.pictures` says how many were searched and why not.
