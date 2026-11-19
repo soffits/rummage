@@ -304,7 +304,7 @@ def _fail(args, status: str, code: int, message: str, actions: list[dict] | None
 
 
 def _item_time(hit: dict) -> float:
-    """When a hit is from, for newest-first order: a chat message's or mail's own time, else the item's date."""
+    """When a hit is from, for newest-first and oldest-first order (0 when undated): a chat message's or mail's own time, else the item's date."""
     return timestamp((hit.get("info") or {}).get("time")) or timestamp(hit.get("date")) or 0.0
 
 
@@ -336,6 +336,8 @@ def cmd_search(cfg: C.Config, args) -> int:
         store.close()
     if args.sort == "newest":
         hits.sort(key=_item_time, reverse=True)
+    elif args.sort == "oldest":
+        hits.sort(key=lambda h: (_item_time(h) == 0.0, _item_time(h)))
     hits = [_show(cfg, args, h) for h in hits]
     doc = E.build(args, hits, time.monotonic() - started, index_empty)
     doc["summary"]["pending_vectors"] = pending
@@ -969,8 +971,9 @@ def main(argv: list[str] | None = None) -> int:
                                                          "a file's change)")
     p.add_argument("--until", metavar="YYYY-MM-DD", help="only items up to and including this day")
     p.add_argument("--no-daemon", action="store_true", help="load the model even when a query daemon is running")
-    p.add_argument("--sort", choices=["score", "newest"], default="score",
-                   help="order of the results: best match first, or the newest of the matches first")
+    p.add_argument("--sort", choices=["score", "newest", "oldest"], default="score",
+                   help="order of the results: best match first, or the newest or oldest of the matches first "
+                        "(undated hits last when oldest)")
     p.add_argument("--files", action="store_true", help="only the refs of matching items, one per line")
     p.add_argument("--budget-tokens", type=int, help="with --json: trim the output to about this many tokens")
     p.add_argument("--show-secrets", action="store_true", help="don't mask credentials in the output")

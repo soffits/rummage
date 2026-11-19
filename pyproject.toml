@@ -1,6 +1,6 @@
 [project]
 name = "rummage"
-version = "0.30.1"
+version = "0.31.0"
 description = "Local search by meaning and exact words over your files, on your own machine, with EmbeddingGemma 2 on llama.cpp"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
