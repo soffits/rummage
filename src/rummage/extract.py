@@ -499,13 +499,20 @@ def names_text(names: list[str]) -> str:
 PICTURE_SIDE = 2000   # pixels on the long side of a picture ffmpeg converts: the models look at far fewer
 
 
-def to_png(raw: bytes, ffmpeg: str | None = None, flatten: bool = True) -> bytes:
-    """The first frame of any image or video ffmpeg reads, as PNG at most PICTURE_SIDE pixels on its long side,
-    transparency flattened onto white."""
+def to_png(raw: bytes, ffmpeg: str | None = None, flatten: bool = True, budget: int | None = None) -> bytes:
+    """The first frame of any image or video ffmpeg reads, as PNG at most PICTURE_SIDE pixels on its long side
+    (or, with `budget`, sized to that many of the model's image tokens, as `media.frame_size` does: a query
+    picture), transparency flattened onto white."""
+    from .media import SIDE
+
     ffmpeg = ffmpeg or shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("this picture needs ffmpeg to be read")
-    fit = f"scale=w='min({PICTURE_SIDE},iw)':h='min({PICTURE_SIDE},ih)':force_original_aspect_ratio=decrease"
+    if budget:
+        size = lambda axis: f"max({SIDE},floor(i{axis}*sqrt({budget * SIDE * SIDE}/(iw*ih))/{SIDE})*{SIDE})"
+        fit = f"scale=w='{size('w')}':h='{size('h')}'"
+    else:
+        fit = f"scale=w='min({PICTURE_SIDE},iw)':h='min({PICTURE_SIDE},ih)':force_original_aspect_ratio=decrease"
     # No explicit [0:v] in the plain case: a HEIC tile grid then comes out whole instead of as its first tile.
     graph = (f"color=white,format=rgb24[bg];[bg][0:v]scale2ref[bg2][fg];[bg2][fg]overlay=shortest=1,{fit},format=rgb24"
              if flatten else f"{fit},format=rgb24")
@@ -523,20 +530,8 @@ def to_png(raw: bytes, ffmpeg: str | None = None, flatten: bool = True) -> bytes
 
 
 def query_picture(raw: bytes, ffmpeg: str | None = None) -> bytes:
-    """A picture as a query: PNG sized to the model's smallest image budget (`media.FRAME_BUDGET` tokens), which
-    embeds in a fraction of the time a full-size picture takes and keeps the vector close to the full-size one's."""
-    import struct
+    """A picture as a query: PNG sized to the model's smallest image budget, which embeds in a fraction of the time
+    a full-size picture takes and keeps the vector close to the full-size one's."""
+    from .media import FRAME_BUDGET
 
-    from .media import frame_size
-
-    ffmpeg = ffmpeg or shutil.which("ffmpeg")
-    whole = to_png(raw, ffmpeg)
-    size = frame_size(*struct.unpack(">II", whole[16:24]))
-    if size is None:
-        return whole
-    run = subprocess.run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vf",
-                          f"scale={size[0]}:{size[1]}", "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
-                         input=whole, capture_output=True, timeout=60)
-    if run.returncode != 0 or not run.stdout:
-        raise RuntimeError(f"ffmpeg could not resize the picture: {run.stderr[:200]!r}")
-    return run.stdout
+    return to_png(raw, ffmpeg, budget=FRAME_BUDGET)

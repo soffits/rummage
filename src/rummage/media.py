@@ -132,23 +132,23 @@ def sound(path: str, ffmpeg: str, moment: Moment) -> bytes:
     return wav(pcm[: len(pcm) // 2 * 2])
 
 
+SIDE = 3 * 16   # each side of an image is a multiple of this many pixels (3x3 patches of 16 px make a token)
+
+
 def frame_size(width: int, height: int, budget: int = FRAME_BUDGET) -> tuple[int, int] | None:
     """The size that fills `budget` soft tokens, as the model's image processor scales (Gemma's: 3x3 patches of
     16 px per token, each side a multiple of 48 px; DigUp's ImageSizing)."""
     if width <= 0 or height <= 0:
         return None
-    patch, pooling = 16, 3
-    pixels = budget * pooling * pooling * patch * patch
-    factor = (pixels / (width * height)) ** 0.5
-    side = pooling * patch
-    w, h = int(factor * width / side) * side, int(factor * height / side) * side
+    factor = (budget * SIDE * SIDE / (width * height)) ** 0.5
+    w, h = int(factor * width / SIDE) * SIDE, int(factor * height / SIDE) * SIDE
     if w == 0 and h == 0:
         return None
-    longest = budget * side
+    longest = budget * SIDE
     if h == 0:
-        h, w = side, min(width // height * side, longest)
+        h, w = SIDE, min(width // height * SIDE, longest)
     elif w == 0:
-        w, h = side, min(height // width * side, longest)
+        w, h = SIDE, min(height // width * SIDE, longest)
     return w, h
 
 
