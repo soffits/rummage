@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.31.0
+
+- `rummage search --sort oldest` lists the oldest of the matches first, so a lookup for where something was first said can start at its origin (hits without a date come last). Like `--sort newest`, it orders the best `-n` matches; raise `-n` to reach further back.
+
 ## 0.30.1
 
 - Fixed: recall with a picture spent a second more than it needed to, because the cues from the picture first loaded every vector of the index (a few seconds on a large one) to count them; the daemon's scores already carry what the search needs. A warm recall with a new picture now takes 1.7 s on a busy 4-core machine (0.5 s for words only), and a picture that isn't embedded by the deadline says so in `rummage.pictures.note`.

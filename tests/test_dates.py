@@ -46,3 +46,8 @@ def test_since_and_until_include_the_period_a_note_is_about(tmp_path, capsys):
 def test_newest_first(tmp_path, capsys):
     cfg = _index(tmp_path)
     assert _refs(capsys, cfg, "--sort", "newest") == ["weekly/2026-W45.md", "new-plan.md", "old-plan.md"]
+
+
+def test_oldest_first(tmp_path, capsys):
+    cfg = _index(tmp_path)
+    assert _refs(capsys, cfg, "--sort", "oldest") == ["old-plan.md", "new-plan.md", "weekly/2026-W45.md"]
