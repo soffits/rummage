@@ -520,3 +520,23 @@ def to_png(raw: bytes, ffmpeg: str | None = None, flatten: bool = True) -> bytes
     if run.returncode != 0 or not run.stdout:
         raise RuntimeError(f"ffmpeg could not read the picture: {run.stderr[:200]!r}")
     return run.stdout
+
+
+def query_picture(raw: bytes, ffmpeg: str | None = None) -> bytes:
+    """A picture as a query: PNG sized to the model's smallest image budget (`media.FRAME_BUDGET` tokens), which
+    embeds in a fraction of the time a full-size picture takes and keeps the vector close to the full-size one's."""
+    import struct
+
+    from .media import frame_size
+
+    ffmpeg = ffmpeg or shutil.which("ffmpeg")
+    whole = to_png(raw, ffmpeg)
+    size = frame_size(*struct.unpack(">II", whole[16:24]))
+    if size is None:
+        return whole
+    run = subprocess.run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vf",
+                          f"scale={size[0]}:{size[1]}", "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
+                         input=whole, capture_output=True, timeout=60)
+    if run.returncode != 0 or not run.stdout:
+        raise RuntimeError(f"ffmpeg could not resize the picture: {run.stderr[:200]!r}")
+    return run.stdout

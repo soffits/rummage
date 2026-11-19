@@ -5,7 +5,8 @@ and it prints nothing when nothing clearly matches, keeps to a size budget, and 
 asked (it uses the query daemon when one runs, exact words otherwise).
 
 Input is the query as an argument, the text on stdin, or with `--hook` the JSON a prompt hook receives (its
-`prompt` and `session_id` fields; Claude Code and Codex `UserPromptSubmit` send them). Output is a plain-text block,
+`prompt` and `session_id` fields; Claude Code and Codex `UserPromptSubmit` send them, and a harness that has the
+prompt's pictures as files adds them as `images`: see `recall_pictures`). Output is a plain-text block,
 `--json`, or with `--hook` the hook's JSON reply carrying the block as `additionalContext`.
 
 Besides matches from the whole index, recall adds what was said minutes ago in other chat sessions that shares a good
@@ -26,6 +27,7 @@ from . import config as C
 from . import memory
 from . import progress as P
 from . import recall_log
+from . import recall_pictures as RP
 from . import scopes as S
 from . import text as T
 from .projects import ensure
@@ -251,10 +253,41 @@ def notice(project: dict | None) -> str | None:
             "it off.")
 
 
+def model_version(cfg: C.Config) -> str | None:
+    if not cfg.index_path.exists():
+        return None
+    store = Store(cfg.index_path)
+    try:
+        return store.model
+    finally:
+        store.close()
+
+
+def picture_cues(cfg: C.Config, args, pictures: RP.PictureQuery, within: Within | None, skip: set[str],
+                 session: str | None, about: dict) -> list[dict]:
+    """The cues the prompt's pictures find, masked like the rest; `about["pictures"]` says what became of them."""
+    found = pictures.results()
+    about["pictures"] = {"asked": len(pictures.paths), "searched": len(found), **(
+        {"note": "; ".join(pictures.problems)} if pictures.problems else {})}
+    if not found or not cfg.index_path.exists():
+        return []
+    own = session_context(cfg, session, "", args.recent_minutes)[1] | recall_log.seen(recall_log.load(cfg.data_dir), session)
+    store = Store(cfg.index_path)
+    try:
+        version = store.model
+        hits = RP.cues(store, version, found, args.source, args.path, within, skip | own,
+                       Searcher(store, model=version).vector_count(), 0.0)
+    finally:
+        store.close()
+    return [_masked(cfg, args, {**h.as_dict(), "why": RP.why(h)}) for h in hits]
+
+
 def run(cfg: C.Config, args) -> int:
+    started = time.monotonic()
     raw = args.query if args.query else sys.stdin.read()
     session, cwd, harness = args.session, args.cwd, args.harness
     context = args.context
+    images = list(args.image or [])
     if args.hook:
         try:
             event = json.loads(raw or "{}")
@@ -263,6 +296,7 @@ def run(cfg: C.Config, args) -> int:
             session = session or event.get("session_id")
             cwd = cwd or event.get("cwd")
             harness = harness or event.get("harness")
+            images += [i for i in event.get("images") or [] if isinstance(i, str)]
         except ValueError:
             prompt = raw
     else:
@@ -284,8 +318,11 @@ def run(cfg: C.Config, args) -> int:
     results: list[dict] = []
     recent: list[dict] = []
     mode, degraded = "none", None
-    searched = bool(prompt) and not paused and not (args.hook and not worth_recalling(prompt))
-    if searched:
+    by_words = bool(prompt) and not paused and not (args.hook and not worth_recalling(prompt))
+    pictures = RP.PictureQuery(cfg, images, model_version(cfg), started, args.picture_wait).start() \
+        if images and not paused else None
+    searched = by_words or pictures is not None
+    if by_words:
         try:
             before, own = session_context(cfg, session, prompt, args.recent_minutes)
             shown = recall_log.load(cfg.data_dir)
@@ -306,8 +343,18 @@ def run(cfg: C.Config, args) -> int:
             recent = [_masked(cfg, args, r) for r in recent_turns(
                 cfg, prompt, [session] if session else [], args.recent_minutes, args.recent_items,
                 {r["id"] for r in results} | own, scope.within)]
-            recall_log.add(cfg.data_dir, session, [r["id"] for r in results + recent])
         except Exception as error:  # a hook must never break the agent
+            print(f"rummage recall: {type(error).__name__}: {error}", file=sys.stderr)
+    if pictures is not None:
+        try:
+            results += picture_cues(cfg, args, pictures, scope.within, {r["id"] for r in results + recent}, session,
+                                    about)
+        except Exception as error:
+            print(f"rummage recall: pictures: {type(error).__name__}: {error}", file=sys.stderr)
+    if searched:
+        try:
+            recall_log.add(cfg.data_dir, session, [r["id"] for r in results + recent])
+        except Exception as error:
             print(f"rummage recall: {type(error).__name__}: {error}", file=sys.stderr)
     worth_noting = agent if agent and P.bears_on(index, {r["source"] for r in results + recent}) else None
     block = "" if not searched else render(results, recent, degraded, worth_noting,

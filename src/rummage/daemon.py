@@ -12,7 +12,10 @@ cosine with every vector of that model (`segments` and `scores`, base64 of int64
 keeps the vectors in memory, read again at most once a minute while the index changes, so a search doesn't read them
 from the index file each time, which takes seconds when the file has dropped out of the page cache. Vectors made
 since the last read are missing from those scores for up to a minute; keyword search still finds their passages.
-The socket is created with owner-only permissions, in the data directory (or /tmp when that path is too long).
+`{"picture": "<base64 PNG>", "model": "<version>"}` asks for a picture's vector instead (with `"scores": true` it
+carries the scores too): the daemon embeds it with a second llama-server that has the image encoder, started on the
+first picture and kept while the daemon runs, so text queries never wait for a picture. The answer is kept by the
+picture's hash, so a client that gave up and asks again finds it ready. The socket is created with owner-only permissions, in the data directory (or /tmp when that path is too long).
 """
 
 from __future__ import annotations
@@ -60,7 +63,18 @@ def query_scores(data_dir: Path, text: str, version: str | None, timeout: float 
     """`(vector, scored)` from a running daemon: the query vector of model `version`, and `(segment ids, scores)`,
     its cosine with every vector the daemon holds (None when the daemon has none to give); None when there is no
     daemon or it fails."""
-    reply = _ask(data_dir, {"embed": text, "model": version, "scores": True}, timeout)
+    return _scored(_ask(data_dir, {"embed": text, "model": version, "scores": True}, timeout))
+
+
+def query_picture_scores(data_dir: Path, png: bytes, version: str | None, timeout: float):
+    """`query_scores` for a picture (PNG bytes, sized by `extract.query_picture`), from a running daemon: the
+    picture's vector and its cosine with every vector the daemon holds, None when there is no daemon, it can't
+    embed pictures, or it takes longer than `timeout` (it goes on and keeps the vector for the next ask)."""
+    reply = _ask(data_dir, {"picture": base64.b64encode(png).decode(), "model": version, "scores": True}, timeout)
+    return _scored(reply)
+
+
+def _scored(reply: dict | None):
     if not reply or "vector" not in reply:
         return None
     scored = (np.frombuffer(base64.b64decode(reply["segments"]), np.int64),
@@ -220,7 +234,10 @@ def _serve(cfg: C.Config, idle_minutes: float | None) -> int:
         def handle(self):
             try:
                 request = json.loads(self.rfile.readline())
-                vector = model.vector(request.get("model"), str(request["embed"]))
+                if "picture" in request:
+                    vector = model.picture_vector(request.get("model"), base64.b64decode(request["picture"]))
+                else:
+                    vector = model.vector(request.get("model"), str(request["embed"]))
                 last_used[0] = time.monotonic()
                 reply = {"vector": [round(float(x), 6) for x in vector]}
                 if request.get("scores") and snapshots is not None and request.get("model"):
@@ -255,6 +272,7 @@ def _serve(cfg: C.Config, idle_minutes: float | None) -> int:
         server.server_close()
         path.unlink(missing_ok=True)
         model.close()
+        model.close_pictures()
     return 0
 
 
