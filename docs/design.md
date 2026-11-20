@@ -101,7 +101,7 @@ name and the items' keys and fingerprints are part of the index format.
 | `markdown` | core | a note; title, aliases, tags from frontmatter; passages embedded with the heading path | mtime+size, then SHA-256 |
 | `seafile` | plugin | a file in a Seafile library, read through the web API with a read-only account or a library API token | library head commit (account) or root folder id (library token), then each file's object id |
 | `dsh-sessions` | plugin | a person's message plus the reply, in a DeepSeek Harness session log; pictures sent with the message as image vectors and OCR passages of the same item | per-log mtime+size, then content hash |
-| `hermes` | plugin | the same, in a Hermes Agent `state.db` | message id cursor |
+| `hermes` | plugin | the same, in a Hermes Agent `state.db`, and the turns its `sessions` files add | message id cursor; the files again when any changes |
 | `claude-code`, `codex` | plugin | the same, in append-only JSONL session logs | per-file size+mtime; reading resumes at the last turn's first line |
 | `gemini-cli` | plugin | the same, in Gemini CLI's JSONL logs, replayed with their patch and rewind records | per-file size+mtime, whole file |
 | `mail` | plugin | a mail message with its attached documents' text, from a Maildir, an mbox or IMAP | Maildir key / message hash; IMAP UIDVALIDITY + highest UID per folder |

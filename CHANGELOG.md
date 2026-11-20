@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.0
+
+- `hermes` reads Hermes's transcript files too, with `sessions = "<hermes home>/sessions"`: the `session_<id>.json` snapshots of older Hermes versions and the `<id>.jsonl` logs of messages it couldn't store add the turns the database lacks. They mostly repeat the database and each other (a background review replays the chat it reviews), so a turn is indexed only when no database turn and no other file has the same message and start of answer; an excluded session stays out in its replays too. Hermes's own skill-review and iteration-limit prompts are no longer read as a person's messages.
+
 ## 0.31.0
 
 - `rummage search --sort oldest` lists the oldest of the matches first, so a lookup for where something was first said can start at its origin (hits without a date come last). Like `--sort newest`, it orders the best `-n` matches; raise `-n` to reach further back.
