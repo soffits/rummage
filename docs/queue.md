@@ -37,7 +37,7 @@ semfind ([PaperBoardOfficial](https://github.com/PaperBoardOfficial/semfind),
 ## Known leftovers
 
 - Images, recordings, videos and scanned PDFs in Seafile libraries are found by name only; OCR or image vectors for documents would need the image encoder on the server.
-- Pictures in chat are read only for `dsh-sessions`. Claude Code, Codex and OpenCode logs inline them as base64 in the message record, so reading one means going back to the record by its offset when the turn is read (holding every picture's bytes in the plan would not do); DSH's file attachments (PDF, Word, archives) are not read into their message either.
+- Pictures in chat are read only for `dsh-sessions`. Claude Code, Codex, OpenCode logs and Hermes session snapshots inline them as base64 in the message record, so reading one means going back to the record by its offset when the turn is read (holding every picture's bytes in the plan would not do); DSH's file attachments (PDF, Word, archives) are not read into their message either.
 - Audio and video are not indexed.
 - A document that can't be read at all (a corrupt PDF or Office file) fails its whole item: it isn't findable even by name, and since a run with failures saves no state, it is read again on every run and a Seafile library is listed again on every poll. Storing it by name with a `partial` note would fix both, but needs a line between permanent read errors and network ones, which should stay retried.
 - Vectors are loaded from SQLite on every search; a memory-mapped cache would help once an index passes a few hundred thousand segments.
