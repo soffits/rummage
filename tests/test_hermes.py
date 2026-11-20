@@ -92,6 +92,19 @@ def test_reads_only_turns_the_database_lacks(tmp_path):
     assert src.plan({k: i.fingerprint for k, i in items.items()}, plan.state).upserts == []
 
 
+def test_prompts_hermes_injects_are_not_a_persons(tmp_path):
+    src, _ = _setup(tmp_path)
+    src.sessions_dir = None
+    db = sqlite3.connect(src.db_path)
+    db.executemany("INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)", [
+        ("chat", "user", "You've reached the maximum number of tool-calling iterations. Summarize.", T0 + 5),
+        ("chat", "assistant", "Summary.", T0 + 6)])
+    db.commit()
+    db.close()
+    turns = [i for i in src.plan({}, {}).upserts]
+    assert len(turns) == 1 and "Summary." in src.load(turns[0])[1].text
+
+
 def test_files_are_read_again_when_they_change(tmp_path):
     src, folder = _setup(tmp_path)
     plan = src.plan({}, {})

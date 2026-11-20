@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.1
+
+- Fixed: after 0.32.0 the Hermes prompts it no longer reads as a person's messages stayed in an existing index until a full re-read. `reader` of `hermes` is 2, so the next run plans every Hermes session once and drops them.
+
 ## 0.32.0
 
 - `hermes` reads Hermes's transcript files too, with `sessions = "<hermes home>/sessions"`: the `session_<id>.json` snapshots of older Hermes versions and the `<id>.jsonl` logs of messages it couldn't store add the turns the database lacks. They mostly repeat the database and each other (a background review replays the chat it reviews), so a turn is indexed only when no database turn and no other file has the same message and start of answer; an excluded session stays out in its replays too. Hermes's own skill-review and iteration-limit prompts are no longer read as a person's messages.

@@ -59,6 +59,8 @@ def _identity(turn: Turn) -> str:
 
 
 class HermesSource(ChatSource):
+    reader = 2
+
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
         self.keep_chars = keep_chars(spec)
