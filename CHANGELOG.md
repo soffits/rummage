@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.3
+
+- Fixed: a Hermes picture message was indexed twice when the database's record ends with a note the transcript file's copy lacks (`[screenshot]`); trailing bracketed notes no longer count when comparing them. `reader` of `hermes` is 4.
+
 ## 0.32.2
 
 - Fixed: Hermes messages sent with a picture were indexed as escaped JSON (Hermes stores them as marked JSON blocks), so their words, CJK above all, weren't found and the same message in a transcript file wasn't recognised as a copy. Their text is read now.

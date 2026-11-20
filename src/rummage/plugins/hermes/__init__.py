@@ -38,6 +38,8 @@ DEFAULT_INJECTED = [
 # Hermes stores a message made of blocks (text and pictures) as this marker and the blocks' JSON.
 BLOCKS_MARK = "\x00json:"
 SESSION_TIME = re.compile(r"(?:^|_)(\d{8}_\d{6})(?:_|$)")
+# Notes Hermes puts after a person's words, not always in both records of a message ("[screenshot]").
+TRAILING_NOTICES = re.compile(r"(?:\s*\[[^\]\n]{0,300}\])+\s*\Z")
 SNAPSHOT_PREFIX = "session_"
 # File turns are keyed `<session>:<kind>-<index in the file>`; database turns by their numeric message id.
 SNAPSHOT, LOG = "json", "jsonl"
@@ -112,14 +114,18 @@ def _from_db(key: str) -> bool:
     return key.rsplit(":", 1)[-1].isdigit()
 
 
+def _said(turn: Turn) -> str:
+    return said_key(TRAILING_NOTICES.sub("", turn.text).strip() or turn.text)
+
+
 def _identity(turn: Turn) -> str:
     """The message and the start of its answer: later steps of an answer are recorded differently by the database
     and the files."""
-    return said_key(turn.text) + said_key(turn.replies[0] if turn.replies else "")
+    return _said(turn) + said_key(turn.replies[0] if turn.replies else "")
 
 
 class HermesSource(ChatSource):
-    reader = 3
+    reader = 4
 
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
@@ -240,9 +246,9 @@ class HermesSource(ChatSource):
 
         def new(turn: Turn) -> bool:
             ident = _identity(turn)
-            fresh = ident not in seen and (turn.replies or said_key(turn.text) not in said)
+            fresh = ident not in seen and (turn.replies or _said(turn) not in said)
             seen.add(ident)
-            said.add(said_key(turn.text))
+            said.add(_said(turn))
             return fresh
 
         for sid in self._db_sessions(db):

@@ -125,20 +125,25 @@ def test_without_a_sessions_folder_only_the_database_is_read(tmp_path):
 
 
 def test_block_messages_and_the_host_clock(tmp_path):
-    """The database keeps a message with a picture as marked JSON blocks, and old transcript files have times
-    without a zone, on the clock of the Hermes host (here four hours behind UTC, as its session ids show)."""
+    """The database keeps a message with a picture as marked JSON blocks (with a note after the words a file's copy
+    lacks), and old transcript files have times without a zone, on the clock of the Hermes host (here four hours
+    behind UTC, as its session ids show)."""
     utc = dt.timezone.utc
     db = tmp_path / "state.db"
     folder = tmp_path / "sessions"
     folder.mkdir()
     started = dt.datetime(2026, 4, 25, 13, 0, tzinfo=utc).timestamp()
-    blocks = "\x00json:" + json.dumps([{"type": "text", "text": "is this mushroom safe"},
+    blocks = "\x00json:" + json.dumps([{"type": "text", "text": "is this mushroom safe\n[screenshot]"},
                                         {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AA"}}])
     _db(db, [("20260425_090000_aa", "telegram", "42", "Walk", started)], [
         ("20260425_090000_aa", "user", blocks, started), ("20260425_090000_aa", "assistant", "No, leave it.", started)])
+    _log(folder, "20260425_090000_aa", [_msg("user", [{"type": "text", "text": "is this mushroom safe"}]),
+                                         _msg("assistant", "No, leave it.")])
     _log(folder, "20260425_093000_bb", [_msg("user", "what time is the train", "2026-04-25T09:30:05"),
                                          _msg("assistant", "At ten.", "2026-04-25T09:30:09")])
     src = HermesSource("hermes", {"db": str(db), "sessions": str(folder)})
-    items = {i.key.split(":")[0]: i for i in src.plan({}, {}).upserts}
+    upserts = list(src.plan({}, {}).upserts)
+    assert len(upserts) == 2  # the log's copy of the database's message, without its trailing note, is the same turn
+    items = {i.key.split(":")[0]: i for i in upserts}
     assert "is this mushroom safe" in src.load(items["20260425_090000_aa"])[1].text
     assert items["20260425_093000_bb"].mtime == dt.datetime(2026, 4, 25, 13, 30, 5, tzinfo=utc).timestamp()
