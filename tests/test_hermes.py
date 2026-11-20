@@ -1,5 +1,6 @@
 """Hermes Agent: chats in `state.db` and the transcript files in its `sessions` folder, shaped like Hermes 0.x's."""
 
+import datetime as dt
 import json
 import sqlite3
 
@@ -11,10 +12,11 @@ T0 = 1777106000.0
 def _db(path, sessions, messages):
     db = sqlite3.connect(path)
     db.executescript("""
-        CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, user_id TEXT, title TEXT, origin_json TEXT);
+        CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, user_id TEXT, title TEXT, origin_json TEXT,
+            started_at REAL);
         CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp REAL);
     """)
-    db.executemany("INSERT INTO sessions VALUES (?, ?, ?, ?, NULL)", sessions)
+    db.executemany("INSERT INTO sessions VALUES (?, ?, ?, ?, NULL, ?)", sessions)
     db.executemany("INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)", messages)
     db.commit()
     db.close()
@@ -42,7 +44,7 @@ def _setup(tmp_path):
     db = tmp_path / "state.db"
     folder = tmp_path / "sessions"
     folder.mkdir()
-    _db(db, [("chat", "telegram", "42", "Plans"), ("bad", "telegram", "42", "")], [
+    _db(db, [("chat", "telegram", "42", "Plans", None), ("bad", "telegram", "42", "", None)], [
         ("chat", "user", "what should we cook tonight", T0),
         ("chat", "assistant", "Mapo tofu, you have the tofu.", T0 + 1),
         ("chat", "assistant", "And rice.", T0 + 2),
@@ -120,3 +122,23 @@ def test_without_a_sessions_folder_only_the_database_is_read(tmp_path):
     src.sessions_dir = None
     keys = [i.key for i in src.plan({}, {}).upserts]
     assert len(keys) == 1 and keys[0].startswith("chat:")
+
+
+def test_block_messages_and_the_host_clock(tmp_path):
+    """The database keeps a message with a picture as marked JSON blocks, and old transcript files have times
+    without a zone, on the clock of the Hermes host (here four hours behind UTC, as its session ids show)."""
+    utc = dt.timezone.utc
+    db = tmp_path / "state.db"
+    folder = tmp_path / "sessions"
+    folder.mkdir()
+    started = dt.datetime(2026, 4, 25, 13, 0, tzinfo=utc).timestamp()
+    blocks = "\x00json:" + json.dumps([{"type": "text", "text": "is this mushroom safe"},
+                                        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AA"}}])
+    _db(db, [("20260425_090000_aa", "telegram", "42", "Walk", started)], [
+        ("20260425_090000_aa", "user", blocks, started), ("20260425_090000_aa", "assistant", "No, leave it.", started)])
+    _log(folder, "20260425_093000_bb", [_msg("user", "what time is the train", "2026-04-25T09:30:05"),
+                                         _msg("assistant", "At ten.", "2026-04-25T09:30:09")])
+    src = HermesSource("hermes", {"db": str(db), "sessions": str(folder)})
+    items = {i.key.split(":")[0]: i for i in src.plan({}, {}).upserts}
+    assert "is this mushroom safe" in src.load(items["20260425_090000_aa"])[1].text
+    assert items["20260425_093000_bb"].mtime == dt.datetime(2026, 4, 25, 13, 30, 5, tzinfo=utc).timestamp()

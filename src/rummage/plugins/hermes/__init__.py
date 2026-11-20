@@ -14,8 +14,11 @@ read either.
 
 from __future__ import annotations
 
+import bisect
+import datetime as dt
 import json
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -32,6 +35,9 @@ DEFAULT_INJECTED = [
     "[System note", "[SYSTEM", "[STILL IN PROGRESS", "[Background process", "[Note",
     "Review the conversation above", "You've reached the maximum",
 ]
+# Hermes stores a message made of blocks (text and pictures) as this marker and the blocks' JSON.
+BLOCKS_MARK = "\x00json:"
+SESSION_TIME = re.compile(r"(?:^|_)(\d{8}_\d{6})(?:_|$)")
 SNAPSHOT_PREFIX = "session_"
 # File turns are keyed `<session>:<kind>-<index in the file>`; database turns by their numeric message id.
 SNAPSHOT, LOG = "json", "jsonl"
@@ -48,6 +54,60 @@ def hermes_home() -> Path:
     return Path.home() / ".hermes"
 
 
+def _text(content) -> str:
+    if isinstance(content, str) and content.startswith(BLOCKS_MARK):
+        try:
+            content = json.loads(content[len(BLOCKS_MARK):])
+        except ValueError:
+            return ""
+    return text_blocks(content)
+
+
+def _id_time(sid: str) -> float | None:
+    """The time in a session id, read as UTC: ids and old transcript times are on the Hermes host's clock."""
+    m = SESSION_TIME.search(sid)
+    try:
+        return dt.datetime.strptime(m.group(1), "%Y%m%d_%H%M%S").replace(tzinfo=dt.timezone.utc).timestamp()
+    except (AttributeError, ValueError):
+        return None
+
+
+class Clock:
+    """How far the Hermes host's clock was from UTC around a session, from the sessions the database has (their
+    id's time against their real start), so the zone-less times of old transcript files land at the right moment
+    even when the host changed time zones."""
+
+    def __init__(self, db: sqlite3.Connection):
+        pairs = sorted((t, round((start - t) / 900) * 900) for sid, start in
+                       db.execute("SELECT id, started_at FROM sessions WHERE started_at IS NOT NULL")
+                       if (t := _id_time(sid)) is not None)
+        self.times = [t for t, _ in pairs]
+        self.offsets = [o for _, o in pairs]
+
+    def offset(self, sid: str) -> float | None:
+        """Seconds to add to a time read as UTC; None when nothing tells (then it's this machine's clock)."""
+        t = _id_time(sid)
+        if t is None or not self.times:
+            return None
+        i = bisect.bisect_left(self.times, t)
+        near = min((j for j in (i - 1, i) if 0 <= j < len(self.times)), key=lambda j: abs(self.times[j] - t))
+        return self.offsets[near]
+
+
+def _when(value, offset: float | None) -> float:
+    """Epoch seconds of a transcript time: numbers and times with a zone as they are, zone-less ones on the host's
+    clock."""
+    if isinstance(value, str) and value:
+        try:
+            parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return 0.0
+        if parsed.tzinfo is None and offset is not None:
+            return parsed.replace(tzinfo=dt.timezone.utc).timestamp() + offset
+        return parsed.timestamp()
+    return iso_time(value)
+
+
 def _from_db(key: str) -> bool:
     return key.rsplit(":", 1)[-1].isdigit()
 
@@ -59,7 +119,7 @@ def _identity(turn: Turn) -> str:
 
 
 class HermesSource(ChatSource):
-    reader = 2
+    reader = 3
 
     def __init__(self, name: str, spec: dict, data_dir: Path | None = None):
         self.name = name
@@ -118,7 +178,7 @@ class HermesSource(ChatSource):
 
     def _db_turns(self, db: sqlite3.Connection, sid: str) -> list[Turn]:
         source, speaker, title = self._session(db, sid)
-        rows = ((str(mid), role, content, ts) for mid, role, content, ts in db.execute(
+        rows = ((str(mid), role, _text(content), ts) for mid, role, content, ts in db.execute(
             "SELECT id, role, content, timestamp FROM messages WHERE session_id = ? AND role IN "
             "('user', 'assistant') AND content IS NOT NULL AND trim(content) != '' ORDER BY id", (sid,)))
         return self._turns(sid, rows, speaker, title, source)
@@ -144,7 +204,7 @@ class HermesSource(ChatSource):
         stats = [p.stat() for paths in files.values() for p in paths]
         return [len(stats), sum(s.st_size for s in stats), max((s.st_mtime_ns for s in stats), default=0)]
 
-    def _file_turns(self, db: sqlite3.Connection, sid: str, path: Path) -> list[Turn]:
+    def _file_turns(self, db: sqlite3.Connection, clock: Clock, sid: str, path: Path) -> list[Turn]:
         try:
             if path.suffix == ".jsonl":
                 kind = LOG
@@ -162,12 +222,13 @@ class HermesSource(ChatSource):
         if source not in self.frontends:
             return []
         speaker, title = (known[1], known[2]) if known else (self._speaker(None, source), "")
-        when = iso_time(meta.get("last_updated") or meta.get("session_start") or meta.get("timestamp"))
+        offset = clock.offset(sid)
+        when = _when(meta.get("last_updated") or meta.get("session_start") or meta.get("timestamp"), offset)
         rows: list[Row] = []
         for i, m in enumerate(messages):
-            text = text_blocks(m.get("content"))
+            text = _text(m.get("content"))
             if m.get("role") in ("user", "assistant") and text:
-                rows.append((f"{kind}-{i}", m["role"], text, iso_time(m.get("timestamp")) or when))
+                rows.append((f"{kind}-{i}", m["role"], text, _when(m.get("timestamp"), offset) or when))
         return self._turns(sid, rows, speaker, title, source)
 
     def _new_file_turns(self, db: sqlite3.Connection, files: dict[str, list[Path]]) -> Iterator[Turn]:
@@ -187,9 +248,10 @@ class HermesSource(ChatSource):
         for sid in self._db_sessions(db):
             for turn in self._db_turns(db, sid):
                 new(turn)
+        clock = Clock(db)
         for sid in sorted(files, key=lambda s: s not in self.exclude):
             for path in files[sid]:
-                for turn in self._file_turns(db, sid, path):
+                for turn in self._file_turns(db, clock, sid, path):
                     if new(turn) and sid not in self.exclude:
                         yield turn
 

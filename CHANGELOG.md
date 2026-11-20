@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.32.2
+
+- Fixed: Hermes messages sent with a picture were indexed as escaped JSON (Hermes stores them as marked JSON blocks), so their words, CJK above all, weren't found and the same message in a transcript file wasn't recognised as a copy. Their text is read now.
+- Fixed: the zone-less times in old Hermes transcript files were read on this machine's clock; they are on the Hermes host's, which is now worked out from the database's sessions near each file (a session id's time against its real start), so a turn from a file sits at the right moment beside the database's. `reader` of `hermes` is 3.
+
 ## 0.32.1
 
 - Fixed: after 0.32.0 the Hermes prompts it no longer reads as a person's messages stayed in an existing index until a full re-read. `reader` of `hermes` is 2, so the next run plans every Hermes session once and drops them.
